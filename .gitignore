@@ -1,0 +1,21 @@
+# Local configuration and virtual environments
+.env
+.env.*
+!.env.example
+.venv/
+
+# Generated datasets, models, and experiment artifacts
+data/
+artifacts/
+models/
+outputs/
+runs/
+
+# Python and notebook execution state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# OS metadata
+.DS_Store
