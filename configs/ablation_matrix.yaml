@@ -1,0 +1,69 @@
+# Each experiment is applied on top of ablation_base.yaml.  Select a different
+# dataset at launch time with --set experiment.dataset=hdfs (or bgl).
+experiments:
+  - name: baseline_full
+    enabled: true
+    overrides:
+      experiment.name: baseline_full
+      ablation.llm_enrichment_enabled: true
+      ablation.embeddings.tfidf_enabled: true
+      ablation.embeddings.sbert_enabled: true
+      ablation.graph.use_edge_features: true
+      ablation.graph.gine_aggregation: sum
+      ablation.graph.node_transformation: mlp
+
+  - name: no_llm_enrichment
+    enabled: true
+    overrides:
+      experiment.name: no_llm_enrichment
+      ablation.llm_enrichment_enabled: false
+      ablation.embeddings.tfidf_enabled: true
+      ablation.embeddings.sbert_enabled: true
+      ablation.graph.use_edge_features: true
+
+  - name: tfidf_only
+    enabled: true
+    overrides:
+      experiment.name: tfidf_only
+      ablation.llm_enrichment_enabled: false
+      ablation.embeddings.tfidf_enabled: true
+      ablation.embeddings.sbert_enabled: false
+      ablation.graph.use_edge_features: true
+
+  - name: sbert_only
+    enabled: true
+    overrides:
+      experiment.name: sbert_only
+      ablation.llm_enrichment_enabled: true
+      ablation.embeddings.tfidf_enabled: false
+      ablation.embeddings.sbert_enabled: true
+      ablation.graph.use_edge_features: true
+
+  - name: no_edge_features
+    enabled: true
+    overrides:
+      experiment.name: no_edge_features
+      ablation.llm_enrichment_enabled: true
+      ablation.embeddings.tfidf_enabled: true
+      ablation.embeddings.sbert_enabled: true
+      ablation.graph.use_edge_features: false
+
+  - name: gine_mean_agg
+    enabled: true
+    overrides:
+      experiment.name: gine_mean_agg
+      ablation.llm_enrichment_enabled: true
+      ablation.embeddings.tfidf_enabled: true
+      ablation.embeddings.sbert_enabled: true
+      ablation.graph.use_edge_features: true
+      ablation.graph.gine_aggregation: mean
+
+  - name: linear_node_transform
+    enabled: true
+    overrides:
+      experiment.name: linear_node_transform
+      ablation.llm_enrichment_enabled: true
+      ablation.embeddings.tfidf_enabled: true
+      ablation.embeddings.sbert_enabled: true
+      ablation.graph.use_edge_features: true
+      ablation.graph.node_transformation: linear

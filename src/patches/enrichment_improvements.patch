@@ -1,0 +1,245 @@
+*** Begin Patch
+*** Delete File: schemas.py
+*** Add File: schemas.py
++from typing import Literal
++
++from pydantic import BaseModel, Field
++
++
++EvidenceLevel = Literal[
++    "explicit_template",
++    "retrieved_documentation",
++    "corpus_observation",
++    "unknown",
++]
++
++DiagnosticRole = Literal[
++    "informational",
++    "lifecycle_transition",
++    "warning_or_error",
++    "context_dependent",
++    "unknown",
++]
++
++RelationType = Literal[
++    "commonly_precedes",
++    "commonly_follows",
++    "co_occurs_in_trace",
++    "same_component_lifecycle",
++    "potential_rca_context",
++]
++
++
++class Evidence(BaseModel):
++    level: EvidenceLevel = Field(
++        description="Evidence supporting the claim; use unknown when no supplied evidence supports it."
++    )
++    source_ids: list[str] = Field(
++        default_factory=list,
++        description="IDs from supplied documentation or corpus-statistics records.",
++    )
++
++
++class TemplateField(BaseModel):
++    placeholder: str = Field(
++        description="Placeholder position, for example <*>_1 or <*>_2."
++    )
++    semantic_role: str = Field(
++        description="Supported meaning of this placeholder; use unknown when unsupported."
++    )
++    diagnostic_note: str = Field(
++        description="How the value helps correlate events. Do not claim it is anomalous by itself."
++    )
++    evidence: Evidence
++
++
++class TemplateRelation(BaseModel):
++    template_id: str = Field(
++        description="Exact ID from the supplied candidate relations; never invent an ID."
++    )
++    relation: RelationType
++    support: str = Field(
++        description="Brief interpretation of the supplied statistic or documentation."
++    )
++    evidence: Evidence
++
++
++class FailureSignal(BaseModel):
++    name: str = Field(description="Short, evidence-supported failure signal name.")
++    manifestation: str = Field(
++        description="What the target event contributes to observing this signal."
++    )
++    trigger_scope: Literal[
++        "explicit_in_template",
++        "requires_sequence_context",
++        "requires_external_metric",
++    ]
++    evidence: Evidence
++
++
++class EnrichedTemplate(BaseModel):
++    component: str = Field(description="Event-emitting component, or unknown.")
++    component_role: str = Field(description="Supported role of the component, or unknown.")
++    log_level: str = Field(description="Log level present in the template, or unknown.")
++    event_semantics: str = Field(
++        description="Concise factual meaning of this event; do not assert a trace label."
++    )
++    diagnostic_role: DiagnosticRole
++    fields: list[TemplateField] = Field(default_factory=list)
++    sequence_context: list[TemplateRelation] = Field(default_factory=list)
++    failure_signals: list[FailureSignal] = Field(default_factory=list)
++    dataset_label_caveat: str = Field(
++        description="How dataset labels relate to this individual event or template."
++    )
++    embedding_text: str = Field(
++        description="One to three factual sentences for semantic embedding; omit IDs and boilerplate."
++    )
++    unsupported_inferences: list[str] = Field(default_factory=list)
+*** Delete File: system.py
+*** Add File: system.py
++from langchain_core.prompts import SystemMessagePromptTemplate
++
++
++def get_system_prompt() -> SystemMessagePromptTemplate:
++    return SystemMessagePromptTemplate.from_template(
++        """
++You enrich mined log templates for semantic embedding and trace-level anomaly analysis.
++
++GROUNDING
++Use only the target template, the supplied dataset context, retrieved documentation,
++and supplied corpus relation candidates. Do not use unstated system knowledge. When
++evidence is insufficient, write 'unknown', return an empty list, and record the
++omitted claim in unsupported_inferences.
++
++EVENTS ARE NOT LABELS
++Do not classify the target template or one event as normal or anomalous unless supplied
++documentation explicitly defines an event-level label. Respect the dataset label unit
++stated in the user message and explain it in dataset_label_caveat.
++
++RELATION RULES
++- Only return a sequence_context item for a candidate relation supplied in the input.
++- Copy its template_id exactly. Never invent related templates, template IDs, ordering,
++  co-occurrence, or lifecycle edges.
++- Describe a failure signal only when it is explicit in the template or directly supported
++  by supplied evidence.
++- Treat dynamic fields as correlation keys or operational parameters unless supplied
++  evidence establishes an abnormal condition.
++
++EMBEDDING TEXT
++Write embedding_text as one to three compact factual sentences. State the component,
++operation, meaningful field roles, and diagnostic role. Exclude source IDs, dataset-label
++boilerplate, raw template IDs, and speculative causal explanations.
++
++OUTPUT
++Return only one JSON object conforming to the provided structured-output schema.
++"""
++    )
+*** Delete File: hdfs_prompts.py
+*** Add File: hdfs_prompts.py
++from langchain_core.prompts import ChatPromptTemplate
++
++from .system import get_system_prompt
++
++
++HDFS_PROMPT_CORPUS = ChatPromptTemplate.from_messages(
++    [
++        get_system_prompt(),
++        (
++            "human",
++            """
++# HDFS-v1 / LogHub dataset facts
++HDFS is a distributed file system in which the NameNode manages filesystem
++metadata and DataNodes store data blocks. The dataset was produced in a
++private-cloud environment using benchmark workloads.
++
++LogHub HDFS-v1 groups or slices log events into traces by block ID. The
++Normal/Anomaly ground-truth label applies to the complete block-ID trace, not
++to an isolated line or template. The dataset documentation states that labels
++were manually created with handcrafted rules, but it does not provide a complete
++failure taxonomy or a universal canonical lifecycle. Do not invent either.
++
++# Retrieved documentation
++{retrieved_docs}
++
++# Candidate corpus relations
++These are the only relations that may be emitted in sequence_context. They are
++observations from the corpus, not proof of causality. An empty list is valid.
++{candidate_relations}
++
++# Target
++template_id: {template_id}
++log_template: {log_template}
++""",
++        ),
++    ]
++)
+*** Delete File: enricher.py
+*** Add File: enricher.py
++from collections.abc import Sequence
++from typing import Any
++
++from .llm import LLM
++from .prompts import BGL_PROMPT_CORPUS, HDFS_PROMPT_CORPUS
++from .schemas import EnrichedTemplate
++
++
++class Enricher:
++    def __init__(self, model: str | None = None) -> None:
++        llm = LLM(model=model).get_llm()
++        # Azure AI Foundry Mistral endpoints may reject json_schema. json_mode
++        # still gives JSON-only generation; Pydantic validates the final object.
++        self.structured_llm = llm.with_structured_output(
++            EnrichedTemplate,
++            method="json_mode",
++        )
++
++    def enrich_corpus_hdfs(
++        self,
++        template: str,
++        *,
++        template_id: str = "unknown",
++        retrieved_docs: str = "No additional documentation supplied.",
++        candidate_relations: Sequence[dict[str, Any]] | None = None,
++    ) -> EnrichedTemplate:
++        chain = HDFS_PROMPT_CORPUS | self.structured_llm
++        return chain.invoke(
++            {
++                "log_template": template,
++                "template_id": template_id,
++                "retrieved_docs": retrieved_docs,
++                "candidate_relations": list(candidate_relations or []),
++            }
++        )
++
++    def enrich_corpus_bgl(self, template: str) -> EnrichedTemplate:
++        chain = BGL_PROMPT_CORPUS | self.structured_llm
++        return chain.invoke({"log_template": template})
+*** Delete File: llm.py
+*** Add File: llm.py
++import os
++
++from dotenv import load_dotenv
++from langchain_openai import ChatOpenAI
++
++load_dotenv()
++
++API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
++ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
++MODEL = os.getenv("AZURE_OPENAI_DEPLOYMENT_MISTRAL_LARGE")
++
++
++class LLM:
++    def __init__(self, model: str | None = None) -> None:
++        self.client = ChatOpenAI(
++            api_key=API_KEY,
++            base_url=ENDPOINT,
++            model=model or MODEL,
++            temperature=0,
++            max_tokens=900,
++            timeout=60,
++            max_retries=2,
++        )
++
++    def get_llm(self) -> ChatOpenAI:
++        return self.client
+*** End Patch

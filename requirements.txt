@@ -1,0 +1,22 @@
+# PyTorch and torch-geometric are intentionally omitted.  Google Colab ships
+# PyTorch; scripts/install_colab.py installs PyG wheels compatible with it.
+drain3==0.9.11
+fastparquet==2024.11.0
+langchain-openai==0.3.7
+matplotlib==3.10.0
+networkx==3.4.2
+numpy==1.26.4
+openai==1.63.2
+pandas==2.2.3
+pyarrow==18.1.0
+pydantic==2.10.6
+python-dotenv==1.0.1
+PyYAML==6.0.2
+scikit-learn==1.6.1
+# Keep the legacy Sentence Transformers version required by the target device.
+# sentence-transformers 2.2.2 requires the pre-0.15 Hugging Face Hub API
+# (`cached_download`), and Transformers 4.30 keeps the stack compatible.
+sentence-transformers==2.2.2
+huggingface-hub==0.14.1
+transformers==4.30.2
+tqdm==4.67.1
