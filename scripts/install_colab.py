@@ -2,8 +2,9 @@
 """Install the project dependencies in a Google Colab runtime.
 
 Colab supplies the CUDA-enabled PyTorch build.  Replacing it with a version
-from ``requirements.txt`` is a common source of PyG ABI incompatibilities, so
-this installer instead obtains the matching extension wheels from data.pyg.org.
+from ``requirements-colab.txt`` is a common source of PyG ABI
+incompatibilities, so this installer instead obtains the matching extension
+wheels from data.pyg.org.
 """
 
 from __future__ import annotations
@@ -29,25 +30,13 @@ def _pyg_wheel_url() -> str:
     return f"https://data.pyg.org/whl/torch-{torch_version}+{platform}.html"
 
 
-def install(
-    project_root: Path, *, include_dev: bool = False, train_only: bool = False
-) -> None:
-    requirements = project_root / "requirements.txt"
+def install(project_root: Path, *, include_dev: bool = False) -> None:
+    requirements = project_root / "requirements-colab.txt"
     if not requirements.exists():
         raise FileNotFoundError(f"Requirements file not found: {requirements}")
 
     _pip("--upgrade", "pip")
-    if train_only:
-        # The legacy sentence-transformers==2.2.2 stack is deliberately kept
-        # for the local target device. Its transformers==4.30 dependency pins
-        # tokenizers<0.14, which has no Python 3.13 wheel and therefore makes
-        # Colab attempt an unsupported source build. Train-only runs load a
-        # prepared graph bundle, so parsing, enrichment, and SBERT are unused.
-        # Request only the pure-Python/runtime training dependencies with
-        # unpinned current versions that have Python 3.13 wheels.
-        _pip("PyYAML>=6.0", "scikit-learn>=1.6", "tqdm>=4.67")
-    else:
-        _pip("-r", str(requirements))
+    _pip("-r", str(requirements))
 
     wheel_url = _pyg_wheel_url()
     # These are the compiled dependencies used by GINEConv and sparse message
@@ -85,24 +74,15 @@ def main() -> None:
         "--project-root",
         type=Path,
         default=Path(__file__).resolve().parents[1],
-        help="Repository checkout containing requirements.txt.",
+        help="Repository checkout containing requirements-colab.txt.",
     )
     parser.add_argument(
         "--include-dev",
         action="store_true",
         help="Install test-only dependencies as well.",
     )
-    parser.add_argument(
-        "--train-only",
-        action="store_true",
-        help="Install only dependencies needed to train a pre-built graph dataset.",
-    )
     args = parser.parse_args()
-    install(
-        args.project_root.resolve(),
-        include_dev=args.include_dev,
-        train_only=args.train_only,
-    )
+    install(args.project_root.resolve(), include_dev=args.include_dev)
 
 
 if __name__ == "__main__":
