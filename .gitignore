@@ -7,7 +7,8 @@
 # Generated datasets, models, and experiment artifacts
 data/
 artifacts/
-models/
+models/hdfs/
+models/bgl/
 outputs/
 runs/
 
