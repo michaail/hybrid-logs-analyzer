@@ -1,8 +1,9 @@
 ---
 project: "Log Anomaly Detection System"
-context_type: brownfield
+version: 1
+status: draft
 created: 2026-08-31
-updated: 2026-08-31
+context_type: brownfield
 product_type: web-app
 target_scale:
   users: small
@@ -12,77 +13,15 @@ timeline_budget:
   delivery_weeks: 2
   hard_deadline: null
   after_hours_only: false
-checkpoint:
-  current_phase: 8
-  phases_completed: [1, 2, 3, 4, 5, 6, 7]
-  gray_areas_resolved:
-    - topic: "change category"
-      decision: "New production workflow/module, architectural improvement, and migration from notebook execution."
-    - topic: "primary persona"
-      decision: "SRE."
-    - topic: "initial log-source scope"
-      decision: "HDFS and BGL are both must-have input sources for the first shippable version; additional sources may follow."
-    - topic: "why now"
-      decision: "Deliver a production-oriented MVP for the master's thesis."
-    - topic: "key insight"
-      decision: "Notebook orchestration, state, and traceability are implicit; extraction must preserve validated numerical behavior; product boundaries were absent from the research prototype."
-    - topic: "current access model"
-      decision: "No application authentication; users access the notebook environment directly."
-    - topic: "planned account access"
-      decision: "Administrator-provisioned accounts with no public sign-up; exact sign-in method remains undecided."
-    - topic: "role separation"
-      decision: "Operators can analyze and verify; Publishers can additionally upload, register, and publish pretrained models."
-    - topic: "isolation boundary"
-      decision: "Logs, runs, models, and results are isolated by project."
-    - topic: "MVP scope"
-      decision: "Training is excluded; Publishers provide pretrained models with metadata, metrics, and evidence of external evaluation."
-    - topic: "model eligibility and publication"
-      decision: "A model package must be complete, declare compatible sources, and include external-evaluation evidence before versioned registration; these checks do not establish model quality. A Publisher then publishes it explicitly."
-    - topic: "analysis execution"
-      decision: "Analysis runs are asynchronous and expose status; detailed per-step progress and intermediate outputs are nice-to-have."
-    - topic: "delivery estimate"
-      decision: "Two weeks during normal working hours for the reduced MVP."
-    - topic: "numerical parity"
-      decision: "Agreed evaluation metrics may differ from notebook baselines by at most one percentage point for the same dataset, model, and configuration."
-    - topic: "log intake"
-      decision: "Operators can upload new HDFS or BGL logs or select a previously stored dataset."
-    - topic: "invalid dataset handling"
-      decision: "Reject the entire dataset with a clear validation report."
-    - topic: "primary story split"
-      decision: "Separate Publisher import/publication and Operator analysis stories."
-    - topic: "result presentation"
-      decision: "Show detected anomalies plus summaries for normal, rejected, and invalid outcomes rather than listing every normal record."
-    - topic: "parity metric set"
-      decision: "Every evaluation metric reported by the agreed notebook baseline is subject to the one-percentage-point tolerance."
-    - topic: "business-rule delta"
-      decision: "Preserve score-versus-threshold anomaly classification and add model eligibility, publication, source-compatibility, and same-project use rules."
-    - topic: "compatibility boundary"
-      decision: "Preserve notebook dataset/configuration semantics, model artifacts, evaluation outputs, and notebook fallback; no existing data is migrated."
-    - topic: "run feedback"
-      decision: "Acknowledge an analysis start within two seconds and show initial status within five seconds."
-    - topic: "retention"
-      decision: "Uploaded logs, models, run records, and results remain available until an authorized user deletes them."
-    - topic: "product surface"
-      decision: "Add a web app while preserving notebooks as the R&D environment."
-    - topic: "target scale"
-      decision: "A handful of users, one active analysis run at a time, and datasets comparable to the LogHub HDFS and BGL references."
-    - topic: "timeline"
-      decision: "Two weeks during normal working hours with no hard deadline."
-    - topic: "existing operational constraints"
-      decision: "No existing production deployment, CI/CD, API-consumer, monitoring, or alerting contract."
-  frs_drafted: 11
-  quality_check_status: accepted
 ---
-
-# Shape Notes
-
-Seed source: `context/foundation/mvp-draft.md`
 
 ## Current System Overview
 
 The existing system detects anomalies in system logs and currently focuses on HDFS logs from the LogHub dataset. It is implemented mainly as a sequence of Jupyter Notebooks for data preparation, transformations, feature engineering, model training, evaluation, and exploratory analysis.
 
 The current architecture is a research and development workflow whose execution order, environment setup, intermediate state, and assumptions are implicit in notebook structure and cells. Jupyter Notebooks are the only technology identified so far; the underlying languages, frameworks, storage, and infrastructure have not yet been captured. Current use requires notebook and machine-learning implementation knowledge, and the present user scale is not specified.
+
+# TODO: current technology stack and user scale — see Open Questions
 
 ## Problem Statement & Motivation
 
@@ -145,27 +84,27 @@ The primary persona is an SRE responsible for investigating unusual system-log b
 
 ## Scope of Change
 
-- FR-001: [new] Administrator can provision user accounts; public sign-up is unavailable. Priority: must-have
+- [new] FR-001: Administrator can provision user accounts; public sign-up is unavailable. Priority: must-have
   > Socrates: Counter-argument considered: account provisioning adds scope that could be replaced by pre-seeded users. Resolution: kept; provisioning is necessary to demonstrate the authentication boundary.
-- FR-002: [new] Publisher can upload a pretrained model with its artifact, required metadata, evaluation metrics, declared log-source compatibility, and evidence of successful external evaluation. Priority: must-have
+- [new] FR-002: Publisher can upload a pretrained model with its artifact, required metadata, evaluation metrics, declared log-source compatibility, and evidence of successful external evaluation. Priority: must-have
   > Socrates: Counter-argument considered: uploaded model artifacts add security and compatibility risk. Resolution: kept; the MVP accepts only a defined model-package format.
-- FR-003: [new] System can validate the completeness and declared source compatibility of an uploaded model package, clearly reject failures, and register eligible models as traceable versions; this validation does not establish model quality. Priority: must-have
+- [new] FR-003: System can validate the completeness and declared source compatibility of an uploaded model package, clearly reject failures, and register eligible models as traceable versions; this validation does not establish model quality. Priority: must-have
   > Socrates: Counter-argument considered: presence of external-evaluation evidence cannot prove actual model quality. Resolution: revised; eligibility validation establishes completeness and compatibility only.
-- FR-004: [new] Publisher can explicitly publish an eligible model version within an authorized project. Priority: must-have
+- [new] FR-004: Publisher can explicitly publish an eligible model version within an authorized project. Priority: must-have
   > Socrates: Counter-argument considered: explicit publication duplicates eligibility state and adds workflow friction. Resolution: kept; the audited gate prevents accidental use of merely registered models.
-- FR-005: [new] Operator can upload or select HDFS or BGL logs and receive a clear full-dataset rejection when validation fails. Priority: must-have
+- [new] FR-005: Operator can upload or select HDFS or BGL logs and receive a clear full-dataset rejection when validation fails. Priority: must-have
   > Socrates: Counter-arguments considered: two intake paths increase scope, and one malformed record blocks all valid records. Resolution: kept; strict full-dataset rejection is the safer and clearer MVP behavior.
-- FR-006: [new] Operator can start asynchronous analysis with a compatible published model from the same project and observe run status. Priority: must-have
+- [new] FR-006: Operator can start asynchronous analysis with a compatible published model from the same project and observe run status. Priority: must-have
   > Socrates: Counter-argument considered: asynchronous orchestration may cost more than it proves. Resolution: kept; potentially long analysis needs a durable run identity and observable status.
-- FR-007: [new] Operator can inspect traceable detected anomalies and view summaries for normal, rejected, and invalid outcomes. Priority: must-have
+- [new] FR-007: Operator can inspect traceable detected anomalies and view summaries for normal, rejected, and invalid outcomes. Priority: must-have
   > Socrates: Counter-argument considered: listing every normal record can overwhelm an investigation. Resolution: revised; show detected anomalies plus outcome summaries.
-- FR-008: [new] System can isolate logs, models, runs, and results by project and audit significant user actions. Priority: must-have
+- [new] FR-008: System can isolate logs, models, runs, and results by project and audit significant user actions. Priority: must-have
   > Socrates: Counter-argument considered: a single-project MVP could prove the workflow with less access-control scope. Resolution: kept; project isolation and auditability are production-baseline requirements.
-- FR-009: [new] Operator can observe per-step progress and selected intermediate outputs during analysis. Priority: nice-to-have
+- [new] FR-009: Operator can observe per-step progress and selected intermediate outputs during analysis. Priority: nice-to-have
   > Socrates: Counter-argument considered: detailed progress can distract from the core workflow. Resolution: kept as nice-to-have and cannot delay the primary flow.
-- FR-010: [preserved] User can continue using the existing notebooks for research, exploration, experimentation, and comparison. Priority: must-have
+- [preserved] FR-010: User can continue using the existing notebooks for research, exploration, experimentation, and comparison. Priority: must-have
   > Socrates: Counter-argument considered: maintaining active notebooks may constrain production refactoring. Resolution: kept; notebooks remain a separate R&D path and comparison baseline.
-- FR-011: [preserved] Operator can receive production-analysis results whose agreed metrics differ from notebook baselines by no more than one percentage point for the same dataset, model, and configuration. Priority: must-have
+- [preserved] FR-011: Operator can receive production-analysis results whose agreed metrics differ from notebook baselines by no more than one percentage point for the same dataset, model, and configuration. Priority: must-have
   > Socrates: Counter-argument considered: aggregate metrics can hide record-level differences or become ambiguous if the metric set is unnamed. Resolution: kept; every evaluation metric reported by the agreed notebook baseline is subject to the tolerance.
 
 ## Constraints & Compatibility
@@ -183,7 +122,6 @@ The primary persona is an SRE responsible for investigating unusual system-log b
 ### Existing integrations
 
 - No existing external API or integration contract has been identified.
-- The current system has no production deployment window, CI/CD release requirement, API-consumer compatibility obligation, or monitoring and alerting SLA to preserve.
 
 ### Preserved behavior and fallback
 
@@ -223,9 +161,9 @@ Input data, model artifacts, analysis runs, and results are isolated by project.
 - **No real-time or continuous detection.** The MVP analyzes submitted HDFS or BGL datasets as asynchronous runs rather than consuming live streams.
 - **No additional log-source formats.** User-facing support is limited to HDFS and BGL for the first release.
 - **No advanced MLOps platform.** Feature stores, full experiment-tracking infrastructure, and production model monitoring are outside the publish-and-analyze workflow.
-- **No external operational integrations.** logging, tracking, ticketing, and advanced alerting integrations are excluded.
+- **No external operational integrations.** Logging, tracking, ticketing, and advanced alerting integrations are excluded.
 - **No automated root-cause analysis or remediation.** Results stop at anomaly identification, score or level, threshold, and relevant log context.
-- **No replacement of Exisitng R&D Notebooks.** Notebooks remain the separate R&D, exploration, experimentation, and comparison environment.
+- **No replacement of existing R&D notebooks.** Notebooks remain the separate R&D, exploration, experimentation, and comparison environment.
 
 ## Open Questions
 
@@ -233,7 +171,4 @@ Input data, model artifacts, analysis runs, and results are isolated by project.
 2. **What languages, frameworks, storage, and infrastructure make up the current notebook system?** — Owner: user. Resolve before downstream stack assessment.
 3. **What exact model-package format and artifact contract can a Publisher upload?** — Owner: user. Resolve before model-intake implementation.
 4. **Which notebook and configuration form the agreed parity baseline?** — Owner: user. Resolve before parity acceptance testing.
-
-## Quality cross-check
-
-Accepted on 2026-08-31. Access control, business logic, project artifacts, timeline-cost handling, non-goals, and preserved behavior are all present; no quality-gate gaps remain.
+5. **What is the current user scale of the notebook system?** — Owner: user. Resolve before downstream stack assessment.
