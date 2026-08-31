@@ -1,0 +1,6 @@
+# Local quality and test tooling. Keep exact pins so every contributor runs
+# the same checks; these packages publish Intel macOS-compatible distributions.
+mypy==2.3.1
+pip-audit==2.10.1
+pytest==9.1.1
+ruff==0.16.5

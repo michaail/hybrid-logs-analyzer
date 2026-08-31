@@ -1,0 +1,9 @@
+# Stable local runtime for Intel (x86_64) macOS.
+#
+# The base requirements intentionally preserve the versions known to work on
+# the target machine. Pinning the optional ML runtime here prevents transitive
+# dependencies from selecting newer releases without Intel macOS support.
+-r requirements.txt
+
+torch==2.2.2
+torch-geometric==2.3.0

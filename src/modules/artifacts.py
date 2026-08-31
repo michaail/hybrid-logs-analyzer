@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -114,6 +114,7 @@ class ArtifactStore:
         temp_dir = Path(
             tempfile.mkdtemp(prefix=f".{stage}-{stage_fingerprint}-", dir=final_dir.parent)
         )
+        temp_dir_to_cleanup: Path | None = temp_dir
         try:
             raw_outputs = build(temp_dir)
             outputs = {name: Path(path) for name, path in raw_outputs.items()}
@@ -131,7 +132,7 @@ class ArtifactStore:
                 "dataset": self.dataset,
                 "fingerprint": stage_fingerprint,
                 "git_revision": self.revision,
-                "created_at": datetime.now(UTC).isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
                 "inputs": metadata,
                 "config": stage_config,
                 "outputs": resolved_outputs,
@@ -142,12 +143,12 @@ class ArtifactStore:
             existing = self._read_valid_manifest(manifest_path, stage_fingerprint)
             if existing is None:
                 os.replace(temp_dir, final_dir)
-                temp_dir = None  # ownership transferred to the final cache entry
+                temp_dir_to_cleanup = None  # ownership transferred to the final cache entry
                 return self._outputs_from_manifest(final_dir, manifest), manifest, False
             return self._outputs_from_manifest(final_dir, existing), existing, True
         finally:
-            if temp_dir is not None:
-                shutil.rmtree(temp_dir, ignore_errors=True)
+            if temp_dir_to_cleanup is not None:
+                shutil.rmtree(temp_dir_to_cleanup, ignore_errors=True)
 
     @staticmethod
     def _read_valid_manifest(path: Path, stage_fingerprint: str) -> dict[str, Any] | None:

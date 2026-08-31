@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-import project.run_ablation as run_ablation
 from src.modules.parser import BGLParser
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
@@ -23,9 +22,13 @@ def test_bgl_fixture_exposes_inline_anomaly_labels(tmp_path: Path) -> None:
     assert frame["is_anomaly"].tolist() == [False, True, False, True]
 
 
+@pytest.mark.ml
 def test_enrichment_disabled_cpu_smoke_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Exercise parse → sequence → graph → one CPU epoch without external APIs."""
+    pytest.importorskip("torch")
     pytest.importorskip("torch_geometric")
+
+    import run_ablation
     import torch
 
     raw_dir = tmp_path / "data" / "raw"

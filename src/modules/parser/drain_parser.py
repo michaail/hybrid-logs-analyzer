@@ -61,10 +61,10 @@ class DrainParser:
 
 
   def fit_file(self, log_path: str, max_lines: int | None = None) -> None:
-    log_path = Path(log_path)
-    print(f"[INFO] Training Drain3 on: {log_path}")
+    log_file = Path(log_path)
+    print(f"[INFO] Training Drain3 on: {log_file}")
 
-    with log_path.open("r", errors="replace") as f:
+    with log_file.open("r", errors="replace") as f:
       for i, raw in enumerate(f, start=1):
         line = raw.rstrip("\n")
         if not line:
@@ -154,9 +154,9 @@ class DrainParser:
     import pandas as pd
 
     rows = []
-    log_path = Path(log_path)
+    log_file = Path(log_path)
 
-    with log_path.open("r", errors="replace") as f:
+    with log_file.open("r", errors="replace") as f:
       for i, raw in enumerate(f, start=1):
         line = raw.rstrip("\n")
         if not line:
@@ -201,13 +201,13 @@ class DrainParser:
             "examples": lines[:5]             # Include up to 5 example lines for context
         })
 
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path = Path(out_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with out_path.open("w") as f:
+    with output_path.open("w") as f:
       json.dump(records, f, indent=2)
 
-    print(f"[INFO] Exported {len(records)} templates → {out_path}")
+    print(f"[INFO] Exported {len(records)} templates → {output_path}")
 
 
   def save(self, path: Optional[str] = None) -> None:

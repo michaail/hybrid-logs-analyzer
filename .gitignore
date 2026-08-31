@@ -15,7 +15,9 @@ runs/
 # Python and notebook execution state
 __pycache__/
 *.py[cod]
+.mypy_cache/
 .pytest_cache/
+.ruff_cache/
 .ipynb_checkpoints/
 
 # OS metadata

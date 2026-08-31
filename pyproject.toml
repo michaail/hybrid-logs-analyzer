@@ -1,0 +1,40 @@
+[tool.pytest.ini_options]
+minversion = "9.0"
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+  "ml: requires the Intel-compatible PyTorch and PyTorch Geometric environment",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = ["src/notebooks"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.10"
+plugins = ["pydantic.mypy"]
+files = ["src/modules", "tests", "run_ablation.py"]
+exclude = ["src/notebooks"]
+check_untyped_defs = true
+explicit_package_bases = true
+follow_imports = "skip"
+ignore_missing_imports = true
+mypy_path = "."
+no_implicit_optional = true
+show_error_codes = true
+warn_redundant_casts = true
+warn_unused_configs = true
+warn_unused_ignores = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
