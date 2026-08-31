@@ -18,11 +18,11 @@ Public API
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -257,7 +257,7 @@ def save_graph_dataset(
 def _is_numeric(x: object) -> bool:
     """Return True only for finite non-NaN/Inf numeric values."""
     try:
-        v = float(x)
+        v = float(cast(Any, x))
         return np.isfinite(v)
     except (ValueError, TypeError):
         return False

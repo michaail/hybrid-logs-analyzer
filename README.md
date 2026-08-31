@@ -217,17 +217,34 @@ To reproduce these results in a clean environment, follow these steps:
 
 ### 1. Environment Setup
 
-Ensure you have Python 3.10+ installed.
+The local development baseline targets Python 3.10+ on Intel (`x86_64`) macOS. Runtime
+versions are intentionally pinned; do not upgrade them as part of routine environment setup,
+because newer ML releases may not publish Intel macOS builds.
 
 ```bash
-# Create a virtual environment
-python -m venv venv
-source venv/bin/activate
+# Verify the expected architecture, then create an isolated environment.
+uname -m  # expected: x86_64
+python3 -m venv .venv
+source .venv/bin/activate
 
-# Install dependencies (specific versions based on notebook requirements)
-pip install pandas fastparquet scikit-learn networkx matplotlib python-dotenv tqdm jupyter papermill
-pip install torch==2.2.2 sentence-transformers==2.2.2 torch_geometric
+# Recreate the exact Intel-compatible runtime and development environment.
+python -m pip install --upgrade pip
+python -m pip install -r requirements-macos-intel.lock.txt
+
+# Verify the local development gates.
+python -m pytest
+ruff check src tests scripts run_ablation.py
+mypy
+python -m pip_audit -r requirements.txt
 ```
+
+`pyproject.toml` is the single configuration source for pytest, Ruff, mypy, and the Pydantic
+mypy plugin. Pydantic provides runtime validation for typed boundary models; mypy performs
+static checking. `requirements.txt`, `requirements-macos-intel.txt`, and
+`requirements-dev.txt` are the maintained input pins. `requirements-macos-intel.lock.txt`
+captures the complete environment verified on the Intel development machine. Regenerate
+that lock only as an explicit compatibility task. `requirements-colab.txt` remains
+independent for Colab runtimes.
 
 ### 2. External Data & Authentication
 

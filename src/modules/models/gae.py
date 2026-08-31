@@ -262,7 +262,6 @@ def compute_anomaly_scores(
     scores : numpy.ndarray, shape (N,)
     labels : numpy.ndarray, shape (N,)
     """
-    import numpy as np
 
     model.eval()
     all_scores, all_labels = [], []

@@ -23,7 +23,7 @@ import subprocess
 import sys
 import time
 import traceback
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
@@ -87,7 +87,7 @@ def get_run_tag(config: dict[str, Any]) -> str:
     requested = experiment.get("run_id")
     if requested:
         return _safe_name(str(requested))
-    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     return f"{timestamp}_{_safe_name(experiment['name'])}"
 
 
@@ -403,7 +403,7 @@ def run_experiment(
         "run_id": run_tag,
         "dataset": dataset,
         "mode": mode,
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "elapsed_minutes": round((time.monotonic() - started) / 60, 2),
         "config": _serialisable_config(config),
         "artifacts": {
@@ -479,13 +479,9 @@ def _train_graph_bundle(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     import torch
     from sklearn.metrics import (
-        average_precision_score,
         confusion_matrix,
-        f1_score,
-        precision_recall_curve,
         precision_score,
         recall_score,
-        roc_auc_score,
     )
     from torch.optim import Adam
     from torch_geometric.loader import DataLoader
@@ -898,7 +894,7 @@ def _announce(stage: str, reused: bool) -> None:
 def _write_matrix_summary(
     workspace: Path, results: list[dict[str, Any]], *, dataset: str
 ) -> Path:
-    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     output_dir = workspace / "outputs" / dataset / f"{timestamp}_ablation_matrix"
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "ablation_results.json"

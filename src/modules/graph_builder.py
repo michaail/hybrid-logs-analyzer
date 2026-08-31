@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections import Counter, defaultdict
+from typing import Any, cast
 
 import networkx as nx
 import numpy as np
@@ -198,7 +199,7 @@ def _extract_timestamps(seq: pd.DataFrame) -> list:
 def _is_numeric(x: object) -> bool:
     """Return True only for finite non-NaN non-Inf numeric values."""
     try:
-        v = float(x)
+        v = float(cast(Any, x))
         return np.isfinite(v)
     except (ValueError, TypeError):
         return False

@@ -17,7 +17,7 @@ def is_ci() -> bool:
 def is_colab() -> bool:
     """Return True when running inside Google Colab."""
     try:
-        import google.colab  # type: ignore[import-untyped]  # noqa: F401
+        import google.colab  # pyright: ignore[reportMissingImports]  # noqa: F401
 
         return True
     except ImportError:
