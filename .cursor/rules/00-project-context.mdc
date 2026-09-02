@@ -1,0 +1,14 @@
+---
+alwaysApply: true
+---
+
+## Sources of truth
+- **Project is brownfield**
+- **`context/foundation/prd.md`, `context/foundation/stack-assessment.md` and `context/foundation/health-check.md` are the source of truth**
+
+## MVP Scope
+- **MVP is limited to support HDFS dataset only**
+- **Do not broaden the defined scope of MVP: Do not add datasets, APIs, or features beyond the HDFS-only constraints in this file and the Scope / Non-Goals sections of `context/foundation/prd.md`**
+
+## Environment
+- **Do not regenerate `requirements-macos-intel.lock.txt`**

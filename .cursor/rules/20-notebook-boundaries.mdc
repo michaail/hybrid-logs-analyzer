@@ -1,0 +1,15 @@
+---
+description: Jupyter Notebooks boundaries
+globs:
+  - "src/notebooks/*.ipynb"
+alwaysApply false
+---
+
+## Notebook role
+
+- **Notebooks under `src/notebooks/` are the R&D path and the regression baseline; production-facing behavior must live in `src/modules/` and `run_ablation.py`, not only in notebook cells.**
+- **Notebooks are not an application entry point; do not wire the planned web workflow or model-upload flow to execute notebook cells directly.**
+
+## Logic extraction
+
+- **When extracting logic from a notebook into `src/modules/`, document in the module docstring or PR description: inputs, outputs, configuration keys, side effects (files written, API calls), and hidden dependencies (cell order, global state, newest-file `glob` selection).**

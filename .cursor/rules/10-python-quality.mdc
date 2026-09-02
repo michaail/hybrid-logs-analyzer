@@ -1,0 +1,21 @@
+---
+description: Python application code conventions.
+globs:
+  - "src/**/*.py"
+  - "tests/**/*.py"
+  - "pyproject.toml"
+alwaysApply false
+---
+
+## Toolchain
+
+- **Use only the existing toolchain — Ruff, mypy + Pydantic plugin, pytest; do not add alternate linters, type checkers, or test runners. Configuration lives in @pyproject.toml.**
+
+## Typing and Pydantic
+
+- **Annotate all new or changed public functions in `src/modules/` with parameter and return types; use Pydantic models for enrichment/config records as in @src/modules/enricher/schemas.py.**
+- **Do not bypass Pydantic validation with `model_construct`, unchecked `dict` casting, or `# type: ignore` around model constructors; fix the model or input instead.**
+
+## Verification
+
+- **After changing Python under `src/` or `tests/`, run `ruff check` on the touched paths, `mypy`, and the focused pytest file(s) for that change.**
