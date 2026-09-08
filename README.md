@@ -311,3 +311,35 @@ We will refactor the pipeline into a unified, modular Python CLI application, st
 - [ ] Centralize Graph and PyG dataset construction into `src/dataset_builder.py`.
 - [ ] Define the end-to-end DAG in `dvc.yaml`.
 - [ ] Verify `metrics.json` and split distributions remain identical to notebook baseline.
+
+## FastAPI foundation
+
+The HDFS-only API provides administrator-provisioned accounts, project isolation, auditable
+model registration/publication, and analysis-run validation. It stores SQLite metadata and
+references artifacts in a controlled workspace; it never accepts model bytes or deserializes a
+model artifact.
+
+Copy `.env.example` to `.env` and set a unique `API_JWT_SECRET`. Configure
+`API_TRUSTED_WORKSPACE_ROOT` to an ignored workspace containing pipeline outputs:
+
+```bash
+source .venv/bin/activate
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+# Put the printed value in API_JWT_SECRET in .env.
+
+python -m src.api.bootstrap --username admin
+uvicorn src.api.main:create_app --factory --reload
+```
+
+The API is then available at `http://127.0.0.1:8000`, with OpenAPI documentation at `/docs`.
+There is no public sign-up route. An Administrator signs in at `POST /auth/token`, provisions
+accounts with `POST /admin/users`, creates projects, and grants `publisher` or `operator`
+memberships. Publishers register a pipeline-produced HDFS run manifest at
+`POST /projects/{project_id}/models` and explicitly publish the eligible version. Operators
+submit a trusted stored HDFS log reference at `POST /projects/{project_id}/analysis-runs`.
+
+Analysis runs fully validate the referenced HDFS file and record a durable rejection for invalid
+data. Valid files currently end in the explicit `not_supported` terminal state:
+the existing `.pt`/PyG pipeline artifacts do not yet have the required non-executable,
+isolated inference contract. This safety boundary is deliberate; adding executable inference
+requires a separate artifact-format and isolated-worker change.

@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 .venv/
+.api/
 
 # Generated datasets, models, and experiment artifacts
 data/

@@ -1,0 +1,173 @@
+"""Validated HTTP contracts for the HDFS-only API."""
+
+from __future__ import annotations
+
+from enum import Enum
+from typing import Any, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ProjectRole(str, Enum):
+    """Roles granted through a project membership."""
+
+    OPERATOR = "operator"
+    PUBLISHER = "publisher"
+
+
+class ModelStatus(str, Enum):
+    """A model version's allowed lifecycle states."""
+
+    ELIGIBLE = "eligible"
+    PUBLISHED = "published"
+
+
+class AnalysisRunStatus(str, Enum):
+    """Statuses exposed by the safe analysis-run foundation."""
+
+    QUEUED = "queued"
+    REJECTED = "rejected"
+    NOT_SUPPORTED = "not_supported"
+
+
+class ApiModel(BaseModel):
+    """Base API contract that rejects unspecified request fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class LoginRequest(ApiModel):
+    """Credentials for an administrator-provisioned account."""
+
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    password: str = Field(min_length=12, max_length=256)
+
+
+class TokenResponse(ApiModel):
+    """A bearer access token."""
+
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_in_seconds: int
+
+
+class UserCreate(ApiModel):
+    """Administrator request to provision an account."""
+
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    password: str = Field(min_length=12, max_length=256)
+    is_administrator: bool = False
+
+
+class UserResponse(ApiModel):
+    """A non-secret user record."""
+
+    id: UUID
+    username: str
+    is_administrator: bool
+    created_at: str
+
+
+class ProjectCreate(ApiModel):
+    """Administrator request to create an isolation boundary."""
+
+    name: str = Field(min_length=1, max_length=128)
+
+
+class ProjectResponse(ApiModel):
+    """Project visible to an authorized user."""
+
+    id: UUID
+    name: str
+    created_at: str
+
+
+class MembershipCreate(ApiModel):
+    """Administrator request to grant project access."""
+
+    user_id: UUID
+    role: ProjectRole
+
+
+class MembershipResponse(ApiModel):
+    """A project membership."""
+
+    project_id: UUID
+    user_id: UUID
+    role: ProjectRole
+
+
+class ModelRegistrationRequest(ApiModel):
+    """Publisher request to register a trusted pipeline-produced model."""
+
+    model_identifier: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
+    version: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    source_compatibility: Literal["hdfs"] = "hdfs"
+    pipeline_run_manifest: str = Field(min_length=1)
+    external_evaluation_evidence: str = Field(min_length=1, max_length=2_048)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelVersionResponse(ApiModel):
+    """Traceable model version metadata; never exposes artifact contents."""
+
+    id: UUID
+    project_id: UUID
+    model_identifier: str
+    version: str
+    source_compatibility: Literal["hdfs"]
+    status: ModelStatus
+    pipeline_run_id: str
+    artifact_reference: str
+    metrics: dict[str, Any]
+    metadata: dict[str, Any]
+    external_evaluation_evidence: str
+    created_at: str
+    published_at: str | None
+    published_by_user_id: UUID | None
+
+
+class AnalysisRunCreate(ApiModel):
+    """Operator request to validate and submit a stored HDFS log dataset."""
+
+    model_version_id: UUID
+    log_reference: str = Field(min_length=1)
+
+
+class AnalysisRunResponse(ApiModel):
+    """A durable analysis-run record and terminal validation outcome."""
+
+    id: UUID
+    project_id: UUID
+    model_version_id: UUID
+    requested_by_user_id: UUID
+    source_compatibility: Literal["hdfs"]
+    log_reference: str
+    status: AnalysisRunStatus
+    validation_report: dict[str, Any] | None
+    error_code: str | None
+    created_at: str
+    completed_at: str | None
+
+
+class AnalysisResultsResponse(ApiModel):
+    """Forward-compatible anomaly result contract."""
+
+    run: AnalysisRunResponse
+    summary: dict[str, int]
+    anomalies: list[dict[str, Any]]
+
+
+class AuditEventResponse(ApiModel):
+    """An immutable record of a significant project-scoped action."""
+
+    id: UUID
+    actor_user_id: UUID | None
+    project_id: UUID | None
+    action: str
+    resource_type: str
+    resource_id: UUID | None
+    details: dict[str, Any]
+    created_at: str
+
