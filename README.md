@@ -343,3 +343,24 @@ data. Valid files currently end in the explicit `not_supported` terminal state:
 the existing `.pt`/PyG pipeline artifacts do not yet have the required non-executable,
 isolated inference contract. This safety boundary is deliberate; adding executable inference
 requires a separate artifact-format and isolated-worker change.
+
+## React interface
+
+The React/TypeScript client is in [`frontend/`](./frontend). It is a thin client for the FastAPI
+control plane: it stores the bearer token only in browser session storage, scopes every project
+request through the selected project, and leaves authorization decisions to the API.
+
+Run the API first, then start the development client in another terminal:
+
+```bash
+cd frontend && npm install && npm run dev
+```
+
+Vite proxies API paths to `http://127.0.0.1:8000` during local development. A deployed static
+build can set `VITE_API_BASE_URL` to the API origin, or leave it unset when the API serves the
+client from the same origin.
+
+The current API intentionally has no browser endpoint for log files or trained-model artifacts.
+The UI therefore uses trusted workspace references for stored HDFS logs and pipeline manifests,
+and clearly presents the current `not_supported` analysis outcome until the isolated inference
+artifact contract exists.
