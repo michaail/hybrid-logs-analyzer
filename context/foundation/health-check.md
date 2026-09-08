@@ -87,13 +87,15 @@ The previous root-module collection failure is resolved: `tests/test_pipeline_sm
 Provider: not detected  
 Configuration: not found
 
-| Stage | Status | Notes |
-| --- | --- | --- |
-| Lint | ✗ | Ruff works locally; no CI configuration |
-| Test | ✗ | pytest works locally; no CI configuration |
-| Build | ✗ | no CI configuration |
-| Type check | ✗ | mypy works locally; no CI configuration |
-| Security | ✗ | pip-audit works locally; no CI configuration |
+
+| Stage      | Status | Notes                                        |
+| ---------- | ------ | -------------------------------------------- |
+| Lint       | ✗      | Ruff works locally; no CI configuration      |
+| Test       | ✗      | pytest works locally; no CI configuration    |
+| Build      | ✗      | no CI configuration                          |
+| Type check | ✗      | mypy works locally; no CI configuration      |
+| Security   | ✗      | pip-audit works locally; no CI configuration |
+
 
 No CI/CD configuration was detected. This is expected to be addressed in the infrastructure and deployment lesson. The local lint, type, collection, and dependency checks now provide a stable development baseline.
 
@@ -113,10 +115,10 @@ No medium-severity local configuration gaps detected.
 
 ### Present configuration
 
-- **`pyproject.toml`** — configures pytest, Ruff, mypy, and the Pydantic mypy plugin.
-- **`requirements-macos-intel.lock.txt`** — pins the complete verified Intel development environment.
-- **`.editorconfig`** — defines consistent editor whitespace and line-ending behavior.
-- **`.gitignore`** — excludes secrets, `.venv`, generated artifacts, Python caches, and tool caches.
+- `**pyproject.toml`** — configures pytest, Ruff, mypy, and the Pydantic mypy plugin.
+- `**requirements-macos-intel.lock.txt**` — pins the complete verified Intel development environment.
+- `**.editorconfig**` — defines consistent editor whitespace and line-ending behavior.
+- `**.gitignore**` — excludes secrets, `.venv`, generated artifacts, Python caches, and tool caches.
 - **Ruff** — `ruff check src tests scripts run_ablation.py` passes.
 - **mypy** — checks 29 project source files successfully with project package bases and the Pydantic plugin.
 - **Pydantic** — remains pinned to 2.10.6; its mypy plugin validates typed model constructors statically.
@@ -126,12 +128,14 @@ No medium-severity local configuration gaps detected.
 Stack assessment: `context/foundation/stack-assessment.md`  
 Agent readiness from stack assessment: ready-with-compensation
 
-| Stack-assessment gap | Health-check finding | Status |
-| --- | --- | --- |
-| Python type safety | mypy and the Pydantic plugin pass across 29 project files. | Mitigated locally |
-| Notebook-led conventions | Reusable modules and tests exist, but no project-specific instruction file defines production boundaries. | Still open |
-| Test dependency declaration | pytest is pinned in development requirements and the complete Intel lock. | Mitigated |
-| Recommended agent instructions | No `AGENTS.md` or `CLAUDE.md` exists; course rules are not project coding conventions. | Not yet addressed |
+
+| Stack-assessment gap           | Health-check finding                                                                                      | Status            |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------- | ----------------- |
+| Python type safety             | mypy and the Pydantic plugin pass across 29 project files.                                                | Mitigated locally |
+| Notebook-led conventions       | Reusable modules and tests exist, but no project-specific instruction file defines production boundaries. | Still open        |
+| Test dependency declaration    | pytest is pinned in development requirements and the complete Intel lock.                                 | Mitigated         |
+| Recommended agent instructions | No `AGENTS.md` or `CLAUDE.md` exists; course rules are not project coding conventions.                    | Not yet addressed |
+
 
 ## Recommended Fixes
 
@@ -195,3 +199,21 @@ Move or copy `src/.env.example` to `.env.example` at the repository root, or upd
 Health status: needs-attention
 
 The local development baseline is now reproducible and substantially healthier: the exact Intel environment is locked, dependency consistency passes, pytest collects four tests, Ruff passes, and mypy plus the Pydantic plugin checks 29 source files. Remaining attention is concentrated in the known legacy-dependency advisories and the unverified native test paths. Contain model-deserialization risk and run the full suite in a normal terminal before starting the production upload workflow; CI/CD, agent instructions, and deployment isolation follow in upcoming lessons.
+
+## Tests summary
+
+```
+============================= test session starts ==============================
+platform darwin -- Python 3.11.4, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/michalklos/Magisterka 2026/Repository/project
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.14.2, langsmith-0.11.2
+collected 4 items                                                              
+
+tests/test_artifacts.py ..                                               [ 50%]
+tests/test_pipeline_smoke.py ^[[B..                                          [100%]
+
+========================= 4 passed in 64.60s (0:01:04) =========================
+```
+

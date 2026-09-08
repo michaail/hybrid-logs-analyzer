@@ -1,0 +1,20 @@
+---
+description: ML artifacts security.
+globs:
+  - "src/**/*.py"
+  - "tests/**/*.py"
+  - "scripts/**/*.py"
+alwaysApply false
+---
+
+## Model admission
+
+- **Models published for MVP comes from succesful training pipeline defined in notebooks with all required metadata and metrics for validation**
+- **Do not accept arbitrary serialized artifacts,  reject external model artifacts until an explicit, non-executable artifact contract exists**
+
+## Loading and isolation
+
+- **Do not load artifacts with current PyTorch loader with `weights_only=False`**
+- **Model's artifact needs to be associated with metadata: require identifier, version, status, metrics, artifact reference, and project ownership.**
+- **Isolate inference - require a dedicated process with minimal filesystem access, no application secrets, and no unnecessary network access**
+
