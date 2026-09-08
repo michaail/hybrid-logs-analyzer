@@ -1,0 +1,43 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - module1lesson5
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install API and quality dependencies
+        run: python -m pip install -r requirements-api.txt -r requirements-dev.txt
+      - name: Lint
+        run: ruff check src tests scripts run_ablation.py
+      - name: Type check
+        run: mypy
+      - name: Test API and artifact behavior
+        run: python -m pytest tests/test_api.py tests/test_artifacts.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build
+        run: npm ci && npm run build

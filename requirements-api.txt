@@ -1,0 +1,8 @@
+# Public FastAPI control-plane runtime. Keep ML/inference dependencies in a separate
+# Linux-only contract once the non-executable artifact format is implemented.
+fastapi==0.115.12
+pydantic==2.10.6
+psycopg[binary]==3.3.5
+PyJWT==2.10.1
+python-dotenv==1.0.1
+uvicorn==0.34.0

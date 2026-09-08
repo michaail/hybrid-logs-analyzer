@@ -311,3 +311,61 @@ We will refactor the pipeline into a unified, modular Python CLI application, st
 - [ ] Centralize Graph and PyG dataset construction into `src/dataset_builder.py`.
 - [ ] Define the end-to-end DAG in `dvc.yaml`.
 - [ ] Verify `metrics.json` and split distributions remain identical to notebook baseline.
+
+## FastAPI foundation
+
+The HDFS-only API provides administrator-provisioned accounts, project isolation, auditable
+model registration/publication, and analysis-run validation. It stores metadata in the database
+configured by `DATABASE_URL` and
+references artifacts in a controlled workspace; it never accepts model bytes or deserializes a
+model artifact.
+
+Copy `.env.example` to `.env` and set a unique `API_JWT_SECRET`. Configure
+`DATABASE_URL` (for example, `sqlite:///.api/analyzer.db` locally) and
+`API_TRUSTED_WORKSPACE_ROOT` to an ignored workspace containing pipeline outputs:
+
+```bash
+source .venv/bin/activate
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+# Put the printed value in API_JWT_SECRET in .env.
+
+python -m src.api.migrations
+python -m src.api.bootstrap --username admin
+uvicorn src.api.main:create_app --factory --reload
+```
+
+The API is then available at `http://127.0.0.1:8000`, with OpenAPI documentation at `/docs`.
+There is no public sign-up route. An Administrator signs in at `POST /auth/token`, provisions
+accounts with `POST /admin/users`, creates projects, and grants `publisher` or `operator`
+memberships. Publishers register a pipeline-produced HDFS run manifest at
+`POST /projects/{project_id}/models` and explicitly publish the eligible version. Operators
+submit a trusted stored HDFS log reference at `POST /projects/{project_id}/analysis-runs`.
+
+Analysis runs fully validate the referenced HDFS file and record a durable rejection for invalid
+data. Valid files currently end in the explicit `not_supported` terminal state:
+the existing `.pt`/PyG pipeline artifacts do not yet have the required non-executable,
+isolated inference contract. This safety boundary is deliberate; adding executable inference
+requires a separate artifact-format and isolated-worker change.
+
+## React interface
+
+The React/TypeScript client is in [`frontend/`](./frontend). It is a thin client for the FastAPI
+control plane: it stores the bearer token only in browser session storage, scopes every project
+request through the selected project, and leaves authorization decisions to the API.
+
+Run the API first, then start the development client in another terminal:
+
+```bash
+cd frontend && npm install && npm run dev
+```
+
+Vite proxies API paths to `http://127.0.0.1:8000` during local development. A deployed static
+build leaves `VITE_API_BASE_URL` unset when the API serves the client from the same origin.
+The Railway image builds `frontend/dist` and serves it through FastAPI. See the
+[Railway staging deployment guide](context/deployment/deploy-plan.md) for the manual
+provisioning, validation, rollback, and deferred-inference boundaries.
+
+The current API intentionally has no browser endpoint for log files or trained-model artifacts.
+The UI therefore uses trusted workspace references for stored HDFS logs and pipeline manifests,
+and clearly presents the current `not_supported` analysis outcome until the isolated inference
+artifact contract exists.
