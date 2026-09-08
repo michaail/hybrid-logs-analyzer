@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from src.api.bootstrap import bootstrap_administrator
 from src.api.main import create_app
 from src.api.settings import ApiSettings
+from src.api.storage import ApiDatabase
 
 PASSWORD = "correct-horse-battery-staple"
 
@@ -26,10 +27,11 @@ def api(tmp_path: Path) -> Iterator[ApiFixture]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     settings = ApiSettings(
-        database_path=tmp_path / "api.db",
+        database_url=f"sqlite:///{tmp_path / 'api.db'}",
         jwt_secret="test-secret-not-for-production",
         trusted_workspace_root=workspace,
     )
+    ApiDatabase(settings.database_url).apply_migrations()
     bootstrap_administrator(settings, "admin", PASSWORD)
     with TestClient(create_app(settings)) as client:
         yield ApiFixture(client=client, workspace=workspace)
@@ -94,6 +96,24 @@ def _write_trusted_manifest(workspace: Path, *, dataset: str = "hdfs") -> str:
         )
     )
     return str(manifest.relative_to(workspace))
+
+
+def test_migrations_are_idempotent_and_database_is_healthy(tmp_path: Path) -> None:
+    database = ApiDatabase(f"sqlite:///{tmp_path / 'api.db'}")
+
+    database.apply_migrations()
+    database.apply_migrations()
+
+    assert database.healthcheck()
+
+
+def test_health_requires_a_reachable_database(api: ApiFixture) -> None:
+    response = api.client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
 
 
 def test_authentication_roles_and_project_isolation(api: ApiFixture) -> None:

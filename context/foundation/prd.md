@@ -8,7 +8,7 @@ product_type: web-app
 target_scale:
   users: small
   qps: "low; one active analysis run at a time"
-  data_volume: "datasets comparable to the LogHub HDFS and BGL references"
+  data_volume: "datasets comparable to the LogHub HDFS reference"
 timeline_budget:
   delivery_weeks: 2
   hard_deadline: null
@@ -27,7 +27,7 @@ The current architecture is a research and development workflow whose execution 
 
 An SRE investigating unusual behavior after incidents, deployments, or operational changes cannot independently validate, publish, and reuse a pretrained anomaly-detection model or analyze new logs without manually executing notebooks and understanding their internals. The current workaround requires notebook-order knowledge, local environment setup, manual state preparation, and implicit coordination between cells.
 
-The change is needed now to deliver a production-oriented MVP for the master's thesis. It adds a repeatable web workflow for pretrained-model intake, publication, and analysis while retaining notebook-based training, research, and exploration. Both HDFS and BGL logs are must-have sources for the first shippable version, and additional log sources may be supported later.
+The change is needed now to deliver a production-oriented MVP for the master's thesis. It adds a repeatable web workflow for pretrained-model intake, publication, and HDFS analysis while retaining notebook-based training, research, and exploration. Additional user-facing log sources are outside this MVP.
 
 Simply wrapping the notebooks is insufficient: orchestration, state, and traceability are implicit; extracting the analysis path risks changing validated numerical behavior; and authentication, isolation, model lifecycle, and auditability were outside the research prototype. The production workflow must preserve the validated anomaly-detection, data-preparation, and evaluation behavior and reproduce agreed notebook results for the same dataset and configuration within a defined numerical tolerance.
 
@@ -42,7 +42,7 @@ The primary persona is an SRE responsible for investigating unusual system-log b
 ### Primary
 
 - A Publisher can upload a pretrained model with its required metadata, metrics, source compatibility, and external-evaluation evidence; validate and register it as a versioned model; and explicitly publish an eligible version without executing or editing notebooks.
-- An Operator can submit HDFS or BGL logs to an asynchronous analysis run using a compatible published model from the same project and inspect anomalies, scores or levels, threshold, log context, run identity, and exact model version.
+- An Operator can submit HDFS logs to an asynchronous analysis run using a compatible published model from the same project and inspect anomalies, scores or levels, threshold, log context, run identity, and exact model version.
 
 ### Secondary
 
@@ -68,9 +68,9 @@ The primary persona is an SRE responsible for investigating unusual system-log b
 - Publication records the Publisher, publication time, and exact model version in the audit log.
 - An Operator cannot register or publish a model.
 
-### US-02: Operator analyzes HDFS or BGL logs
+### US-02: Operator analyzes HDFS logs
 
-- **Given** an authenticated Operator authorized for a project, a valid uploaded or stored HDFS or BGL dataset, and a compatible published model in the same project
+- **Given** an authenticated Operator authorized for a project, a valid uploaded or stored HDFS dataset, and a compatible published model in the same project
 - **When** the Operator starts an anomaly-analysis run
 - **Then** the run proceeds asynchronously and exposes its status before presenting traceable anomaly results
 
@@ -92,7 +92,7 @@ The primary persona is an SRE responsible for investigating unusual system-log b
   > Socrates: Counter-argument considered: presence of external-evaluation evidence cannot prove actual model quality. Resolution: revised; eligibility validation establishes completeness and compatibility only.
 - [new] FR-004: Publisher can explicitly publish an eligible model version within an authorized project. Priority: must-have
   > Socrates: Counter-argument considered: explicit publication duplicates eligibility state and adds workflow friction. Resolution: kept; the audited gate prevents accidental use of merely registered models.
-- [new] FR-005: Operator can upload or select HDFS or BGL logs and receive a clear full-dataset rejection when validation fails. Priority: must-have
+- [new] FR-005: Operator can upload or select HDFS logs and receive a clear full-dataset rejection when validation fails. Priority: must-have
   > Socrates: Counter-arguments considered: two intake paths increase scope, and one malformed record blocks all valid records. Resolution: kept; strict full-dataset rejection is the safer and clearer MVP behavior.
 - [new] FR-006: Operator can start asynchronous analysis with a compatible published model from the same project and observe run status. Priority: must-have
   > Socrates: Counter-argument considered: asynchronous orchestration may cost more than it proves. Resolution: kept; potentially long analysis needs a durable run identity and observable status.
@@ -134,7 +134,7 @@ The primary persona is an SRE responsible for investigating unusual system-log b
 - Every unsuccessful analysis run exposes a terminal failed status and a useful error; no maximum failure-detection time is specified for the MVP.
 - Uploaded logs, models, run records, and results remain available until an authorized user deletes them.
 - No user can observe or act on logs, models, runs, or results outside an authorized project.
-- Invalid model packages and invalid HDFS or BGL datasets fail with a clear validation result and do not silently proceed.
+- Invalid model packages and invalid HDFS datasets fail with a clear validation result and do not silently proceed.
 
 ## Business Logic Changes
 
@@ -142,7 +142,7 @@ The existing notebook workflow classifies a log record as anomalous when its mod
 
 The MVP preserves that classification rule and adds a lifecycle rule: a pretrained model can be published and used for anomaly analysis only when its package is complete and compatible with its declared log source, evidence of successful external evaluation is present, a Publisher explicitly publishes it, and the model and analyzed logs belong to the same project.
 
-The lifecycle rule consumes the uploaded model package, declared HDFS or BGL compatibility, external-evaluation evidence, publication action, and project ownership. It produces either a clear rejection or a published model version that an Operator can select for a compatible analysis run.
+The lifecycle rule consumes the uploaded model package, declared HDFS compatibility, external-evaluation evidence, publication action, and project ownership. It produces either a clear rejection or a published model version that an Operator can select for a compatible analysis run.
 
 ## Access Control Changes
 
@@ -158,8 +158,8 @@ Input data, model artifacts, analysis runs, and results are isolated by project.
 ## Non-Goals
 
 - **No model training in the web app.** Training, retraining, scheduled retraining, hyperparameter optimization, automated model selection, multi-model experiments, and A/B testing remain outside this MVP; Publishers provide pretrained models.
-- **No real-time or continuous detection.** The MVP analyzes submitted HDFS or BGL datasets as asynchronous runs rather than consuming live streams.
-- **No additional log-source formats.** User-facing support is limited to HDFS and BGL for the first release.
+- **No real-time or continuous detection.** The MVP analyzes submitted HDFS datasets as asynchronous runs rather than consuming live streams.
+- **No additional log-source formats.** User-facing support is limited to HDFS for the first release.
 - **No advanced MLOps platform.** Feature stores, full experiment-tracking infrastructure, and production model monitoring are outside the publish-and-analyze workflow.
 - **No external operational integrations.** Logging, tracking, ticketing, and advanced alerting integrations are excluded.
 - **No automated root-cause analysis or remediation.** Results stop at anomaly identification, score or level, threshold, and relevant log context.

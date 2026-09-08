@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 class ApiSettings:
     """Runtime settings with paths intentionally outside versioned source code."""
 
-    database_path: Path
+    database_url: str
     jwt_secret: str
     trusted_workspace_root: Path
     jwt_ttl_minutes: int = 30
@@ -29,7 +29,12 @@ class ApiSettings:
                 "Generate a high-entropy value and keep it outside version control."
             )
 
-        database_path = Path(os.environ.get("API_DATABASE_PATH", ".api/analyzer.db"))
+        database_url = os.environ.get("DATABASE_URL")
+        if not database_url:
+            raise RuntimeError(
+                "DATABASE_URL must be set before starting the API. "
+                "Use a PostgreSQL URL in Railway or a sqlite URL for local development."
+            )
         workspace_root = Path(
             os.environ.get("API_TRUSTED_WORKSPACE_ROOT", "workspace")
         ).resolve()
@@ -42,7 +47,7 @@ class ApiSettings:
             raise RuntimeError("API_JWT_TTL_MINUTES must be a positive integer.")
 
         return cls(
-            database_path=database_path.resolve(),
+            database_url=database_url,
             jwt_secret=secret,
             trusted_workspace_root=workspace_root,
             jwt_ttl_minutes=jwt_ttl_minutes,

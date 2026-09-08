@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.requests import Request
+from starlette.responses import Response
 
 from src.api.schemas import (
     AnalysisResultsResponse,
@@ -32,7 +37,7 @@ from src.api.schemas import (
 )
 from src.api.security import create_access_token, decode_access_token, hash_password, verify_password
 from src.api.settings import ApiSettings
-from src.api.storage import ApiDatabase, utc_now
+from src.api.storage import ApiDatabase, DatabaseIntegrityError, utc_now
 from src.api.validation import ValidationError, validate_hdfs_log, validate_pipeline_model
 
 
@@ -48,8 +53,7 @@ class CurrentUser:
 def create_app(settings: ApiSettings | None = None) -> FastAPI:
     """Create a configured FastAPI app without importing legacy ML loaders."""
     resolved_settings = settings or ApiSettings.from_environment()
-    database = ApiDatabase(resolved_settings.database_path)
-    database.initialize()
+    database = ApiDatabase(resolved_settings.database_url)
     bearer = HTTPBearer(auto_error=False)
 
     def get_current_user(
@@ -105,10 +109,16 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             "It never deserializes uploaded model artifacts."
         ),
     )
+    app.add_middleware(SecurityHeadersMiddleware)
 
     @app.get("/health", tags=["health"])
     def health() -> dict[str, str]:
-        """Return a non-sensitive readiness result."""
+        """Return a non-sensitive readiness result only when the database is reachable."""
+        if not database.healthcheck():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database is unavailable.",
+            )
         return {"status": "ok"}
 
     @app.post("/auth/token", response_model=TokenResponse, tags=["authentication"])
@@ -156,7 +166,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 password_hash=hash_password(request.password),
                 is_administrator=request.is_administrator,
             )
-        except sqlite3.IntegrityError:
+        except DatabaseIntegrityError:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username is already provisioned.") from None
         response = _user_response(created_user)
         database.add_audit_event(
@@ -196,7 +206,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         """Create a project isolation boundary."""
         try:
             project = database.create_project(request.name)
-        except sqlite3.IntegrityError:
+        except DatabaseIntegrityError:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Project name already exists.") from None
         response = _project_response(project)
         database.add_audit_event(
@@ -297,7 +307,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 metadata_json=json.dumps(request.metadata, sort_keys=True),
                 external_evaluation_evidence=request.external_evaluation_evidence,
             )
-        except sqlite3.IntegrityError:
+        except DatabaseIntegrityError:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This model identifier and version already exists in the project.",
@@ -528,7 +538,54 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             raise _not_found("Project")
         return [_audit_response(event) for event in database.list_audit_events(project_id)]
 
+    _mount_frontend(app)
     return app
+
+
+def _mount_frontend(app: FastAPI) -> None:
+    """Serve the compiled React client when it is included in the deployed image."""
+    frontend_dir = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    assets_dir = frontend_dir / "assets"
+    if not frontend_dir.is_dir() or not assets_dir.is_dir():
+        return
+
+    app.mount("/assets", StaticFiles(directory=assets_dir), name="frontend-assets")
+
+    @app.get("/{requested_path:path}", include_in_schema=False)
+    def serve_frontend(requested_path: str) -> FileResponse:
+        """Return static assets or the SPA entry point without masking API 404 responses."""
+        if requested_path.startswith(("admin/", "auth/", "health", "projects/", "users/")):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource was not found.")
+        requested_file = (frontend_dir / requested_path).resolve()
+        try:
+            requested_file.relative_to(frontend_dir.resolve())
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource was not found.") from None
+        if requested_path and requested_file.is_file():
+            return FileResponse(requested_file)
+        return FileResponse(frontend_dir / "index.html", media_type="text/html")
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Apply browser protections without breaking FastAPI's interactive documentation."""
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault(
+            "Permissions-Policy",
+            "camera=(), geolocation=(), microphone=()",
+        )
+        if request.url.path not in {"/docs", "/openapi.json", "/redoc"}:
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "base-uri 'self'; connect-src 'self'; default-src 'self'; form-action 'self'; "
+                "frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; "
+                "script-src 'self'; style-src 'self'",
+            )
+        return response
 
 
 def _record_analysis_audit(

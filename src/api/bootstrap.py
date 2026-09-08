@@ -13,9 +13,8 @@ from src.api.storage import ApiDatabase
 
 
 def bootstrap_administrator(settings: ApiSettings, username: str, password: str) -> UUID:
-    """Provision the initial Administrator without exposing a public registration route."""
-    database = ApiDatabase(settings.database_path)
-    database.initialize()
+    """Provision the initial Administrator after deployment migrations complete."""
+    database = ApiDatabase(settings.database_url)
     if database.get_user_by_username(username) is not None:
         raise ValueError(f"User {username!r} already exists.")
     user = database.create_user(

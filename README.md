@@ -315,11 +315,13 @@ We will refactor the pipeline into a unified, modular Python CLI application, st
 ## FastAPI foundation
 
 The HDFS-only API provides administrator-provisioned accounts, project isolation, auditable
-model registration/publication, and analysis-run validation. It stores SQLite metadata and
+model registration/publication, and analysis-run validation. It stores metadata in the database
+configured by `DATABASE_URL` and
 references artifacts in a controlled workspace; it never accepts model bytes or deserializes a
 model artifact.
 
 Copy `.env.example` to `.env` and set a unique `API_JWT_SECRET`. Configure
+`DATABASE_URL` (for example, `sqlite:///.api/analyzer.db` locally) and
 `API_TRUSTED_WORKSPACE_ROOT` to an ignored workspace containing pipeline outputs:
 
 ```bash
@@ -327,6 +329,7 @@ source .venv/bin/activate
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 # Put the printed value in API_JWT_SECRET in .env.
 
+python -m src.api.migrations
 python -m src.api.bootstrap --username admin
 uvicorn src.api.main:create_app --factory --reload
 ```
@@ -357,8 +360,10 @@ cd frontend && npm install && npm run dev
 ```
 
 Vite proxies API paths to `http://127.0.0.1:8000` during local development. A deployed static
-build can set `VITE_API_BASE_URL` to the API origin, or leave it unset when the API serves the
-client from the same origin.
+build leaves `VITE_API_BASE_URL` unset when the API serves the client from the same origin.
+The Railway image builds `frontend/dist` and serves it through FastAPI. See the
+[Railway staging deployment guide](context/deployment/deploy-plan.md) for the manual
+provisioning, validation, rollback, and deferred-inference boundaries.
 
 The current API intentionally has no browser endpoint for log files or trained-model artifacts.
 The UI therefore uses trusted workspace references for stored HDFS logs and pipeline manifests,
