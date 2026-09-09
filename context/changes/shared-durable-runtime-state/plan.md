@@ -536,23 +536,23 @@ rows are test-only until S-02/S-03.
 
 #### Automated
 
-- [x] 3.1 `python -m pytest tests/test_api.py` passes, including dataset upsert identity, isolation, stored summaries, expanded status enum on responses, and unchanged `not_supported` / `rejected` HTTP writes
-- [x] 3.2 Generated OpenAPI lists the dataset GET routes, includes the six run statuses, and has no public result or run-status write operation
-- [x] 3.3 `ruff check src/api tests` and `mypy` pass
+- [x] 3.1 `python -m pytest tests/test_api.py` passes, including dataset upsert identity, isolation, stored summaries, expanded status enum on responses, and unchanged `not_supported` / `rejected` HTTP writes — 067691b
+- [x] 3.2 Generated OpenAPI lists the dataset GET routes, includes the six run statuses, and has no public result or run-status write operation — 067691b
+- [x] 3.3 `ruff check src/api tests` and `mypy` pass — 067691b
 
 #### Manual
 
-- [x] 3.4 As Publisher/Operator in `/docs`, register and publish a workspace model, analyze a valid and invalid log, list datasets, and confirm GET results summaries match the run outcomes without any result POST
+- [x] 3.4 As Publisher/Operator in `/docs`, register and publish a workspace model, analyze a valid and invalid log, list datasets, and confirm GET results summaries match the run outcomes without any result POST — 067691b
 
 ### Phase 4: Client types, dataset visibility, and documentation
 
 #### Automated
 
-- [ ] 4.1 `python -m pytest tests/test_api.py tests/test_artifacts.py` passes
-- [ ] 4.2 `ruff check src tests scripts run_ablation.py` and `mypy` pass
-- [ ] 4.3 `cd frontend && npm ci && npm run build` passes
+- [x] 4.1 `python -m pytest tests/test_api.py tests/test_artifacts.py` passes
+- [x] 4.2 `ruff check src tests scripts run_ablation.py` and `mypy` pass
+- [x] 4.3 `cd frontend && npm ci && npm run build` passes
 
 #### Manual
 
-- [ ] 4.4 Sign in as Operator: see datasets for the selected project, start analysis with a workspace log reference, and see `dataset_id` plus stored result summaries
-- [ ] 4.5 Confirm docs and OpenAPI still have no upload, Bucket, or inference-completion path, and that `not_supported` remains the valid-HDFS HTTP outcome
+- [x] 4.4 Sign in as Operator: see datasets for the selected project, start analysis with a workspace log reference, and see `dataset_id` plus stored result summaries
+- [x] 4.5 Confirm docs and OpenAPI still have no upload, Bucket, or inference-completion path, and that `not_supported` remains the valid-HDFS HTTP outcome
