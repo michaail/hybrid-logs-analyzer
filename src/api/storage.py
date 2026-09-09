@@ -301,18 +301,6 @@ class ApiDatabase:
             (str(user_id),),
         )
 
-    def grant_membership(self, project_id: UUID, user_id: UUID, role: str) -> DatabaseRow:
-        with self.session() as connection:
-            connection.execute(
-                """
-                INSERT INTO memberships (project_id, user_id, role)
-                VALUES (?, ?, ?)
-                ON CONFLICT(project_id, user_id) DO UPDATE SET role = excluded.role
-                """,
-                (str(project_id), str(user_id), role),
-            )
-        return self.get_membership(project_id, user_id) or self._missing_record("membership")
-
     def create_membership(
         self,
         *,
