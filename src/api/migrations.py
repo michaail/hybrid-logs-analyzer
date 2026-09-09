@@ -14,9 +14,10 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
             """
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
-                username TEXT NOT NULL UNIQUE,
+                username TEXT NOT NULL UNIQUE CHECK (username = lower(username)),
                 password_hash TEXT NOT NULL,
                 is_administrator INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
             )
             """,

@@ -4,7 +4,7 @@ platform: Railway
 environment: staging
 status: ready-for-manual-provisioning
 scope: HDFS-only control-plane walking skeleton
-updated_at: 2026-09-08
+updated_at: 2026-09-09
 ---
 
 # First Railway Staging Deployment
@@ -120,7 +120,10 @@ python -m src.api.bootstrap --username admin
 
 The bootstrap command prompts for a password, so it neither records the password in a command
 history nor prints it to build or deployment logs. Perform it once; a duplicate username is
-rejected. Do not introduce a startup password variable or hard-coded administrator account.
+rejected. Usernames are stored as a canonical lowercase identity, and later sign-in is
+case-insensitive. Do not introduce a startup password variable or hard-coded administrator
+account. After bootstrap, sign in through the same-origin UI and use the Administration view to
+provision Operator or Publisher accounts for a project; the browser never creates Administrators.
 
 ## Staging validation
 
@@ -140,7 +143,9 @@ railway deployment list --service web
 Then sign in through the same-origin UI and confirm all of these conditions:
 
 - The login page, assets, and browser refresh load from the public domain.
-- The bootstrapped administrator can authenticate, create a project, and view its audit events.
+- The bootstrapped administrator can authenticate, create a project, provision a
+  project-authorized Operator or Publisher, manage membership and account activation, and
+  review project and system audit events.
 - An unauthenticated request is rejected, and a caller without project access cannot enumerate
   another project's records.
 - The health endpoint reports success only while PostgreSQL is reachable.

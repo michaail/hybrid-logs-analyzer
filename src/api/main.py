@@ -17,6 +17,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from src.api.schemas import (
+    AccountActivationUpdate,
+    AccountSummary,
     AnalysisResultsResponse,
     AnalysisRunCreate,
     AnalysisRunResponse,
@@ -25,14 +27,16 @@ from src.api.schemas import (
     LoginRequest,
     MembershipCreate,
     MembershipResponse,
+    MembershipRoleUpdate,
     ModelRegistrationRequest,
     ModelStatus,
     ModelVersionResponse,
+    ProjectAccountCreate,
+    ProjectAccountResponse,
     ProjectCreate,
     ProjectResponse,
     ProjectRole,
     TokenResponse,
-    UserCreate,
     UserResponse,
 )
 from src.api.security import create_access_token, decode_access_token, hash_password, verify_password
@@ -65,7 +69,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         if user_id is None:
             raise _unauthorized()
         user = database.get_user_by_id(user_id)
-        if user is None:
+        if user is None or not bool(user["is_active"]):
             raise _unauthorized()
         return CurrentUser(
             id=UUID(str(user["id"])),
@@ -125,7 +129,11 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     def login(credentials: LoginRequest) -> TokenResponse:
         """Authenticate a provisioned account and issue a signed bearer token."""
         user = database.get_user_by_username(credentials.username)
-        if user is None or not verify_password(credentials.password, str(user["password_hash"])):
+        if (
+            user is None
+            or not bool(user["is_active"])
+            or not verify_password(credentials.password, str(user["password_hash"]))
+        ):
             raise _unauthorized()
         user_id = UUID(str(user["id"]))
         database.add_audit_event(
@@ -150,40 +158,78 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         return _user_response(stored_user)
 
     @app.post(
-        "/admin/users",
-        response_model=UserResponse,
+        "/admin/project-accounts",
+        response_model=ProjectAccountResponse,
         status_code=status.HTTP_201_CREATED,
         tags=["administration"],
     )
-    def provision_user(
-        request: UserCreate,
+    def provision_project_account(
+        request: ProjectAccountCreate,
         administrator: CurrentUser = Depends(require_administrator),
-    ) -> UserResponse:
-        """Create an account; public self-registration is intentionally unavailable."""
+    ) -> ProjectAccountResponse:
+        """Create a non-administrator account and its initial project membership atomically."""
+        if database.get_project(request.project_id) is None:
+            raise _not_found("Project")
         try:
-            created_user = database.create_user(
+            created_user, membership = database.provision_project_account(
                 username=request.username,
                 password_hash=hash_password(request.password),
-                is_administrator=request.is_administrator,
+                project_id=request.project_id,
+                role=request.role.value,
+                actor_user_id=administrator.id,
             )
         except DatabaseIntegrityError:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username is already provisioned.") from None
-        response = _user_response(created_user)
-        database.add_audit_event(
-            actor_user_id=administrator.id,
-            project_id=None,
-            action="user.provisioned",
-            resource_type="user",
-            resource_id=response.id,
-            details_json=json.dumps(
-                {
-                    "is_administrator": response.is_administrator,
-                    "username": response.username,
-                },
-                sort_keys=True,
-            ),
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Username is already provisioned.",
+            ) from None
+        return ProjectAccountResponse(
+            account=_account_summary(created_user),
+            membership=_membership_response(membership),
         )
-        return response
+
+    @app.get("/admin/users", response_model=list[AccountSummary], tags=["administration"])
+    def list_users(administrator: CurrentUser = Depends(require_administrator)) -> list[AccountSummary]:
+        """List provisioned accounts and their active state for Administrator oversight."""
+        del administrator
+        return [_account_summary(user) for user in database.list_users()]
+
+    @app.patch(
+        "/admin/users/{user_id}/activation",
+        response_model=AccountSummary,
+        tags=["administration"],
+    )
+    def set_user_activation(
+        user_id: UUID,
+        request: AccountActivationUpdate,
+        administrator: CurrentUser = Depends(require_administrator),
+    ) -> AccountSummary:
+        """Activate or deactivate a non-administrator account."""
+        if database.get_user_by_id(user_id) is None:
+            raise _not_found("User")
+        try:
+            updated = database.set_user_active(
+                user_id=user_id,
+                is_active=request.is_active,
+                actor_user_id=administrator.id,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from None
+        if updated is None:
+            raise _not_found("User")
+        return _account_summary(updated)
+
+    @app.get(
+        "/admin/audit-events",
+        response_model=list[AuditEventResponse],
+        tags=["administration"],
+    )
+    def list_system_audit_events(
+        administrator: CurrentUser = Depends(require_administrator),
+    ) -> list[AuditEventResponse]:
+        """Return Administrator-visible user-resource audit events across the system."""
+        del administrator
+        return [_audit_response(event) for event in database.list_user_audit_events()]
 
     @app.get("/projects", response_model=list[ProjectResponse], tags=["projects"])
     def list_projects(user: CurrentUser = Depends(get_current_user)) -> list[ProjectResponse]:
@@ -205,19 +251,13 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     ) -> ProjectResponse:
         """Create a project isolation boundary."""
         try:
-            project = database.create_project(request.name)
+            project = database.create_project_with_audit(
+                name=request.name,
+                actor_user_id=administrator.id,
+            )
         except DatabaseIntegrityError:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Project name already exists.") from None
-        response = _project_response(project)
-        database.add_audit_event(
-            actor_user_id=administrator.id,
-            project_id=response.id,
-            action="project.created",
-            resource_type="project",
-            resource_id=response.id,
-            details_json=json.dumps({"name": response.name}, sort_keys=True),
-        )
-        return response
+        return _project_response(project)
 
     @app.post(
         "/projects/{project_id}/members",
@@ -230,23 +270,72 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         request: MembershipCreate,
         administrator: CurrentUser = Depends(require_administrator),
     ) -> MembershipResponse:
-        """Grant or update a Publisher or Operator project membership."""
+        """Grant project access to an existing account; duplicates are rejected."""
         if database.get_project(project_id) is None or database.get_user_by_id(request.user_id) is None:
             raise _not_found("Project or user")
-        membership = database.grant_membership(project_id, request.user_id, request.role.value)
-        response = _membership_response(membership)
-        database.add_audit_event(
-            actor_user_id=administrator.id,
+        try:
+            membership = database.create_membership(
+                project_id=project_id,
+                user_id=request.user_id,
+                role=request.role.value,
+                actor_user_id=administrator.id,
+            )
+        except DatabaseIntegrityError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Membership already exists for this project and user.",
+            ) from None
+        return _membership_response(membership)
+
+    @app.patch(
+        "/projects/{project_id}/members/{user_id}",
+        response_model=MembershipResponse,
+        tags=["projects"],
+    )
+    def update_project_membership_role(
+        project_id: UUID,
+        user_id: UUID,
+        request: MembershipRoleUpdate,
+        administrator: CurrentUser = Depends(require_administrator),
+    ) -> MembershipResponse:
+        """Change the role of an existing project membership."""
+        if database.get_project(project_id) is None:
+            raise _not_found("Project")
+        try:
+            membership = database.update_membership_role(
+                project_id=project_id,
+                user_id=user_id,
+                role=request.role.value,
+                actor_user_id=administrator.id,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from None
+        if membership is None:
+            raise _not_found("Membership")
+        return _membership_response(membership)
+
+    @app.delete(
+        "/projects/{project_id}/members/{user_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        response_class=Response,
+        tags=["projects"],
+    )
+    def revoke_project_membership(
+        project_id: UUID,
+        user_id: UUID,
+        administrator: CurrentUser = Depends(require_administrator),
+    ) -> Response:
+        """Revoke an existing project membership while preserving audit history."""
+        if database.get_project(project_id) is None:
+            raise _not_found("Project")
+        revoked = database.revoke_membership(
             project_id=project_id,
-            action="project.membership_granted",
-            resource_type="membership",
-            resource_id=None,
-            details_json=json.dumps(
-                {"role": response.role.value, "user_id": str(response.user_id)},
-                sort_keys=True,
-            ),
+            user_id=user_id,
+            actor_user_id=administrator.id,
         )
-        return response
+        if not revoked:
+            raise _not_found("Membership")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.get(
         "/projects/{project_id}/members",
@@ -617,6 +706,15 @@ def _user_response(row: Any) -> UserResponse:
     )
 
 
+def _account_summary(row: Any) -> AccountSummary:
+    return AccountSummary(
+        id=UUID(str(row["id"])),
+        username=str(row["username"]),
+        is_active=bool(row["is_active"]),
+        created_at=str(row["created_at"]),
+    )
+
+
 def _project_response(row: Any) -> ProjectResponse:
     return ProjectResponse(id=UUID(str(row["id"])), name=str(row["name"]), created_at=str(row["created_at"]))
 
@@ -626,6 +724,8 @@ def _membership_response(row: Any) -> MembershipResponse:
         project_id=UUID(str(row["project_id"])),
         user_id=UUID(str(row["user_id"])),
         role=ProjectRole(str(row["role"])),
+        username=str(row["username"]),
+        is_active=bool(row["is_active"]),
     )
 
 

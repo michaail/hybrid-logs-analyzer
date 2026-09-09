@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+
+from src.api.security import canonical_username
+
+
+def _canonical_username(value: str) -> str:
+    return canonical_username(value)
+
+
+CanonicalUsername = Annotated[str, AfterValidator(_canonical_username)]
+"""A login identity validated against the canonical lowercase username contract."""
 
 
 class ProjectRole(str, Enum):
@@ -40,7 +50,7 @@ class ApiModel(BaseModel):
 class LoginRequest(ApiModel):
     """Credentials for an administrator-provisioned account."""
 
-    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    username: CanonicalUsername
     password: str = Field(min_length=12, max_length=256)
 
 
@@ -52,21 +62,37 @@ class TokenResponse(ApiModel):
     expires_in_seconds: int
 
 
-class UserCreate(ApiModel):
-    """Administrator request to provision an account."""
-
-    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
-    password: str = Field(min_length=12, max_length=256)
-    is_administrator: bool = False
-
-
 class UserResponse(ApiModel):
-    """A non-secret user record."""
+    """A non-secret user record for the authenticated caller."""
 
     id: UUID
     username: str
     is_administrator: bool
     created_at: str
+
+
+class AccountSummary(ApiModel):
+    """Administrator-visible non-secret account lifecycle state."""
+
+    id: UUID
+    username: str
+    is_active: bool
+    created_at: str
+
+
+class ProjectAccountCreate(ApiModel):
+    """Administrator request to provision a project-authorized account atomically."""
+
+    username: CanonicalUsername
+    password: str = Field(min_length=12, max_length=256)
+    project_id: UUID
+    role: ProjectRole
+
+
+class AccountActivationUpdate(ApiModel):
+    """Administrator request to activate or deactivate a non-administrator account."""
+
+    is_active: bool
 
 
 class ProjectCreate(ApiModel):
@@ -84,18 +110,33 @@ class ProjectResponse(ApiModel):
 
 
 class MembershipCreate(ApiModel):
-    """Administrator request to grant project access."""
+    """Administrator request to grant project access to an existing account."""
 
     user_id: UUID
+    role: ProjectRole
+
+
+class MembershipRoleUpdate(ApiModel):
+    """Administrator request to change an existing project membership role."""
+
     role: ProjectRole
 
 
 class MembershipResponse(ApiModel):
-    """A project membership."""
+    """A project membership with associated non-secret account state."""
 
     project_id: UUID
     user_id: UUID
     role: ProjectRole
+    username: str
+    is_active: bool
+
+
+class ProjectAccountResponse(ApiModel):
+    """Result of atomic project-account provisioning."""
+
+    account: AccountSummary
+    membership: MembershipResponse
 
 
 class ModelRegistrationRequest(ApiModel):

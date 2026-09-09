@@ -148,12 +148,21 @@ The lifecycle rule consumes the uploaded model package, declared HDFS compatibil
 
 The current notebook workflow has no application authentication; access is direct through the notebook environment.
 
-The MVP introduces administrator-provisioned accounts with no public sign-up. The exact sign-in method is not yet decided. An unauthenticated request to any protected action or resource is denied and requires sign-in without revealing project data.
+The MVP introduces administrator-provisioned accounts with no public sign-up. The first
+Administrator is created only by a deployment-time CLI bootstrap; the browser never creates
+Administrators. Sign-in uses a username and password; the API issues a JWT bearer token with a
+30-minute default lifetime. Usernames are stored as canonical lowercase identities, and sign-in
+is case-insensitive. An Administrator provisions a non-administrator account together with its
+initial Operator or Publisher membership for a selected project. Later project access is an
+explicit membership grant; a membership role can be changed or revoked without deleting the
+account; a non-administrator account can be deactivated or reactivated. Deactivation and
+revocation take effect on the next authorized request. An unauthenticated request to any
+protected action or resource is denied and requires sign-in without revealing project data.
 
 - **Operator:** can run analysis and verify results within an authorized project.
 - **Publisher:** has Operator capabilities and can additionally upload, register, and explicitly publish pretrained models within an authorized project.
 
-Input data, model artifacts, analysis runs, and results are isolated by project. A user cannot access or act on resources belonging to a project for which they are not authorized. Significant actions, including model upload, analysis-run execution, and model publication, are recorded in the audit log.
+Input data, model artifacts, analysis runs, and results are isolated by project. A user cannot access or act on resources belonging to a project for which they are not authorized. Significant actions, including account provisioning, membership changes, model upload, analysis-run execution, and model publication, are recorded in the audit log. Project membership events are project-scoped; account lifecycle events (bootstrap, provisioning, sign-in, deactivation, and reactivation) are available in a system audit view for Administrators.
 
 ## Non-Goals
 
@@ -167,8 +176,7 @@ Input data, model artifacts, analysis runs, and results are isolated by project.
 
 ## Open Questions
 
-1. **Which account sign-in method will the web app use?** — Owner: user. Resolve before access-control implementation.
-2. **What languages, frameworks, storage, and infrastructure make up the current notebook system?** — Owner: user. Resolve before downstream stack assessment.
-3. **What exact model-package format and artifact contract can a Publisher upload?** — Owner: user. Resolve before model-intake implementation.
-4. **Which notebook and configuration form the agreed parity baseline?** — Owner: user. Resolve before parity acceptance testing.
-5. **What is the current user scale of the notebook system?** — Owner: user. Resolve before downstream stack assessment.
+1. **What languages, frameworks, storage, and infrastructure make up the current notebook system?** — Owner: user. Resolve before downstream stack assessment.
+2. **What exact model-package format and artifact contract can a Publisher upload?** — Owner: user. Resolve before model-intake implementation.
+3. **Which notebook and configuration form the agreed parity baseline?** — Owner: user. Resolve before parity acceptance testing.
+4. **What is the current user scale of the notebook system?** — Owner: user. Resolve before downstream stack assessment.

@@ -1,4 +1,4 @@
-"""Password and JWT helpers for administrator-provisioned accounts."""
+"""Password, identity, and JWT helpers for administrator-provisioned accounts."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -17,6 +18,18 @@ _SCRYPT_N = 2**14
 _SCRYPT_R = 8
 _SCRYPT_P = 1
 _SALT_BYTES = 16
+_USERNAME_PATTERN = re.compile(r"^[a-z0-9_.-]{3,64}$")
+
+
+def canonical_username(username: str) -> str:
+    """Return the unique lowercase login identity for a provisioned account."""
+    normalized = username.lower()
+    if not _USERNAME_PATTERN.fullmatch(normalized):
+        raise ValueError(
+            "Username must be 3-64 characters of lowercase letters, digits, "
+            "underscore, dot, or hyphen."
+        )
+    return normalized
 
 
 def hash_password(password: str) -> str:

@@ -335,11 +335,29 @@ uvicorn src.api.main:create_app --factory --reload
 ```
 
 The API is then available at `http://127.0.0.1:8000`, with OpenAPI documentation at `/docs`.
-There is no public sign-up route. An Administrator signs in at `POST /auth/token`, provisions
-accounts with `POST /admin/users`, creates projects, and grants `publisher` or `operator`
-memberships. Publishers register a pipeline-produced HDFS run manifest at
-`POST /projects/{project_id}/models` and explicitly publish the eligible version. Operators
-submit a trusted stored HDFS log reference at `POST /projects/{project_id}/analysis-runs`.
+There is no public sign-up route. The first Administrator is created only by the
+interactive CLI bootstrap above; the browser never creates Administrators.
+
+Sign-in uses a username and password. Usernames are stored as a canonical lowercase
+identity (3–64 characters: letters, digits, underscore, dot, or hyphen), and sign-in is
+case-insensitive. A successful `POST /auth/token` returns a JWT bearer token with a
+30-minute default lifetime. Do not put passwords in committed examples or logs.
+
+An Administrator then creates a project, provisions a non-administrator Operator or
+Publisher with `POST /admin/project-accounts` (username, password, project, and initial
+role in one request), and later manages access with create-only membership grant,
+role change, and membership revoke endpoints. `PATCH /admin/users/{user_id}/activation`
+deactivates or reactivates a non-administrator account. Revocation and deactivation
+take effect on the next authorized request; deactivated accounts cannot sign in.
+Accounts and memberships are not deleted.
+
+Project membership actions appear in `GET /projects/{project_id}/audit-events`.
+Bootstrap, provisioning, sign-in, deactivation, and reactivation appear in
+`GET /admin/audit-events`. The selected-project Administration view in the React
+client exposes the same workflow. Publishers register a pipeline-produced HDFS run
+manifest at `POST /projects/{project_id}/models` and explicitly publish the eligible
+version. Operators submit a trusted stored HDFS log reference at
+`POST /projects/{project_id}/analysis-runs`.
 
 Analysis runs fully validate the referenced HDFS file and record a durable rejection for invalid
 data. Valid files currently end in the explicit `not_supported` terminal state:

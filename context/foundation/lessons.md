@@ -8,3 +8,10 @@
 - **Problem**: Rules accumulate untested; they add prompt noise and maintenance cost even when the agent already follows the convention without them
 - **Rule**: Before adding a Cursor rule, run an A/B test; discard it when the agent already follows the convention without it.
 - **Applies to**: implement
+
+## Delete unused code after impl-review, with operator confirmation
+
+- **Context**: applies after implementing last phase and after running 10x-impl-review
+- **Problem**: codebase gets cluttered with unused/dead code
+- **Rule**: Based on the 10x-impl-review perform a code check to delete unused/dead code paths. Verify with operator first
+- **Applies to**: implement, impl-review
