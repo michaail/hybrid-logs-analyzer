@@ -53,7 +53,7 @@ controlled model lifecycle that every later analysis run requires.
 
 | ID | Change ID | Outcome (user can …) | Prerequisites | PRD refs | Status |
 | --- | --- | --- | --- | --- | --- |
-| F-01 | shared-durable-runtime-state | (foundation) Model, run, and result records have a minimal shared, durable ownership and version boundary for the deployed workflow. | — | FR-006, FR-008 | ready |
+| F-01 | shared-durable-runtime-state | (foundation) Model, run, and result records have a minimal shared, durable ownership and version boundary for the deployed workflow. | — | FR-006, FR-008 | planning |
 | F-02 | trusted-model-package-contract | (foundation) A declared, non-executable model-package contract is checked before a model can enter the workflow; it does not run the model itself. | — | FR-002, FR-003, FR-004, FR-008 | ready |
 | S-01 | provision-project-accounts | An administrator can provision a project-authorized Operator or Publisher account without public sign-up. | — | FR-001, FR-008 | in-progress |
 | S-02 | publish-hdfs-model-package | A Publisher can upload a complete HDFS-compatible model package, receive a clear rejection when ineligible, and explicitly publish the eligible version. | F-01, F-02, S-01 | US-01, FR-002, FR-003, FR-004, FR-008 | proposed |
@@ -105,7 +105,7 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 - **Unknowns:** —
 - **Risk:** A partial transition could break the project-ownership boundary between
   model publication and analysis.
-- **Status:** ready
+- **Status:** planning
 
 ### F-02: Trusted model-package contract
 
