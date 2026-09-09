@@ -1,6 +1,13 @@
 export type ModelStatus = "eligible" | "published";
-export type AnalysisRunStatus = "queued" | "rejected" | "not_supported";
+export type AnalysisRunStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "rejected"
+  | "not_supported";
 export type ProjectRole = "operator" | "publisher";
+export type StorageKind = "workspace" | "object";
 
 export interface User {
   id: string;
@@ -52,6 +59,8 @@ export interface ModelVersion {
   created_at: string;
   published_at: string | null;
   published_by_user_id: string | null;
+  storage_kind: StorageKind;
+  checksum: string | null;
 }
 
 export interface AnalysisRun {
@@ -66,6 +75,19 @@ export interface AnalysisRun {
   error_code: string | null;
   created_at: string;
   completed_at: string | null;
+  dataset_id: string | null;
+  storage_kind: StorageKind | null;
+  checksum: string | null;
+}
+
+export interface Dataset {
+  id: string;
+  project_id: string;
+  storage_kind: StorageKind;
+  object_reference: string;
+  checksum: string | null;
+  source_compatibility: "hdfs";
+  created_at: string;
 }
 
 export interface ValidationReport {
@@ -179,6 +201,14 @@ export class ApiClient {
       method: "POST",
       body: { model_version_id: modelVersionId, log_reference: logReference },
     });
+  }
+
+  listDatasets(projectId: string): Promise<Dataset[]> {
+    return this.request<Dataset[]>(`/projects/${projectId}/datasets`);
+  }
+
+  getDataset(projectId: string, datasetId: string): Promise<Dataset> {
+    return this.request<Dataset>(`/projects/${projectId}/datasets/${datasetId}`);
   }
 
   getAnalysisResults(projectId: string, analysisRunId: string): Promise<AnalysisResults> {
