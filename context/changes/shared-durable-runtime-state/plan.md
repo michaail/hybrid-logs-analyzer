@@ -524,25 +524,25 @@ rows are test-only until S-02/S-03.
 
 #### Automated
 
-- [x] 2.1 Repository tests prove dataset reuse vs insert, object-kind checksum rejection, workspace-kind null checksum, audit rollback for model/dataset/run/result writes, legal CAS, illegal CAS, and stored summary+rows after a completed transition
-- [x] 2.2 Postgres-marked tests, when `TEST_DATABASE_URL` is set, cover unique dataset identity, object-kind checksum CHECK, and CAS conflict
-- [x] 2.3 `ruff check src/api tests` and `mypy` pass
+- [x] 2.1 Repository tests prove dataset reuse vs insert, object-kind checksum rejection, workspace-kind null checksum, audit rollback for model/dataset/run/result writes, legal CAS, illegal CAS, and stored summary+rows after a completed transition — 9f37579
+- [x] 2.2 Postgres-marked tests, when `TEST_DATABASE_URL` is set, cover unique dataset identity, object-kind checksum CHECK, and CAS conflict — 9f37579
+- [x] 2.3 `ruff check src/api tests` and `mypy` pass — 9f37579
 
 #### Manual
 
-- [x] 2.4 Against local SQLite, insert a workspace dataset twice and confirm a single row; confirm an object-kind insert without checksum fails
+- [x] 2.4 Against local SQLite, insert a workspace dataset twice and confirm a single row; confirm an object-kind insert without checksum fails — 9f37579
 
 ### Phase 3: Additive HTTP reads and analyze upsert
 
 #### Automated
 
-- [ ] 3.1 `python -m pytest tests/test_api.py` passes, including dataset upsert identity, isolation, stored summaries, expanded status enum on responses, and unchanged `not_supported` / `rejected` HTTP writes
-- [ ] 3.2 Generated OpenAPI lists the dataset GET routes, includes the six run statuses, and has no public result or run-status write operation
-- [ ] 3.3 `ruff check src/api tests` and `mypy` pass
+- [x] 3.1 `python -m pytest tests/test_api.py` passes, including dataset upsert identity, isolation, stored summaries, expanded status enum on responses, and unchanged `not_supported` / `rejected` HTTP writes
+- [x] 3.2 Generated OpenAPI lists the dataset GET routes, includes the six run statuses, and has no public result or run-status write operation
+- [x] 3.3 `ruff check src/api tests` and `mypy` pass
 
 #### Manual
 
-- [ ] 3.4 As Publisher/Operator in `/docs`, register and publish a workspace model, analyze a valid and invalid log, list datasets, and confirm GET results summaries match the run outcomes without any result POST
+- [x] 3.4 As Publisher/Operator in `/docs`, register and publish a workspace model, analyze a valid and invalid log, list datasets, and confirm GET results summaries match the run outcomes without any result POST
 
 ### Phase 4: Client types, dataset visibility, and documentation
 

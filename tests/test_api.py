@@ -364,6 +364,8 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
     model = registration.json()
     assert model["status"] == "eligible"
     assert model["artifact_reference"] == "outputs/hdfs/baseline/attribute_gae.pt"
+    assert model["storage_kind"] == "workspace"
+    assert model["checksum"] is None
 
     operator_headers = _login(client, "operator")
     assert (
@@ -394,6 +396,16 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
     assert analysis.status_code == 202, analysis.text
     assert analysis.json()["status"] == "not_supported"
     assert analysis.json()["error_code"] == "INFERENCE_CONTRACT_UNAVAILABLE"
+    assert analysis.json()["dataset_id"]
+    assert analysis.json()["storage_kind"] == "workspace"
+
+    repeat = client.post(
+        f"/projects/{project['id']}/analysis-runs",
+        headers=operator_headers,
+        json={"model_version_id": model["id"], "log_reference": "data/stored-hdfs.log"},
+    )
+    assert repeat.status_code == 202, repeat.text
+    assert repeat.json()["dataset_id"] == analysis.json()["dataset_id"]
 
     invalid_log = api.workspace / "data" / "invalid.log"
     invalid_log.write_text("not an HDFS record\n")
@@ -404,6 +416,29 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
     )
     assert rejected.status_code == 202, rejected.text
     assert rejected.json()["status"] == "rejected"
+    assert rejected.json()["dataset_id"] is None
+
+    datasets = client.get(f"/projects/{project['id']}/datasets", headers=operator_headers)
+    assert datasets.status_code == 200, datasets.text
+    assert [item["object_reference"] for item in datasets.json()] == ["data/stored-hdfs.log"]
+    dataset = client.get(
+        f"/projects/{project['id']}/datasets/{analysis.json()['dataset_id']}",
+        headers=operator_headers,
+    )
+    assert dataset.status_code == 200, dataset.text
+    assert dataset.json()["storage_kind"] == "workspace"
+
+    supported_results = client.get(
+        f"/projects/{project['id']}/analysis-runs/{analysis.json()['id']}/results",
+        headers=operator_headers,
+    )
+    assert supported_results.status_code == 200, supported_results.text
+    assert supported_results.json()["summary"] == {
+        "anomaly_count": 0,
+        "normal_count": 0,
+        "rejected_records": 0,
+        "invalid_records": 0,
+    }
 
     results = client.get(
         f"/projects/{project['id']}/analysis-runs/{rejected.json()['id']}/results",
@@ -420,6 +455,68 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
         "analysis.not_supported",
         "analysis.rejected",
     }
+
+
+def test_dataset_reads_are_isolated_and_omit_rejected_inputs(api: ApiFixture) -> None:
+    client = api.client
+    administrator = _login(client, "admin")
+    first_project = _create_project(client, administrator, "incident-a")
+    second_project = _create_project(client, administrator, "incident-b")
+    _provision_project_account(client, administrator, "publisher", str(first_project["id"]), "publisher")
+    _provision_project_account(client, administrator, "operator", str(first_project["id"]), "operator")
+    _provision_project_account(
+        client, administrator, "other-operator", str(second_project["id"]), "operator"
+    )
+    manifest_reference = _write_trusted_manifest(api.workspace)
+    publisher_headers = _login(client, "publisher")
+    registration = client.post(
+        f"/projects/{first_project['id']}/models",
+        headers=publisher_headers,
+        json={
+            "model_identifier": "attribute-gae",
+            "version": "2026.09",
+            "pipeline_run_manifest": manifest_reference,
+            "external_evaluation_evidence": "https://evidence.example/evaluation/baseline",
+        },
+    )
+    assert registration.status_code == 201, registration.text
+    assert (
+        client.post(
+            f"/projects/{first_project['id']}/models/{registration.json()['id']}/publish",
+            headers=publisher_headers,
+        ).status_code
+        == 200
+    )
+    valid_log = api.workspace / "data" / "stored-hdfs.log"
+    valid_log.parent.mkdir()
+    valid_log.write_text(
+        "081109 203615 148 INFO dfs.DataNode$DataXceiver: "
+        "Receiving block blk_1 src: /10.0.0.1:50010 dest: /10.0.0.2:50010\n"
+    )
+    operator_headers = _login(client, "operator")
+    analysis = client.post(
+        f"/projects/{first_project['id']}/analysis-runs",
+        headers=operator_headers,
+        json={
+            "model_version_id": registration.json()["id"],
+            "log_reference": "data/stored-hdfs.log",
+        },
+    )
+    assert analysis.status_code == 202, analysis.text
+    dataset_id = analysis.json()["dataset_id"]
+    other_headers = _login(client, "other-operator")
+    assert (
+        client.get(f"/projects/{second_project['id']}/datasets", headers=other_headers).json()
+        == []
+    )
+    assert (
+        client.get(
+            f"/projects/{second_project['id']}/datasets/{dataset_id}",
+            headers=other_headers,
+        ).status_code
+        == 404
+    )
+    assert client.get(f"/projects/{first_project['id']}/datasets", headers=other_headers).status_code == 404
 
 
 def test_registration_rejects_non_hdfs_or_outside_workspace_artifacts(api: ApiFixture) -> None:
@@ -687,6 +784,28 @@ def test_openapi_exposes_administration_lifecycle_without_legacy_user_create(
     assert "/register" not in paths
     assert "/signup" not in paths
     assert "/auth/register" not in paths
+
+    dataset_list = "/projects/{project_id}/datasets"
+    dataset_item = "/projects/{project_id}/datasets/{dataset_id}"
+    assert "get" in paths[dataset_list]
+    assert "post" not in paths[dataset_list]
+    assert "get" in paths[dataset_item]
+    assert "patch" not in paths.get(dataset_item, {})
+    results_path = "/projects/{project_id}/analysis-runs/{analysis_run_id}/results"
+    assert "get" in paths[results_path]
+    assert "post" not in paths[results_path]
+    assert "patch" not in paths[results_path]
+    run_item = "/projects/{project_id}/analysis-runs/{analysis_run_id}"
+    assert "patch" not in paths.get(run_item, {})
+    status_schema = schema["components"]["schemas"]["AnalysisRunStatus"]
+    assert set(status_schema["enum"]) == {
+        "queued",
+        "running",
+        "completed",
+        "failed",
+        "rejected",
+        "not_supported",
+    }
 
     secured_operations = [
         paths["/admin/project-accounts"]["post"],
