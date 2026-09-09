@@ -18,6 +18,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Skip Intel-ML tests in the Torch-free API environment used by CI."""
+    if item.get_closest_marker("ml") is not None:
+        pytest.importorskip("torch")
+
+
 @pytest.fixture
 def postgres_database() -> Iterator[ApiDatabase]:
     url = os.environ.get("TEST_DATABASE_URL")
