@@ -240,3 +240,4 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 ## Done
 
 - **F-01: (foundation) Model, run, and result records have a minimal shared, durable ownership and version boundary for the deployed workflow.** — Archived 2026-09-09 → `context/archive/2026-09-09-shared-durable-runtime-state/`. Lesson: —.
+- **F-02: (foundation) A declared, non-executable model-package contract is checked before a model can enter the workflow; it does not run the model itself.** — Archived 2026-09-09 → `context/archive/2026-09-09-trusted-model-package-contract/`. Lesson: —.
