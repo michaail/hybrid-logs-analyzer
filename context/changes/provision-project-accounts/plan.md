@@ -466,27 +466,27 @@ must be planned separately as an additive, backward-compatible change.
 
 #### Automated
 
-- [x] 2.1 `python -m pytest tests/test_api.py` passes the existing API behavior plus all account-lifecycle, isolation, and atomic-audit cases, including rollback of account, membership, and project creation when an audit insertion fails
-- [x] 2.2 `ruff check src/api tests/test_api.py` and `mypy` pass
-- [x] 2.3 Generated OpenAPI exposes the named Administrator-only lifecycle routes, no unauthenticated account-provisioning or membership mutation operation, and no retained `POST /admin/users` route
+- [x] 2.1 `python -m pytest tests/test_api.py` passes the existing API behavior plus all account-lifecycle, isolation, and atomic-audit cases, including rollback of account, membership, and project creation when an audit insertion fails — bc5c25f
+- [x] 2.2 `ruff check src/api tests/test_api.py` and `mypy` pass — bc5c25f
+- [x] 2.3 Generated OpenAPI exposes the named Administrator-only lifecycle routes, no unauthenticated account-provisioning or membership mutation operation, and no retained `POST /admin/users` route — bc5c25f
 
 #### Manual
 
-- [x] 2.4 Sign in as the bootstrapped Administrator and exercise every lifecycle API operation through `/docs`; verify non-administrator credentials cannot use them
-- [x] 2.5 Confirm project audit events include the associated membership action and the system audit view includes provisioning and account activation-state transitions
+- [x] 2.4 Sign in as the bootstrapped Administrator and exercise every lifecycle API operation through `/docs`; verify non-administrator credentials cannot use them — bc5c25f
+- [x] 2.5 Confirm project audit events include the associated membership action and the system audit view includes provisioning and account activation-state transitions — bc5c25f
 
 ### Phase 3: Administrator interface
 
 #### Automated
 
-- [ ] 3.1 `cd frontend && npm run build` completes without TypeScript or production-build errors
-- [ ] 3.2 Phase 2 endpoint-level API contract tests pass before this client is connected to the new lifecycle routes
+- [x] 3.1 `cd frontend && npm run build` completes without TypeScript or production-build errors
+- [x] 3.2 Phase 2 endpoint-level API contract tests pass before this client is connected to the new lifecycle routes
 
 #### Manual
 
-- [ ] 3.3 As an Administrator, provision a lowercase Operator and Publisher into the selected project; sign in as each and confirm they see only their authorized project behavior
-- [ ] 3.4 Grant an existing account a different role in a second project, change a role, revoke its first membership, deactivate/reactivate the account, and confirm each result refreshes correctly
-- [ ] 3.5 Confirm an Operator/Publisher cannot reach account controls and that failed form submissions present a safe, actionable server message
+- [x] 3.3 As an Administrator, provision a lowercase Operator and Publisher into the selected project; sign in as each and confirm they see only their authorized project behavior
+- [x] 3.4 Grant an existing account a different role in a second project, change a role, revoke its first membership, deactivate/reactivate the account, and confirm each result refreshes correctly
+- [x] 3.5 Confirm an Operator/Publisher cannot reach account controls and that failed form submissions present a safe, actionable server message
 
 ### Phase 4: Verification and documentation
 

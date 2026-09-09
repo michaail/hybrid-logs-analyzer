@@ -374,6 +374,7 @@ code {
 .run-card,
 .selection-summary,
 .create-project-card,
+.admin-card,
 .audit-card {
   border: 1px solid #dde3e9;
   border-radius: 11px;
@@ -633,21 +634,152 @@ code {
   gap: 1rem;
 }
 
+.admin-stack {
+  display: grid;
+  gap: 1rem;
+}
+
 .create-project-card,
+.admin-card,
 .audit-card {
   padding: 1.2rem;
 }
 
+.admin-card,
 .create-project-card {
   display: grid;
   align-content: start;
   gap: 0.85rem;
+  border: 1px solid #dde3e9;
+  border-radius: 11px;
+  background: #fff;
 }
 
 .create-project-card h3,
+.admin-card h3,
 .audit-card h3 {
   color: #28354a;
   font-size: 1.15rem;
+}
+
+.admin-card h4 {
+  margin-top: 0.4rem;
+  color: #344157;
+  font-size: 0.92rem;
+}
+
+.membership-list {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.membership-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+  border: 1px solid #e6ebf1;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 0.75rem 0.85rem;
+}
+
+.membership-identity {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.membership-identity strong {
+  color: #28354a;
+  font-size: 0.92rem;
+}
+
+.label-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.state-label,
+.role-label {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 20px;
+  padding: 0.22rem 0.5rem;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.state-label.is-active {
+  background: #e6f8f2;
+  color: #08745f;
+}
+
+.state-label.is-inactive {
+  background: #e9eef6;
+  color: #53637b;
+}
+
+.role-label.role-operator {
+  background: #e9eef6;
+  color: #3d4d66;
+}
+
+.role-label.role-publisher {
+  background: #fff4db;
+  color: #8a5b10;
+}
+
+.role-label.role-administrator {
+  background: #ece7fb;
+  color: #4a3e86;
+}
+
+.membership-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.danger-button {
+  border: 1px solid #e3b3b1;
+  border-radius: 7px;
+  background: #fff3f2;
+  color: #9b3332;
+  font-weight: 700;
+  padding: 0.64rem 0.85rem;
+}
+
+.danger-button:hover:not(:disabled) {
+  border-color: #c96a67;
+  background: #fde8e6;
+}
+
+.grant-form {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.6rem;
+  padding-top: 0.95rem;
+  border-top: 1px solid #edf0f3;
+}
+
+.dialog-form label,
+.create-project-card label,
+.admin-card label,
+.login-card label {
+  display: grid;
+  gap: 0.38rem;
+  color: #3a475b;
+  font-size: 0.82rem;
+  font-weight: 750;
 }
 
 .audit-heading {
@@ -736,16 +868,6 @@ code {
 .dialog-form {
   display: grid;
   gap: 0.95rem;
-}
-
-.dialog-form label,
-.create-project-card label,
-.login-card label {
-  display: grid;
-  gap: 0.38rem;
-  color: #3a475b;
-  font-size: 0.82rem;
-  font-weight: 750;
 }
 
 input,
@@ -1028,6 +1150,20 @@ textarea::placeholder {
   .admin-grid,
   .login-page {
     grid-template-columns: 1fr;
+  }
+
+  .membership-row,
+  .membership-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .membership-actions {
+    width: 100%;
+  }
+
+  .membership-actions button {
+    width: 100%;
   }
 
   .login-hero {

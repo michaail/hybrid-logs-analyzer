@@ -1,5 +1,6 @@
 export type ModelStatus = "eligible" | "published";
 export type AnalysisRunStatus = "queued" | "rejected" | "not_supported";
+export type ProjectRole = "operator" | "publisher";
 
 export interface User {
   id: string;
@@ -12,6 +13,26 @@ export interface Project {
   id: string;
   name: string;
   created_at: string;
+}
+
+export interface AccountSummary {
+  id: string;
+  username: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface Membership {
+  project_id: string;
+  user_id: string;
+  role: ProjectRole;
+  username: string;
+  is_active: boolean;
+}
+
+export interface ProjectAccount {
+  account: AccountSummary;
+  membership: Membership;
 }
 
 export interface ModelVersion {
@@ -170,6 +191,55 @@ export class ApiClient {
     return this.request<AuditEvent[]>(`/projects/${projectId}/audit-events`);
   }
 
+  listUsers(): Promise<AccountSummary[]> {
+    return this.request<AccountSummary[]>("/admin/users");
+  }
+
+  provisionProjectAccount(
+    projectId: string,
+    username: string,
+    password: string,
+    role: ProjectRole,
+  ): Promise<ProjectAccount> {
+    return this.request<ProjectAccount>("/admin/project-accounts", {
+      method: "POST",
+      body: { username, password, project_id: projectId, role },
+    });
+  }
+
+  setUserActivation(userId: string, isActive: boolean): Promise<AccountSummary> {
+    return this.request<AccountSummary>(`/admin/users/${userId}/activation`, {
+      method: "PATCH",
+      body: { is_active: isActive },
+    });
+  }
+
+  listProjectMembers(projectId: string): Promise<Membership[]> {
+    return this.request<Membership[]>(`/projects/${projectId}/members`);
+  }
+
+  grantProjectMembership(projectId: string, userId: string, role: ProjectRole): Promise<Membership> {
+    return this.request<Membership>(`/projects/${projectId}/members`, {
+      method: "POST",
+      body: { user_id: userId, role },
+    });
+  }
+
+  updateProjectMembershipRole(projectId: string, userId: string, role: ProjectRole): Promise<Membership> {
+    return this.request<Membership>(`/projects/${projectId}/members/${userId}`, {
+      method: "PATCH",
+      body: { role },
+    });
+  }
+
+  revokeProjectMembership(projectId: string, userId: string): Promise<void> {
+    return this.request<void>(`/projects/${projectId}/members/${userId}`, { method: "DELETE" });
+  }
+
+  listSystemAuditEvents(): Promise<AuditEvent[]> {
+    return this.request<AuditEvent[]>("/admin/audit-events");
+  }
+
   private async request<T>(
     path: string,
     options: {
@@ -198,7 +268,15 @@ export class ApiClient {
       throw new ApiError(await responseMessage(response), response.status);
     }
 
-    return response.json() as Promise<T>;
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
+    const payload = await response.text();
+    if (!payload) {
+      return undefined as T;
+    }
+    return JSON.parse(payload) as T;
   }
 }
 
