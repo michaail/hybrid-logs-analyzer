@@ -42,7 +42,14 @@ from src.api.schemas import (
 from src.api.security import create_access_token, decode_access_token, hash_password, verify_password
 from src.api.settings import ApiSettings
 from src.api.storage import ApiDatabase, DatabaseIntegrityError, utc_now
-from src.api.validation import ValidationError, validate_hdfs_log, validate_pipeline_model
+from src.api.validation import (
+    ValidationError,
+    ValidatorUnavailableError,
+    admit_validated_package,
+    run_private_package_validator,
+    trusted_package_directory,
+    validate_hdfs_log,
+)
 
 
 @dataclass(frozen=True)
@@ -376,25 +383,53 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         request: ModelRegistrationRequest,
         user: CurrentUser = Depends(get_current_user),
     ) -> ModelVersionResponse:
-        """Register complete provenance for a trusted HDFS pipeline model."""
+        """Register a pre-staged trusted HDFS model package. Never loads the artifact."""
         require_project_role(project_id, user, {ProjectRole.PUBLISHER})
         try:
-            validated_model = validate_pipeline_model(
-                request.pipeline_run_manifest,
+            package_root = trusted_package_directory(
+                request.package_reference,
                 resolved_settings.trusted_workspace_root,
             )
+            report = run_private_package_validator(package_root, resolved_settings)
+        except ValidatorUnavailableError as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(error),
+            ) from None
         except ValidationError as error:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from None
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"valid": False, "issues": [{"path": "package_reference", "reason": str(error)}]},
+            ) from None
+        if not report.valid:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=report.model_dump(),
+            )
+        try:
+            admitted = admit_validated_package(package_root, resolved_settings.trusted_workspace_root)
+        except ValidatorUnavailableError as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(error),
+            ) from None
+        except ValidationError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"valid": False, "issues": [{"path": "package_reference", "reason": str(error)}]},
+            ) from None
         try:
             model = database.create_model_version(
                 project_id=project_id,
-                model_identifier=request.model_identifier,
-                version=request.version,
-                pipeline_run_id=validated_model.run_id,
-                artifact_reference=validated_model.artifact_reference,
-                metrics_json=json.dumps(validated_model.metrics, sort_keys=True),
-                metadata_json=json.dumps(request.metadata, sort_keys=True),
-                external_evaluation_evidence=request.external_evaluation_evidence,
+                model_identifier=admitted.model_identifier,
+                version=admitted.version,
+                pipeline_run_id=admitted.pipeline_run_id,
+                artifact_reference=admitted.artifact_reference,
+                package_reference=admitted.package_reference,
+                artifact_sha256=admitted.artifact_sha256,
+                metrics_json=json.dumps(admitted.metrics, sort_keys=True),
+                metadata_json=json.dumps(admitted.metadata, sort_keys=True),
+                external_evaluation_evidence=admitted.external_evaluation_evidence,
             )
         except DatabaseIntegrityError:
             raise HTTPException(
@@ -411,7 +446,9 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             details_json=json.dumps(
                 {
                     "artifact_reference": response.artifact_reference,
+                    "artifact_sha256": response.artifact_sha256,
                     "model_identifier": response.model_identifier,
+                    "package_reference": response.package_reference,
                     "pipeline_run_id": response.pipeline_run_id,
                     "version": response.version,
                 },
@@ -739,6 +776,8 @@ def _model_response(row: Any) -> ModelVersionResponse:
         status=ModelStatus(str(row["status"])),
         pipeline_run_id=str(row["pipeline_run_id"]),
         artifact_reference=str(row["artifact_reference"]),
+        package_reference=str(row["package_reference"]),
+        artifact_sha256=str(row["artifact_sha256"]),
         metrics=json.loads(str(row["metrics_json"])),
         metadata=json.loads(str(row["metadata_json"])),
         external_evaluation_evidence=str(row["external_evaluation_evidence"]),

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 from uuid import UUID
 
 import pytest
@@ -14,29 +16,45 @@ from src.api.bootstrap import bootstrap_administrator
 from src.api.main import create_app
 from src.api.settings import ApiSettings
 from src.api.storage import ApiDatabase, DatabaseIntegrityError
+from tests.test_model_package import _write_package
 
 PASSWORD = "correct-horse-battery-staple"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+FILES_ONLY_VALIDATOR = REPO_ROOT / "tests" / "support" / "files_only_validator.py"
 
 
 @dataclass
 class ApiFixture:
     client: TestClient
     workspace: Path
+    settings: ApiSettings
+
+
+def _api_settings(
+    tmp_path: Path,
+    workspace: Path,
+    command: tuple[str, ...] | None = None,
+) -> ApiSettings:
+    return ApiSettings(
+        database_url=f"sqlite:///{tmp_path / 'api.db'}",
+        jwt_secret="test-secret-not-for-production",
+        trusted_workspace_root=workspace,
+        code_root=REPO_ROOT,
+        model_validator_command=command
+        if command is not None
+        else (sys.executable, str(FILES_ONLY_VALIDATOR)),
+    )
 
 
 @pytest.fixture
 def api(tmp_path: Path) -> Iterator[ApiFixture]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    settings = ApiSettings(
-        database_url=f"sqlite:///{tmp_path / 'api.db'}",
-        jwt_secret="test-secret-not-for-production",
-        trusted_workspace_root=workspace,
-    )
+    settings = _api_settings(tmp_path, workspace)
     ApiDatabase(settings.database_url).apply_migrations()
     bootstrap_administrator(settings, "admin", PASSWORD)
     with TestClient(create_app(settings)) as client:
-        yield ApiFixture(client=client, workspace=workspace)
+        yield ApiFixture(client=client, workspace=workspace, settings=settings)
 
 
 def _login(client: TestClient, username: str, password: str = PASSWORD) -> dict[str, str]:
@@ -91,28 +109,17 @@ def _grant_membership(
     return response.json()
 
 
-def _write_trusted_manifest(workspace: Path, *, dataset: str = "hdfs") -> str:
-    checkpoint = workspace / "outputs" / dataset / "baseline" / "attribute_gae.pt"
-    checkpoint.parent.mkdir(parents=True)
-    checkpoint.write_bytes(b"trusted pipeline checkpoint reference only")
-    metrics = checkpoint.with_name("metrics.json")
-    metrics.write_text(json.dumps({"best_threshold": 0.147, "test_roc_auc": 0.9763}))
-    manifest = workspace / "artifacts" / "runs" / "baseline.json"
-    manifest.parent.mkdir(parents=True)
-    manifest.write_text(
-        json.dumps(
-            {
-                "run_id": "baseline",
-                "dataset": dataset,
-                "artifacts": {
-                    "checkpoint": str(checkpoint.relative_to(workspace)),
-                    "metrics": str(metrics.relative_to(workspace)),
-                },
-                "metrics": {"best_threshold": 0.147, "test_roc_auc": 0.9763},
-            }
-        )
+def _stage_package(workspace: Path, *, name: str = "hdfs", **kwargs: Any) -> str:
+    package = _write_package(workspace / "packages" / name, **kwargs)
+    return str(package.relative_to(workspace).as_posix())
+
+
+def _register(client: TestClient, headers: dict[str, str], project_id: object, package_reference: str):
+    return client.post(
+        f"/projects/{project_id}/models",
+        headers=headers,
+        json={"package_reference": package_reference},
     )
-    return str(manifest.relative_to(workspace))
 
 
 def test_migrations_are_idempotent_and_database_is_healthy(tmp_path: Path) -> None:
@@ -122,6 +129,23 @@ def test_migrations_are_idempotent_and_database_is_healthy(tmp_path: Path) -> No
     database.apply_migrations()
 
     assert database.healthcheck()
+
+
+def test_model_package_admission_migration_adds_columns(tmp_path: Path) -> None:
+    database = ApiDatabase(f"sqlite:///{tmp_path / 'api.db'}")
+    database.apply_migrations()
+    with database.session() as connection:
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(model_versions)").fetchall()
+        }
+        applied = {
+            str(row["version"])
+            for row in connection.execute("SELECT version FROM schema_migrations").fetchall()
+        }
+    assert "package_reference" in columns
+    assert "artifact_sha256" in columns
+    assert "002_model_package_admission" in applied
 
 
 def test_fresh_schema_enforces_canonical_lowercase_active_users(tmp_path: Path) -> None:
@@ -329,12 +353,7 @@ def test_authentication_roles_and_project_isolation(api: ApiFixture) -> None:
         client.post(
             f"/projects/{first_project['id']}/models",
             headers=operator_headers,
-            json={
-                "model_identifier": "gae",
-                "version": "v1",
-                "pipeline_run_manifest": "artifacts/runs/missing.json",
-                "external_evaluation_evidence": "run report",
-            },
+            json={"package_reference": "packages/missing"},
         ).status_code
         == 403
     )
@@ -346,24 +365,20 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
     project = _create_project(client, administrator, "incident-a")
     _provision_project_account(client, administrator, "publisher", str(project["id"]), "publisher")
     _provision_project_account(client, administrator, "operator", str(project["id"]), "operator")
-    manifest_reference = _write_trusted_manifest(api.workspace)
+    package_reference = _stage_package(api.workspace)
 
     publisher_headers = _login(client, "publisher")
-    registration = client.post(
-        f"/projects/{project['id']}/models",
-        headers=publisher_headers,
-        json={
-            "model_identifier": "attribute-gae",
-            "version": "2026.09",
-            "pipeline_run_manifest": manifest_reference,
-            "external_evaluation_evidence": "https://evidence.example/evaluation/baseline",
-            "metadata": {"architecture": "AttributeAwareGAE"},
-        },
-    )
+    registration = _register(client, publisher_headers, project["id"], package_reference)
     assert registration.status_code == 201, registration.text
     model = registration.json()
     assert model["status"] == "eligible"
-    assert model["artifact_reference"] == "outputs/hdfs/baseline/attribute_gae.pt"
+    assert model["package_reference"] == package_reference
+    assert model["artifact_reference"] == f"{package_reference}/model.pt"
+    assert len(model["artifact_sha256"]) == 64
+    assert "#" not in model["artifact_reference"]
+
+    duplicate = _register(client, publisher_headers, project["id"], package_reference)
+    assert duplicate.status_code == 409
 
     operator_headers = _login(client, "operator")
     assert (
@@ -428,33 +443,23 @@ def test_registration_rejects_non_hdfs_or_outside_workspace_artifacts(api: ApiFi
     project = _create_project(client, administrator, "incident-a")
     _provision_project_account(client, administrator, "publisher", str(project["id"]), "publisher")
     publisher_headers = _login(client, "publisher")
-    bgl_manifest = _write_trusted_manifest(api.workspace, dataset="bgl")
+    package_reference = _stage_package(api.workspace)
+    manifest_path = api.workspace / package_reference / "manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["source_compatibility"] = "bgl"
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    rejected = client.post(
-        f"/projects/{project['id']}/models",
-        headers=publisher_headers,
-        json={
-            "model_identifier": "attribute-gae",
-            "version": "bgl",
-            "pipeline_run_manifest": bgl_manifest,
-            "external_evaluation_evidence": "evidence",
-        },
-    )
+    rejected = _register(client, publisher_headers, project["id"], package_reference)
     assert rejected.status_code == 422
-    assert "HDFS" in rejected.json()["detail"]
+    detail = rejected.json()["detail"]
+    assert detail["valid"] is False
+    assert any("source_compatibility" in issue["path"] for issue in detail["issues"])
 
-    outside = client.post(
-        f"/projects/{project['id']}/models",
-        headers=publisher_headers,
-        json={
-            "model_identifier": "attribute-gae",
-            "version": "outside",
-            "pipeline_run_manifest": "../not-trusted.json",
-            "external_evaluation_evidence": "evidence",
-        },
-    )
+    outside = _register(client, publisher_headers, project["id"], "../not-trusted")
     assert outside.status_code == 422
-    assert "trusted workspace" in outside.json()["detail"]
+    outside_detail = outside.json()["detail"]
+    assert outside_detail["valid"] is False
+    assert any("trusted workspace" in issue["reason"] for issue in outside_detail["issues"])
 
 
 def test_administration_lifecycle_requires_administrator(api: ApiFixture) -> None:
@@ -699,3 +704,113 @@ def test_openapi_exposes_administration_lifecycle_without_legacy_user_create(
     ]
     for operation in secured_operations:
         assert "HTTPBearer" in str(operation.get("security", schema.get("components", {})))
+
+    registration_schema = schema["components"]["schemas"]["ModelRegistrationRequest"]
+    assert "package_reference" in registration_schema["properties"]
+    assert "pipeline_run_manifest" not in registration_schema["properties"]
+    model_schema = schema["components"]["schemas"]["ModelVersionResponse"]
+    assert "package_reference" in model_schema["properties"]
+    assert "artifact_sha256" in model_schema["properties"]
+
+
+def _publisher_client(api: ApiFixture) -> tuple[TestClient, dict[str, str], str]:
+    administrator = _login(api.client, "admin")
+    project = _create_project(api.client, administrator, "incident-a")
+    _provision_project_account(
+        api.client, administrator, "publisher", str(project["id"]), "publisher"
+    )
+    return api.client, _login(api.client, "publisher"), str(project["id"])
+
+
+def test_registration_rejects_direct_zip_with_structured_422(api: ApiFixture) -> None:
+    client, headers, project_id = _publisher_client(api)
+    package = api.workspace / _stage_package(api.workspace, name="zip-src")
+    archive = api.workspace / "packages" / "model.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        for file in package.rglob("*"):
+            if file.is_file():
+                handle.write(file, file.relative_to(package).as_posix())
+    rejected = _register(client, headers, project_id, "packages/model.zip")
+    assert rejected.status_code == 422
+    detail = rejected.json()["detail"]
+    assert detail["valid"] is False
+    assert any("directory" in issue["reason"].lower() for issue in detail["issues"])
+    assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+
+
+def test_registration_collects_checksum_and_evidence_issues(api: ApiFixture) -> None:
+    client, headers, project_id = _publisher_client(api)
+    reference = _stage_package(api.workspace, name="broken", evidence={})
+    manifest_path = api.workspace / reference / "manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["files"]["checksums"]["model.pt"] = "0" * 64
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    rejected = _register(client, headers, project_id, reference)
+    assert rejected.status_code == 422
+    issues = rejected.json()["detail"]["issues"]
+    paths = {issue["path"] for issue in issues}
+    assert any("model.pt" in path for path in paths)
+    assert any("evidence" in path for path in paths)
+    assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+
+
+def test_registration_rejects_dummy_artifact_with_probe_failure(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    settings = _api_settings(
+        tmp_path,
+        workspace,
+        command=(sys.executable, str(REPO_ROOT / "tests" / "support" / "rejecting_artifact_validator.py")),
+    )
+    ApiDatabase(settings.database_url).apply_migrations()
+    bootstrap_administrator(settings, "admin", PASSWORD)
+    with TestClient(create_app(settings)) as client:
+        api = ApiFixture(client=client, workspace=workspace, settings=settings)
+        _, headers, project_id = _publisher_client(api)
+        reference = _stage_package(workspace)
+        rejected = _register(client, headers, project_id, reference)
+        assert rejected.status_code == 422, rejected.text
+        assert any(
+            "model.pt" in issue["path"] or "artifact" in issue["path"]
+            for issue in rejected.json()["detail"]["issues"]
+        )
+        assert "torch" not in sys.modules
+        assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+
+
+def test_unavailable_validator_does_not_insert_a_model(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    settings = _api_settings(
+        tmp_path,
+        workspace,
+        command=(sys.executable, "-c", "raise SystemExit(1)"),
+    )
+    ApiDatabase(settings.database_url).apply_migrations()
+    bootstrap_administrator(settings, "admin", PASSWORD)
+    with TestClient(create_app(settings)) as client:
+        api = ApiFixture(client=client, workspace=workspace, settings=settings)
+        _, headers, project_id = _publisher_client(api)
+        reference = _stage_package(workspace)
+        rejected = _register(client, headers, project_id, reference)
+        assert rejected.status_code == 503
+        assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+
+
+def test_malformed_validator_report_does_not_insert_a_model(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    settings = _api_settings(
+        tmp_path,
+        workspace,
+        command=(sys.executable, "-c", "print('not-json')"),
+    )
+    ApiDatabase(settings.database_url).apply_migrations()
+    bootstrap_administrator(settings, "admin", PASSWORD)
+    with TestClient(create_app(settings)) as client:
+        api = ApiFixture(client=client, workspace=workspace, settings=settings)
+        _, headers, project_id = _publisher_client(api)
+        reference = _stage_package(workspace)
+        rejected = _register(client, headers, project_id, reference)
+        assert rejected.status_code == 503
+        assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []

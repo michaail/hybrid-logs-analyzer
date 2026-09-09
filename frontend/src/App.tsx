@@ -219,9 +219,9 @@ export default function App() {
     if (!selectedProject) {
       return;
     }
-    await api.registerModel(selectedProject.id, registration);
+    const created = await api.registerModel(selectedProject.id, registration);
     await refreshProjectData(selectedProject.id);
-    setNotice(`${registration.model_identifier} ${registration.version} was registered as eligible.`);
+    setNotice(`${created.model_identifier} ${created.version} was registered as eligible.`);
   }
 
   async function startAnalysis(logReference: string): Promise<void> {
@@ -1185,39 +1185,16 @@ function ModelRegistrationDialog({
   onClose: () => void;
   onRegister: (registration: ModelRegistration) => Promise<void>;
 }): JSX.Element {
-  const [modelIdentifier, setModelIdentifier] = useState("");
-  const [version, setVersion] = useState("");
-  const [manifest, setManifest] = useState("");
-  const [evidence, setEvidence] = useState("");
-  const [metadata, setMetadata] = useState('{\n  "architecture": "AttributeAwareGAE"\n}');
+  const [packageReference, setPackageReference] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setError(null);
-
-    let parsedMetadata: Record<string, unknown>;
-    try {
-      const parsed: unknown = JSON.parse(metadata);
-      if (!isRecord(parsed)) {
-        throw new Error("Metadata must be a JSON object.");
-      }
-      parsedMetadata = parsed;
-    } catch (metadataError) {
-      setError(messageFor(metadataError));
-      return;
-    }
-
     setIsSubmitting(true);
     try {
-      await onRegister({
-        model_identifier: modelIdentifier,
-        version,
-        pipeline_run_manifest: manifest,
-        external_evaluation_evidence: evidence,
-        metadata: parsedMetadata,
-      });
+      await onRegister({ package_reference: packageReference });
       onClose();
     } catch (submissionError) {
       setError(messageFor(submissionError));
@@ -1230,66 +1207,21 @@ function ModelRegistrationDialog({
     <Dialog title="Register trained model" onClose={onClose}>
       <form className="dialog-form" onSubmit={(event) => void submit(event)}>
         <p className="muted">
-          Register a complete HDFS pipeline run for <strong>{projectName}</strong>. The API validates
-          the manifest and canonical artifact inside its controlled workspace.
+          Register a pre-staged HDFS model package for <strong>{projectName}</strong>. Identity,
+          metrics, and evidence come from the package manifest.
         </p>
         <div className="warning-strip">
           Browser artifact uploads are intentionally unavailable. This API only accepts a trusted
-          pipeline manifest reference and never receives model bytes.
+          workspace directory path and never receives model bytes.
         </div>
         {error && <Banner tone="error" message={error} />}
-        <div className="form-grid">
-          <label>
-            Model identifier
-            <input
-              maxLength={128}
-              onChange={(event) => setModelIdentifier(event.target.value)}
-              pattern="^[A-Za-z0-9_.-]+$"
-              placeholder="attribute-gae"
-              required
-              value={modelIdentifier}
-            />
-          </label>
-          <label>
-            Version
-            <input
-              maxLength={64}
-              onChange={(event) => setVersion(event.target.value)}
-              pattern="^[A-Za-z0-9_.-]+$"
-              placeholder="2026.09"
-              required
-              value={version}
-            />
-          </label>
-        </div>
         <label>
-          Pipeline run manifest reference
+          Package directory reference
           <input
-            onChange={(event) => setManifest(event.target.value)}
-            placeholder="artifacts/runs/baseline.json"
+            onChange={(event) => setPackageReference(event.target.value)}
+            placeholder="packages/hdfs/package"
             required
-            value={manifest}
-          />
-        </label>
-        <label>
-          External evaluation evidence
-          <textarea
-            maxLength={2048}
-            onChange={(event) => setEvidence(event.target.value)}
-            placeholder="URL or traceable external evaluation reference"
-            required
-            rows={3}
-            value={evidence}
-          />
-        </label>
-        <label>
-          Metadata (JSON object)
-          <textarea
-            onChange={(event) => setMetadata(event.target.value)}
-            required
-            rows={5}
-            spellCheck={false}
-            value={metadata}
+            value={packageReference}
           />
         </label>
         <div className="dialog-actions">
@@ -1532,10 +1464,6 @@ function SummaryMetric({ label, value }: { label: string; value: number }): JSX.
       <span>{label}</span>
     </div>
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function messageFor(error: unknown): string {

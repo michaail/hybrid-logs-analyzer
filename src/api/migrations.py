@@ -100,6 +100,19 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "CREATE INDEX IF NOT EXISTS idx_audit_events_project_id ON audit_events(project_id)",
         ),
     ),
+    (
+        "002_model_package_admission",
+        (
+            """
+            ALTER TABLE model_versions
+            ADD COLUMN package_reference TEXT NOT NULL DEFAULT ''
+            """,
+            """
+            ALTER TABLE model_versions
+            ADD COLUMN artifact_sha256 TEXT NOT NULL DEFAULT ''
+            """,
+        ),
+    ),
 )
 _POSTGRES_MIGRATION_LOCK = 6_815_717_470_146_882_780
 

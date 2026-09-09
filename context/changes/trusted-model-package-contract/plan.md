@@ -617,27 +617,27 @@ empty database. Do not rewrite `001_initial_schema`.
 
 #### Automated
 
-- [x] 2.1 Zip-slip, nested-archive, oversize, extra-member, and valid-zip cases pass in `tests/test_model_package.py`
-- [x] 2.2 `ruff check src/modules/model_package.py tests/test_model_package.py` and `mypy` pass
+- [x] 2.1 Zip-slip, nested-archive, oversize, extra-member, and valid-zip cases pass in `tests/test_model_package.py` — f43b37a
+- [x] 2.2 `ruff check src/modules/model_package.py tests/test_model_package.py` and `mypy` pass — f43b37a
 
 #### Manual
 
-- [x] 2.3 Confirm a valid fixture zip and an oversize or zip-slip zip produce structured issues with no files written outside the temp extract root
+- [x] 2.3 Confirm a valid fixture zip and an oversize or zip-slip zip produce structured issues with no files written outside the temp extract root — f43b37a
 
 ### Phase 3: Admission API, persistence, and thin UI
 
 #### Automated
 
-- [ ] 3.1 `python -m pytest tests/test_api.py tests/test_model_package.py` passes, including structured 422 and retained `not_supported` analysis
-- [ ] 3.2 Generated OpenAPI exposes `package_reference` registration and no `pipeline_run_manifest` field
-- [ ] 3.3 `ruff check src/api tests/test_api.py` and `mypy` pass
-- [ ] 3.4 `cd frontend && npm run build` completes without TypeScript errors
+- [x] 3.1 `python -m pytest tests/test_api.py tests/test_model_package.py` passes, including structured 422 and retained `not_supported` analysis
+- [x] 3.2 Generated OpenAPI exposes `package_reference` registration and no `pipeline_run_manifest` field
+- [x] 3.3 `ruff check src/api tests/test_api.py` and `mypy` pass
+- [x] 3.4 `cd frontend && npm run build` completes without TypeScript errors
 
 #### Manual
 
-- [ ] 3.5 As a Publisher, register a valid fixture package through `/docs` and the React dialog; confirm `eligible` then explicit publish
-- [ ] 3.6 Submit an invalid package and confirm the UI lists issue reasons
-- [ ] 3.7 Confirm an Operator cannot register, and a published model still yields `not_supported` analysis
+- [x] 3.5 As a Publisher, register a valid fixture package through `/docs` and the React dialog; confirm `eligible` then explicit publish
+- [x] 3.6 Submit an invalid package and confirm the UI lists issue reasons
+- [x] 3.7 Confirm an Operator cannot register, and a published model still yields `not_supported` analysis
 
 ### Phase 4: Verification and documentation
 

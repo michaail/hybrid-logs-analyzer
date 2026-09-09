@@ -17,6 +17,8 @@ class ApiSettings:
     jwt_secret: str
     trusted_workspace_root: Path
     jwt_ttl_minutes: int = 30
+    code_root: Path = Path(".")
+    model_validator_command: tuple[str, ...] | None = None
 
     @classmethod
     def from_environment(cls) -> "ApiSettings":
@@ -51,4 +53,5 @@ class ApiSettings:
             jwt_secret=secret,
             trusted_workspace_root=workspace_root,
             jwt_ttl_minutes=jwt_ttl_minutes,
+            code_root=Path(os.environ.get("API_CODE_ROOT", ".")).resolve(),
         )
