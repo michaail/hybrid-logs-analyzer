@@ -357,13 +357,27 @@ Bootstrap, provisioning, sign-in, deactivation, and reactivation appear in
 client exposes the same workflow. Publishers register a pipeline-produced HDFS run
 manifest at `POST /projects/{project_id}/models` and explicitly publish the eligible
 version. Operators submit a trusted stored HDFS log reference at
-`POST /projects/{project_id}/analysis-runs`.
+`POST /projects/{project_id}/analysis-runs`. A valid log is upserted as a project-owned
+workspace dataset (`storage_kind=workspace`, checksum null until a later intake slice).
+Rejected or unreadable inputs keep a validation run with `dataset_id = null` and do not
+appear in `GET /projects/{project_id}/datasets`. Model and run responses add
+`storage_kind` and nullable `checksum`; runs also return `dataset_id`. GET results
+returns the stored `results_summary_json`, not a computed empty summary. There is no
+public POST/PATCH for datasets, anomaly rows, or run status.
 
 Analysis runs fully validate the referenced HDFS file and record a durable rejection for invalid
 data. Valid files currently end in the explicit `not_supported` terminal state:
 the existing `.pt`/PyG pipeline artifacts do not yet have the required non-executable,
 isolated inference contract. This safety boundary is deliberate; adding executable inference
-requires a separate artifact-format and isolated-worker change.
+requires a separate artifact-format and isolated-worker change. Do not SHA-256 Operator
+HDFS logs at analyze time.
+
+Optional PostgreSQL dialect tests use a local Compose database and stay out of default CI:
+
+```bash
+docker compose -f tests/postgres/compose.yaml up -d
+TEST_DATABASE_URL=postgresql://analyzer:analyzer@127.0.0.1:5433/analyzer python -m pytest tests/test_migrations.py tests/test_shared_state_repository.py -m postgres
+```
 
 ## React interface
 
@@ -385,5 +399,5 @@ provisioning, validation, rollback, and deferred-inference boundaries.
 
 The current API intentionally has no browser endpoint for log files or trained-model artifacts.
 The UI therefore uses trusted workspace references for stored HDFS logs and pipeline manifests,
-and clearly presents the current `not_supported` analysis outcome until the isolated inference
-artifact contract exists.
+lists project-owned datasets as read-only state, and clearly presents the current `not_supported`
+analysis outcome until the isolated inference artifact contract exists.

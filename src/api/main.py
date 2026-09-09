@@ -24,6 +24,7 @@ from src.api.schemas import (
     AnalysisRunResponse,
     AnalysisRunStatus,
     AuditEventResponse,
+    DatasetResponse,
     LoginRequest,
     MembershipCreate,
     MembershipResponse,
@@ -395,30 +396,16 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 metrics_json=json.dumps(validated_model.metrics, sort_keys=True),
                 metadata_json=json.dumps(request.metadata, sort_keys=True),
                 external_evaluation_evidence=request.external_evaluation_evidence,
+                storage_kind="workspace",
+                checksum=None,
+                actor_user_id=user.id,
             )
         except DatabaseIntegrityError:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This model identifier and version already exists in the project.",
             ) from None
-        response = _model_response(model)
-        database.add_audit_event(
-            actor_user_id=user.id,
-            project_id=project_id,
-            action="model.registered",
-            resource_type="model_version",
-            resource_id=response.id,
-            details_json=json.dumps(
-                {
-                    "artifact_reference": response.artifact_reference,
-                    "model_identifier": response.model_identifier,
-                    "pipeline_run_id": response.pipeline_run_id,
-                    "version": response.version,
-                },
-                sort_keys=True,
-            ),
-        )
-        return response
+        return _model_response(model)
 
     @app.get(
         "/projects/{project_id}/models/{model_version_id}",
@@ -457,20 +444,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Only eligible model versions can be published.",
             )
-        published_model = database.publish_model_version(model_version_id, user.id)
-        response = _model_response(published_model)
-        database.add_audit_event(
+        published_model = database.publish_model_version(
+            model_version_id,
+            user.id,
             actor_user_id=user.id,
-            project_id=project_id,
-            action="model.published",
-            resource_type="model_version",
-            resource_id=model_version_id,
-            details_json=json.dumps(
-                {"model_identifier": response.model_identifier, "version": response.version},
-                sort_keys=True,
-            ),
         )
-        return response
+        return _model_response(published_model)
 
     @app.get(
         "/projects/{project_id}/analysis-runs",
@@ -483,7 +462,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     ) -> list[AnalysisRunResponse]:
         """List analysis runs scoped to an authorized project."""
         require_project_role(project_id, user, {ProjectRole.OPERATOR})
-        return [_analysis_run_response(item) for item in database.list_analysis_runs(project_id)]
+        return [_analysis_run_from_store(item) for item in database.list_analysis_runs(project_id)]
 
     @app.post(
         "/projects/{project_id}/analysis-runs",
@@ -528,10 +507,13 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 validation_report_json=json.dumps(validation_report, sort_keys=True),
                 error_code="INVALID_HDFS_DATASET",
                 completed_at=utc_now(),
+                actor_user_id=user.id,
+                results_summary_json=_stored_results_summary(
+                    AnalysisRunStatus.REJECTED,
+                    validation_report,
+                ),
             )
-            response = _analysis_run_response(run)
-            _record_analysis_audit(database, user.id, project_id, response)
-            return response
+            return _analysis_run_from_store(run)
 
         if not validation_report["valid"]:
             run = database.create_analysis_run(
@@ -543,10 +525,13 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 validation_report_json=json.dumps(validation_report, sort_keys=True),
                 error_code="INVALID_HDFS_DATASET",
                 completed_at=utc_now(),
+                actor_user_id=user.id,
+                results_summary_json=_stored_results_summary(
+                    AnalysisRunStatus.REJECTED,
+                    validation_report,
+                ),
             )
-            response = _analysis_run_response(run)
-            _record_analysis_audit(database, user.id, project_id, response)
-            return response
+            return _analysis_run_from_store(run)
 
         validation_report["execution"] = (
             "Not started: a non-executable HDFS inference artifact contract is not available."
@@ -560,10 +545,13 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             validation_report_json=json.dumps(validation_report, sort_keys=True),
             error_code="INFERENCE_CONTRACT_UNAVAILABLE",
             completed_at=utc_now(),
+            actor_user_id=user.id,
+            results_summary_json=_stored_results_summary(
+                AnalysisRunStatus.NOT_SUPPORTED,
+                validation_report,
+            ),
         )
-        response = _analysis_run_response(run)
-        _record_analysis_audit(database, user.id, project_id, response)
-        return response
+        return _analysis_run_from_store(run)
 
     @app.get(
         "/projects/{project_id}/analysis-runs/{analysis_run_id}",
@@ -580,7 +568,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         run = database.get_analysis_run(analysis_run_id)
         if run is None or run["project_id"] != str(project_id):
             raise _not_found("Analysis run")
-        return _analysis_run_response(run)
+        return _analysis_run_from_store(run)
 
     @app.get(
         "/projects/{project_id}/analysis-runs/{analysis_run_id}/results",
@@ -597,20 +585,49 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         run = database.get_analysis_run(analysis_run_id)
         if run is None or run["project_id"] != str(project_id):
             raise _not_found("Analysis run")
-        response = _analysis_run_response(run)
+        response = _analysis_run_from_store(run)
         anomalies = [_anomaly_response(item) for item in database.list_anomaly_results(analysis_run_id)]
-        report = response.validation_report or {}
-        invalid_records = int(report.get("invalid_records", 0))
+        if run["results_summary_json"]:
+            summary = json.loads(str(run["results_summary_json"]))
+        else:
+            summary = json.loads(
+                _stored_results_summary(response.status, response.validation_report or {}, len(anomalies))
+            )
         return AnalysisResultsResponse(
             run=response,
-            summary={
-                "anomaly_count": len(anomalies),
-                "normal_count": 0,
-                "rejected_records": invalid_records if response.status is AnalysisRunStatus.REJECTED else 0,
-                "invalid_records": invalid_records,
-            },
+            summary=summary,
             anomalies=anomalies,
         )
+
+    @app.get(
+        "/projects/{project_id}/datasets",
+        response_model=list[DatasetResponse],
+        tags=["datasets"],
+    )
+    def list_datasets(
+        project_id: UUID,
+        user: CurrentUser = Depends(get_current_user),
+    ) -> list[DatasetResponse]:
+        """List reusable HDFS sources owned by an authorized project."""
+        require_project_role(project_id, user, {ProjectRole.OPERATOR})
+        return [_dataset_response(item) for item in database.list_datasets(project_id)]
+
+    @app.get(
+        "/projects/{project_id}/datasets/{dataset_id}",
+        response_model=DatasetResponse,
+        tags=["datasets"],
+    )
+    def get_dataset(
+        project_id: UUID,
+        dataset_id: UUID,
+        user: CurrentUser = Depends(get_current_user),
+    ) -> DatasetResponse:
+        """Get a single project-owned dataset pointer."""
+        require_project_role(project_id, user, {ProjectRole.OPERATOR})
+        dataset = database.get_dataset(dataset_id)
+        if dataset is None or dataset["project_id"] != str(project_id):
+            raise _not_found("Dataset")
+        return _dataset_response(dataset)
 
     @app.get(
         "/projects/{project_id}/audit-events",
@@ -629,6 +646,23 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
     _mount_frontend(app)
     return app
+
+
+def _stored_results_summary(
+    status: AnalysisRunStatus,
+    validation_report: dict[str, Any],
+    anomaly_count: int = 0,
+) -> str:
+    invalid_records = int(validation_report.get("invalid_records", 0))
+    return json.dumps(
+        {
+            "anomaly_count": anomaly_count,
+            "normal_count": 0,
+            "rejected_records": invalid_records if status is AnalysisRunStatus.REJECTED else 0,
+            "invalid_records": invalid_records,
+        },
+        sort_keys=True,
+    )
 
 
 def _mount_frontend(app: FastAPI) -> None:
@@ -675,26 +709,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "script-src 'self'; style-src 'self'",
             )
         return response
-
-
-def _record_analysis_audit(
-    database: ApiDatabase,
-    actor_user_id: UUID,
-    project_id: UUID,
-    run: AnalysisRunResponse,
-) -> None:
-    action = "analysis.rejected" if run.status is AnalysisRunStatus.REJECTED else "analysis.not_supported"
-    database.add_audit_event(
-        actor_user_id=actor_user_id,
-        project_id=project_id,
-        action=action,
-        resource_type="analysis_run",
-        resource_id=run.id,
-        details_json=json.dumps(
-            {"error_code": run.error_code, "status": run.status.value},
-            sort_keys=True,
-        ),
-    )
 
 
 def _user_response(row: Any) -> UserResponse:
@@ -747,10 +761,22 @@ def _model_response(row: Any) -> ModelVersionResponse:
         published_by_user_id=(
             UUID(str(row["published_by_user_id"])) if row["published_by_user_id"] else None
         ),
+        storage_kind=row["storage_kind"],
+        checksum=str(row["checksum"]) if row["checksum"] else None,
     )
 
 
-def _analysis_run_response(row: Any) -> AnalysisRunResponse:
+def _analysis_run_from_store(row: Any) -> AnalysisRunResponse:
+    dataset = None
+    if row["dataset_storage_kind"] is not None:
+        dataset = {
+            "storage_kind": row["dataset_storage_kind"],
+            "checksum": row["dataset_checksum"],
+        }
+    return _analysis_run_response(row, dataset)
+
+
+def _analysis_run_response(row: Any, dataset: Any | None = None) -> AnalysisRunResponse:
     validation_report = row["validation_report_json"]
     return AnalysisRunResponse(
         id=UUID(str(row["id"])),
@@ -764,6 +790,21 @@ def _analysis_run_response(row: Any) -> AnalysisRunResponse:
         error_code=str(row["error_code"]) if row["error_code"] else None,
         created_at=str(row["created_at"]),
         completed_at=str(row["completed_at"]) if row["completed_at"] else None,
+        dataset_id=UUID(str(row["dataset_id"])) if row["dataset_id"] else None,
+        storage_kind=str(dataset["storage_kind"]) if dataset is not None else None,
+        checksum=str(dataset["checksum"]) if dataset is not None and dataset["checksum"] else None,
+    )
+
+
+def _dataset_response(row: Any) -> DatasetResponse:
+    return DatasetResponse(
+        id=UUID(str(row["id"])),
+        project_id=UUID(str(row["project_id"])),
+        storage_kind=str(row["storage_kind"]),
+        object_reference=str(row["object_reference"]),
+        checksum=str(row["checksum"]) if row["checksum"] else None,
+        source_compatibility="hdfs",
+        created_at=str(row["created_at"]),
     )
 
 
