@@ -6,6 +6,8 @@ import hashlib
 import json
 import math
 import re
+import tempfile
+import zipfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
@@ -16,11 +18,17 @@ MANIFEST_NAME = "manifest.json"
 DEFAULT_ARTIFACT_NAME = "model.pt"
 DEFAULT_EVIDENCE_NAME = "evidence.json"
 PACKAGE_FORMAT = "attribute-aware-gae-v1"
+MAX_ZIP_MEMBERS = 64
+MAX_ZIP_COMPRESSED_BYTES = 32 * 1024 * 1024
+MAX_ZIP_UNCOMPRESSED_BYTES = 96 * 1024 * 1024
+_NESTED_ARCHIVE_SUFFIXES = (".zip", ".tar", ".tgz", ".gz")
 _IDENTIFIER_PATTERN = r"^[A-Za-z0-9_.-]+$"
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _FLOAT_DTYPES = frozenset({"float32", "torch.float32"})
 _INT64_DTYPES = frozenset({"int64", "torch.int64"})
 _SHA256_PATTERN_COMPILED = re.compile(_SHA256_PATTERN)
+_UNIX_SYMLINK_MASK = 0o170000
+_UNIX_SYMLINK = 0o120000
 StateDictLoader = Callable[[Path], Mapping[str, Any]]
 
 
@@ -319,6 +327,62 @@ def validate_model_package(
     return PackageValidationResult.from_issues(issues)
 
 
+def validate_model_package_source(
+    path: Path,
+    *,
+    load_state_dict: StateDictLoader | None = None,
+) -> PackageValidationResult:
+    """Validate a directory package or a zip that unpacks to one.
+
+    Zip extraction is process-local and always deleted. This helper never
+    returns a ZIP-member artifact reference and is not an admission-storage
+    operation.
+    """
+
+    source = path.expanduser()
+    if source.is_dir():
+        return validate_model_package(source, load_state_dict=load_state_dict)
+    if not source.is_file():
+        return PackageValidationResult.from_issues(
+            [
+                PackageValidationIssue(
+                    path=str(path),
+                    reason="Package source must be an existing directory or zip file.",
+                )
+            ]
+        )
+    if source.stat().st_size > MAX_ZIP_COMPRESSED_BYTES:
+        return PackageValidationResult.from_issues(
+            [
+                PackageValidationIssue(
+                    path=source.name,
+                    reason="Zip archive exceeds the 32 MiB compressed size limit.",
+                )
+            ]
+        )
+    try:
+        archive = zipfile.ZipFile(source)
+    except zipfile.BadZipFile:
+        return PackageValidationResult.from_issues(
+            [
+                PackageValidationIssue(
+                    path=source.name,
+                    reason="Package source must be a directory or a readable zip archive.",
+                )
+            ]
+        )
+    with archive:
+        zip_issues = _zip_transport_issues(archive)
+        if zip_issues:
+            return PackageValidationResult.from_issues(zip_issues)
+        with tempfile.TemporaryDirectory(prefix="model-package-") as tmp:
+            extract_root = Path(tmp)
+            extract_issues = _extract_zip_archive(archive, extract_root)
+            if extract_issues:
+                return PackageValidationResult.from_issues(extract_issues)
+            return validate_model_package(extract_root, load_state_dict=load_state_dict)
+
+
 def _load_manifest(
     package_root: Path,
 ) -> tuple[ModelPackageManifest | None, list[PackageValidationIssue]]:
@@ -491,3 +555,110 @@ def _require_relative_posix(value: str) -> str:
     if ".." in Path(value).parts:
         raise ValueError("path must not contain '..' segments")
     return value
+
+
+def _zip_transport_issues(archive: zipfile.ZipFile) -> list[PackageValidationIssue]:
+    issues: list[PackageValidationIssue] = []
+    members = archive.infolist()
+    if len(members) > MAX_ZIP_MEMBERS:
+        issues.append(
+            PackageValidationIssue(
+                path=archive.filename or "package.zip",
+                reason=f"Zip archive exceeds the {MAX_ZIP_MEMBERS}-member limit.",
+            )
+        )
+    uncompressed = 0
+    for info in members:
+        uncompressed += max(info.file_size, 0)
+        issues.extend(_zip_member_issues(info))
+    if uncompressed > MAX_ZIP_UNCOMPRESSED_BYTES:
+        issues.append(
+            PackageValidationIssue(
+                path=archive.filename or "package.zip",
+                reason="Zip archive exceeds the 96 MiB uncompressed size limit.",
+            )
+        )
+    return issues
+
+
+def _zip_member_issues(info: zipfile.ZipInfo) -> list[PackageValidationIssue]:
+    name = info.filename.replace("\\", "/")
+    issues: list[PackageValidationIssue] = []
+    if not name or name.endswith("/") and name.strip("/") == "":
+        issues.append(
+            PackageValidationIssue(path=info.filename, reason="Zip member path is empty.")
+        )
+        return issues
+    if name.startswith("/") or name.startswith("\\") or (len(name) > 1 and name[1] == ":"):
+        issues.append(
+            PackageValidationIssue(
+                path=info.filename,
+                reason="Zip member path must not be absolute.",
+            )
+        )
+    if ".." in Path(name).parts:
+        issues.append(
+            PackageValidationIssue(
+                path=info.filename,
+                reason="Zip member path must not contain '..' segments.",
+            )
+        )
+    lowered = name.rstrip("/").lower()
+    if lowered.endswith(_NESTED_ARCHIVE_SUFFIXES):
+        issues.append(
+            PackageValidationIssue(
+                path=info.filename,
+                reason="Nested archive members are not allowed.",
+            )
+        )
+    if _is_zip_symlink(info):
+        issues.append(
+            PackageValidationIssue(
+                path=info.filename,
+                reason="Zip member must not be a symbolic link.",
+            )
+        )
+    return issues
+
+
+def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
+    mode = (info.external_attr >> 16) & 0xFFFF
+    return (mode & _UNIX_SYMLINK_MASK) == _UNIX_SYMLINK
+
+
+def _extract_zip_archive(
+    archive: zipfile.ZipFile,
+    destination: Path,
+) -> list[PackageValidationIssue]:
+    destination_root = destination.resolve()
+    for info in archive.infolist():
+        target, issue = _resolved_zip_member_path(destination_root, info.filename)
+        if issue is not None:
+            return [issue]
+        if info.is_dir() or info.filename.endswith("/"):
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with archive.open(info) as source, target.open("wb") as output:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                output.write(chunk)
+    return []
+
+
+def _resolved_zip_member_path(
+    destination_root: Path,
+    member_name: str,
+) -> tuple[Path, PackageValidationIssue | None]:
+    relative = member_name.replace("\\", "/").lstrip("/")
+    target = (destination_root / relative).resolve()
+    try:
+        target.relative_to(destination_root)
+    except ValueError:
+        return target, PackageValidationIssue(
+            path=member_name,
+            reason="Zip member path must stay inside the extract directory.",
+        )
+    return target, None

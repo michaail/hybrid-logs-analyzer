@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -12,9 +13,12 @@ import pytest
 
 from src.modules.model_package import (
     MANIFEST_NAME,
+    MAX_ZIP_COMPRESSED_BYTES,
+    MAX_ZIP_UNCOMPRESSED_BYTES,
     PackageArchitecture,
     expected_state_dict_spec,
     validate_model_package,
+    validate_model_package_source,
     validate_state_dict,
 )
 
@@ -316,3 +320,91 @@ def test_weights_only_probe_rejects_pickle_payload(tmp_path: Path) -> None:
     result = validate_model_package(package, load_state_dict=load_tensor_state_dict)
     assert not result.valid
     _assert_has_issue(result, "model.pt")
+
+
+def _zip_directory(source: Path, dest: Path) -> Path:
+    with zipfile.ZipFile(dest, "w") as archive:
+        for file in source.rglob("*"):
+            if file.is_file():
+                archive.write(file, file.relative_to(source).as_posix())
+    return dest
+
+
+def test_valid_zip_package_is_accepted(tmp_path: Path) -> None:
+    package = _write_package(tmp_path)
+    archive = _zip_directory(package, tmp_path / "valid.zip")
+    result = validate_model_package_source(archive)
+    assert result.valid, [issue.model_dump() for issue in result.issues]
+
+
+def test_zip_extra_members_are_accepted_under_caps(tmp_path: Path) -> None:
+    package = _write_package(tmp_path, extra_files={"leftover.bin": b"ignore-me"})
+    archive = _zip_directory(package, tmp_path / "extra.zip")
+    result = validate_model_package_source(archive)
+    leftover_issues = [issue for issue in result.issues if "leftover" in issue.path]
+    assert leftover_issues == []
+    assert result.valid
+
+
+def test_zip_slip_member_is_rejected_without_writing_outside(tmp_path: Path) -> None:
+    archive = tmp_path / "slip.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("../escaped.bin", b"pwned")
+        handle.writestr("subdir/../../outside.bin", b"pwned")
+    result = validate_model_package_source(archive)
+    assert not result.valid
+    _assert_has_issue(result, "..")
+    written = {path.name for path in tmp_path.rglob("*") if path.is_file()}
+    assert written == {"slip.zip"}
+
+
+def test_nested_archive_member_is_rejected(tmp_path: Path) -> None:
+    package = _write_package(tmp_path)
+    archive = tmp_path / "nested.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        for file in package.rglob("*"):
+            if file.is_file():
+                handle.write(file, file.relative_to(package).as_posix())
+        handle.writestr("payload.tar", b"not-a-real-tar")
+    result = validate_model_package_source(archive)
+    assert not result.valid
+    _assert_has_issue(result, "Nested archive")
+    assert not (tmp_path / "payload.tar").exists()
+
+
+def test_oversize_uncompressed_zip_is_rejected(tmp_path: Path) -> None:
+    archive = tmp_path / "bomb.zip"
+    info = zipfile.ZipInfo("bomb.bin")
+    info.compress_type = zipfile.ZIP_DEFLATED
+    with zipfile.ZipFile(archive, "w") as handle:
+        with handle.open(info, "w") as dest:
+            chunk = b"\x00" * (1024 * 1024)
+            remaining = MAX_ZIP_UNCOMPRESSED_BYTES + 1
+            while remaining:
+                piece = chunk if remaining >= len(chunk) else chunk[:remaining]
+                dest.write(piece)
+                remaining -= len(piece)
+    result = validate_model_package_source(archive)
+    assert not result.valid
+    _assert_has_issue(result, "96 MiB")
+
+
+def test_oversize_compressed_zip_is_rejected(tmp_path: Path) -> None:
+    archive = tmp_path / "huge.zip"
+    with archive.open("wb") as handle:
+        handle.seek(MAX_ZIP_COMPRESSED_BYTES)
+        handle.write(b"x")
+    result = validate_model_package_source(archive)
+    assert not result.valid
+    _assert_has_issue(result, "32 MiB")
+    assert archive.stat().st_size == MAX_ZIP_COMPRESSED_BYTES + 1
+
+
+def test_zip_member_count_limit_is_rejected(tmp_path: Path) -> None:
+    archive = tmp_path / "many.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        for index in range(65):
+            handle.writestr(f"member-{index}.bin", b"x")
+    result = validate_model_package_source(archive)
+    assert not result.valid
+    _assert_has_issue(result, "64-member")
