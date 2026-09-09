@@ -492,11 +492,11 @@ must be planned separately as an additive, backward-compatible change.
 
 #### Automated
 
-- [x] 4.1 `python -m pytest tests/test_api.py tests/test_artifacts.py` passes
-- [x] 4.2 `ruff check src tests scripts run_ablation.py` and `mypy` pass
-- [x] 4.3 `cd frontend && npm ci && npm run build` passes
+- [x] 4.1 `python -m pytest tests/test_api.py tests/test_artifacts.py` passes — 51a94e5
+- [x] 4.2 `ruff check src tests scripts run_ablation.py` and `mypy` pass — 51a94e5
+- [x] 4.3 `cd frontend && npm ci && npm run build` passes — 51a94e5
 
 #### Manual
 
-- [x] 4.4 Follow the documented local bootstrap, Administrator sign-in, project-account provisioning, membership change, revocation, deactivation, reactivation, and audit review flow without using undocumented database operations
-- [x] 4.5 Review the docs and OpenAPI to confirm there is no public sign-up route or Administrator-creation control in the browser workflow
+- [x] 4.4 Follow the documented local bootstrap, Administrator sign-in, project-account provisioning, membership change, revocation, deactivation, reactivation, and audit review flow without using undocumented database operations — 51a94e5
+- [x] 4.5 Review the docs and OpenAPI to confirm there is no public sign-up route or Administrator-creation control in the browser workflow — 51a94e5
