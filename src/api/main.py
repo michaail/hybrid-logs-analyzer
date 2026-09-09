@@ -431,32 +431,14 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 metrics_json=json.dumps(admitted.metrics, sort_keys=True),
                 metadata_json=json.dumps(admitted.metadata, sort_keys=True),
                 external_evaluation_evidence=admitted.external_evaluation_evidence,
+                actor_user_id=user.id,
             )
         except DatabaseIntegrityError:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This model identifier and version already exists in the project.",
             ) from None
-        response = _model_response(model)
-        database.add_audit_event(
-            actor_user_id=user.id,
-            project_id=project_id,
-            action="model.registered",
-            resource_type="model_version",
-            resource_id=response.id,
-            details_json=json.dumps(
-                {
-                    "artifact_reference": response.artifact_reference,
-                    "artifact_sha256": response.artifact_sha256,
-                    "model_identifier": response.model_identifier,
-                    "package_reference": response.package_reference,
-                    "pipeline_run_id": response.pipeline_run_id,
-                    "version": response.version,
-                },
-                sort_keys=True,
-            ),
-        )
-        return response
+        return _model_response(model)
 
     @app.get(
         "/projects/{project_id}/models/{model_version_id}",

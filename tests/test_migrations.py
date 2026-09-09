@@ -9,6 +9,7 @@ import pytest
 
 from src.api.migrations import (
     INITIAL_SCHEMA_VERSION,
+    PACKAGE_ADMISSION_VERSION,
     SHARED_STATE_VERSION,
     apply_migrations,
     _upgrade_shared_state_sqlite,
@@ -48,9 +49,15 @@ def _assert_shared_state_schema(database: ApiDatabase) -> None:
         "source_compatibility",
         "created_at",
     } <= _table_columns(database, "datasets")
-    assert {"storage_kind", "checksum"} <= _table_columns(database, "model_versions")
+    assert {"storage_kind", "checksum", "package_reference", "artifact_sha256"} <= _table_columns(
+        database, "model_versions"
+    )
     assert {"dataset_id", "results_summary_json"} <= _table_columns(database, "analysis_runs")
-    assert {INITIAL_SCHEMA_VERSION, SHARED_STATE_VERSION} <= _applied_versions(database)
+    assert {
+        INITIAL_SCHEMA_VERSION,
+        SHARED_STATE_VERSION,
+        PACKAGE_ADMISSION_VERSION,
+    } <= _applied_versions(database)
 
 
 def _seed_model(database: ApiDatabase) -> tuple[UUID, UUID, UUID]:
@@ -62,6 +69,8 @@ def _seed_model(database: ApiDatabase) -> tuple[UUID, UUID, UUID]:
         version="2026.09",
         pipeline_run_id="baseline",
         artifact_reference="outputs/hdfs/baseline/attribute_gae.pt",
+        package_reference="packages/hdfs/attribute-gae-v1",
+        artifact_sha256="0" * 64,
         metrics_json="{}",
         metadata_json="{}",
         external_evaluation_evidence="evidence",

@@ -497,8 +497,9 @@ class ApiDatabase:
                 INSERT INTO model_versions (
                     id, project_id, model_identifier, version, source_compatibility, status,
                     pipeline_run_id, artifact_reference, package_reference, artifact_sha256,
-                    metrics_json, metadata_json, external_evaluation_evidence, created_at
-                ) VALUES (?, ?, ?, ?, 'hdfs', 'eligible', ?, ?, ?, ?, ?, ?, ?, ?)
+                    metrics_json, metadata_json, external_evaluation_evidence, created_at,
+                    storage_kind, checksum
+                ) VALUES (?, ?, ?, ?, 'hdfs', 'eligible', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     model_id,
@@ -528,7 +529,9 @@ class ApiDatabase:
                     details_json=json.dumps(
                         {
                             "artifact_reference": artifact_reference,
+                            "artifact_sha256": artifact_sha256,
                             "model_identifier": model_identifier,
+                            "package_reference": package_reference,
                             "pipeline_run_id": pipeline_run_id,
                             "version": version,
                         },

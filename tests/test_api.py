@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from src.api.bootstrap import bootstrap_administrator
 from src.api.main import create_app
+from src.api.migrations import PACKAGE_ADMISSION_VERSION
 from src.api.settings import ApiSettings
 from src.api.storage import ApiDatabase, DatabaseIntegrityError
 from src.api.validation import ValidationError, admit_validated_package
@@ -165,7 +166,8 @@ def test_model_package_admission_migration_adds_columns(tmp_path: Path) -> None:
         }
     assert "package_reference" in columns
     assert "artifact_sha256" in columns
-    assert "002_model_package_admission" in applied
+    assert "002_model_package_admission" not in applied
+    assert PACKAGE_ADMISSION_VERSION in applied
 
 
 def test_model_package_admission_migration_retries_after_partial_apply(tmp_path: Path) -> None:
@@ -174,7 +176,7 @@ def test_model_package_admission_migration_retries_after_partial_apply(tmp_path:
     with database.session() as connection:
         connection.execute(
             "DELETE FROM schema_migrations WHERE version = ?",
-            ("002_model_package_admission",),
+            (PACKAGE_ADMISSION_VERSION,),
         )
     database.apply_migrations()
     with database.session() as connection:
@@ -186,7 +188,8 @@ def test_model_package_admission_migration_retries_after_partial_apply(tmp_path:
             str(row["name"])
             for row in connection.execute("PRAGMA table_info(model_versions)").fetchall()
         }
-    assert "002_model_package_admission" in applied
+    assert "002_model_package_admission" not in applied
+    assert PACKAGE_ADMISSION_VERSION in applied
     assert {"package_reference", "artifact_sha256"} <= columns
 
 
@@ -522,18 +525,9 @@ def test_dataset_reads_are_isolated_and_omit_rejected_inputs(api: ApiFixture) ->
     _provision_project_account(
         client, administrator, "other-operator", str(second_project["id"]), "operator"
     )
-    manifest_reference = _write_trusted_manifest(api.workspace)
+    package_reference = _stage_package(api.workspace)
     publisher_headers = _login(client, "publisher")
-    registration = client.post(
-        f"/projects/{first_project['id']}/models",
-        headers=publisher_headers,
-        json={
-            "model_identifier": "attribute-gae",
-            "version": "2026.09",
-            "pipeline_run_manifest": manifest_reference,
-            "external_evaluation_evidence": "https://evidence.example/evaluation/baseline",
-        },
-    )
+    registration = _register(client, publisher_headers, first_project["id"], package_reference)
     assert registration.status_code == 201, registration.text
     assert (
         client.post(

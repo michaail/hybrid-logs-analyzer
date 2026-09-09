@@ -12,7 +12,9 @@ from src.api.storage import ApiDatabase, utc_now, _sqlite_path_from_url
 
 INITIAL_SCHEMA_VERSION = "001_initial_schema"
 SHARED_STATE_VERSION = "002_shared_durable_runtime_state"
-_MIGRATION_ORDER = (INITIAL_SCHEMA_VERSION, SHARED_STATE_VERSION)
+# F-02 originally numbered this 002; F-01 already occupied that slot.
+PACKAGE_ADMISSION_VERSION = "003_model_package_admission"
+_MIGRATION_ORDER = (INITIAL_SCHEMA_VERSION, SHARED_STATE_VERSION, PACKAGE_ADMISSION_VERSION)
 
 _INITIAL_SCHEMA_STATEMENTS: tuple[str, ...] = (
     """
@@ -157,9 +159,20 @@ CREATE TABLE anomaly_results_002 (
 )
 """
 
+_PACKAGE_ADMISSION_STATEMENTS: tuple[str, ...] = (
+    """
+    ALTER TABLE model_versions
+    ADD COLUMN package_reference TEXT NOT NULL DEFAULT ''
+    """,
+    """
+    ALTER TABLE model_versions
+    ADD COLUMN artifact_sha256 TEXT NOT NULL DEFAULT ''
+    """,
+)
+
 _POSTGRES_MIGRATION_LOCK = 6_815_717_470_146_882_780
 _IDEMPOTENT_ADD_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
-    "002_model_package_admission": (
+    PACKAGE_ADMISSION_VERSION: (
         ("model_versions", "package_reference"),
         ("model_versions", "artifact_sha256"),
     )
@@ -195,13 +208,19 @@ def apply_migrations(database: ApiDatabase, *, target: str | None = None) -> Non
                 connection.execute(statement)
             _record_migration(connection, INITIAL_SCHEMA_VERSION)
             applied_versions.add(INITIAL_SCHEMA_VERSION)
-        if (
-            database.uses_postgresql
-            and _should_apply(SHARED_STATE_VERSION, target)
-            and SHARED_STATE_VERSION not in applied_versions
-        ):
-            _upgrade_shared_state(connection)
-            _record_migration(connection, SHARED_STATE_VERSION)
+        if database.uses_postgresql:
+            if (
+                _should_apply(SHARED_STATE_VERSION, target)
+                and SHARED_STATE_VERSION not in applied_versions
+            ):
+                _upgrade_shared_state(connection)
+                _record_migration(connection, SHARED_STATE_VERSION)
+                applied_versions.add(SHARED_STATE_VERSION)
+            if (
+                _should_apply(PACKAGE_ADMISSION_VERSION, target)
+                and PACKAGE_ADMISSION_VERSION not in applied_versions
+            ):
+                _apply_package_admission(database, connection)
             return
 
     if (
@@ -211,6 +230,14 @@ def apply_migrations(database: ApiDatabase, *, target: str | None = None) -> Non
     ):
         _upgrade_shared_state_sqlite(database)
 
+    if (
+        not database.uses_postgresql
+        and _should_apply(PACKAGE_ADMISSION_VERSION, target)
+        and PACKAGE_ADMISSION_VERSION not in _current_applied_versions(database)
+    ):
+        with database.session() as connection:
+            _apply_package_admission(database, connection)
+
 
 def main() -> None:
     """Run pending migrations using the configured runtime database URL."""
@@ -218,6 +245,13 @@ def main() -> None:
     database = ApiDatabase(settings.database_url)
     database.apply_migrations()
     print("Database migrations completed.")
+
+
+def _apply_package_admission(database: ApiDatabase, connection: Any) -> None:
+    _apply_migration_statements(
+        database, connection, PACKAGE_ADMISSION_VERSION, _PACKAGE_ADMISSION_STATEMENTS
+    )
+    _record_migration(connection, PACKAGE_ADMISSION_VERSION)
 
 
 def _apply_migration_statements(
@@ -250,6 +284,8 @@ def _table_columns(database: ApiDatabase, connection: Any, table: str) -> set[st
         return {str(row["column_name"]) for row in rows}
     rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
     return {str(row["name"]) for row in rows}
+
+
 def _should_apply(version: str, target: str | None) -> bool:
     if target is None:
         return True

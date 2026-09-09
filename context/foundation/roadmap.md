@@ -3,7 +3,7 @@ project: "Log Anomaly Detection System"
 version: 1
 status: draft
 created: 2026-09-09
-updated: 2026-09-09
+updated: 2026-09-10
 prd_version: 1
 main_goal: speed
 top_blocker: decisions
@@ -53,8 +53,8 @@ controlled model lifecycle that every later analysis run requires.
 
 | ID | Change ID | Outcome (user can …) | Prerequisites | PRD refs | Status |
 | --- | --- | --- | --- | --- | --- |
-| F-01 | shared-durable-runtime-state | (foundation) Model, run, and result records have a minimal shared, durable ownership and version boundary for the deployed workflow. | — | FR-006, FR-008 | in-progress |
-| F-02 | trusted-model-package-contract | (foundation) A declared, non-executable model-package contract is checked before a model can enter the workflow; it does not run the model itself. | — | FR-002, FR-003, FR-004, FR-008 | ready |
+| F-01 | shared-durable-runtime-state | (foundation) Model, run, and result records have a minimal shared, durable ownership and version boundary for the deployed workflow. | — | FR-006, FR-008 | done |
+| F-02 | trusted-model-package-contract | (foundation) A declared, non-executable model-package contract is checked before a model can enter the workflow; it does not run the model itself. | — | FR-002, FR-003, FR-004, FR-008 | done |
 | S-01 | provision-project-accounts | An administrator can provision a project-authorized Operator or Publisher account without public sign-up. | — | FR-001, FR-008 | in-progress |
 | S-02 | publish-hdfs-model-package | A Publisher can upload a complete HDFS-compatible model package, receive a clear rejection when ineligible, and explicitly publish the eligible version. | F-01, F-02, S-01 | US-01, FR-002, FR-003, FR-004, FR-008 | proposed |
 | S-03 | intake-hdfs-dataset | An Operator can upload or select an HDFS dataset and receive a clear whole-dataset acceptance or rejection result. | F-01, S-01 | US-02, FR-005, FR-008 | proposed |
@@ -105,7 +105,7 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 - **Unknowns:** —
 - **Risk:** A partial transition could break the project-ownership boundary between
   model publication and analysis.
-- **Status:** in-progress
+- **Status:** done
 
 ### F-02: Trusted model-package contract
 
@@ -120,7 +120,7 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 - **Risk:** Pretrained PyTorch `.pt` artifacts must enter only through a trusted
   Publisher package contract; the control plane must not treat upload as license to
   deserialize untrusted model code.
-- **Status:** in-progress
+- **Status:** done
 
 ## Slices
 
@@ -238,3 +238,5 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 ## Milestone History
 
 ## Done
+
+- **F-01: (foundation) Model, run, and result records have a minimal shared, durable ownership and version boundary for the deployed workflow.** — Archived 2026-09-09 → `context/archive/2026-09-09-shared-durable-runtime-state/`. Lesson: —.
