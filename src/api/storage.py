@@ -426,13 +426,27 @@ class ApiDatabase:
 
     def get_membership(self, project_id: UUID, user_id: UUID) -> DatabaseRow | None:
         return self._one(
-            "SELECT * FROM memberships WHERE project_id = ? AND user_id = ?",
+            """
+            SELECT memberships.project_id, memberships.user_id, memberships.role,
+                   users.username, users.is_active
+            FROM memberships
+            JOIN users ON users.id = memberships.user_id
+            WHERE memberships.project_id = ? AND memberships.user_id = ?
+            """,
             (str(project_id), str(user_id)),
         )
 
     def list_memberships(self, project_id: UUID) -> list[DatabaseRow]:
         return self._all(
-            "SELECT * FROM memberships WHERE project_id = ? ORDER BY user_id", (str(project_id),)
+            """
+            SELECT memberships.project_id, memberships.user_id, memberships.role,
+                   users.username, users.is_active
+            FROM memberships
+            JOIN users ON users.id = memberships.user_id
+            WHERE memberships.project_id = ?
+            ORDER BY users.username
+            """,
+            (str(project_id),),
         )
 
     def create_model_version(

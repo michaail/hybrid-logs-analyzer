@@ -45,20 +45,34 @@ def _login(client: TestClient, username: str, password: str = PASSWORD) -> dict[
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
-def _provision(client: TestClient, headers: dict[str, str], username: str) -> dict[str, str]:
-    response = client.post(
-        "/admin/users",
-        headers=headers,
-        json={"username": username, "password": PASSWORD},
-    )
-    assert response.status_code == 201, response.text
-    return response.json()
-
-
-def _create_project(client: TestClient, headers: dict[str, str], name: str) -> dict[str, str]:
+def _create_project(client: TestClient, headers: dict[str, str], name: str) -> dict[str, object]:
     response = client.post("/projects", headers=headers, json={"name": name})
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def _provision_project_account(
+    client: TestClient,
+    headers: dict[str, str],
+    username: str,
+    project_id: str,
+    role: str,
+) -> dict[str, object]:
+    response = client.post(
+        "/admin/project-accounts",
+        headers=headers,
+        json={
+            "username": username,
+            "password": PASSWORD,
+            "project_id": project_id,
+            "role": role,
+        },
+    )
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["membership"]["role"] == role
+    assert payload["membership"]["project_id"] == project_id
+    return payload["account"]
 
 
 def _grant_membership(
@@ -67,13 +81,14 @@ def _grant_membership(
     project_id: str,
     user_id: str,
     role: str,
-) -> None:
+) -> dict[str, object]:
     response = client.post(
         f"/projects/{project_id}/members",
         headers=headers,
         json={"user_id": user_id, "role": role},
     )
     assert response.status_code == 201, response.text
+    return response.json()
 
 
 def _write_trusted_manifest(workspace: Path, *, dataset: str = "hdfs") -> str:
@@ -290,15 +305,18 @@ def test_authentication_roles_and_project_isolation(api: ApiFixture) -> None:
     assert client.get("/projects").status_code == 401
 
     administrator = _login(client, "admin")
-    publisher = _provision(client, administrator, "publisher")
-    operator = _provision(client, administrator, "operator")
-    other_operator = _provision(client, administrator, "other-operator")
     first_project = _create_project(client, administrator, "incident-a")
     second_project = _create_project(client, administrator, "incident-b")
-
-    _grant_membership(client, administrator, first_project["id"], publisher["id"], "publisher")
-    _grant_membership(client, administrator, first_project["id"], operator["id"], "operator")
-    _grant_membership(client, administrator, second_project["id"], other_operator["id"], "operator")
+    publisher = _provision_project_account(
+        client, administrator, "publisher", str(first_project["id"]), "publisher"
+    )
+    operator = _provision_project_account(
+        client, administrator, "operator", str(first_project["id"]), "operator"
+    )
+    _provision_project_account(
+        client, administrator, "other-operator", str(second_project["id"]), "operator"
+    )
+    del publisher, operator
 
     operator_headers = _login(client, "operator")
     other_operator_headers = _login(client, "other-operator")
@@ -325,11 +343,9 @@ def test_authentication_roles_and_project_isolation(api: ApiFixture) -> None:
 def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> None:
     client = api.client
     administrator = _login(client, "admin")
-    publisher = _provision(client, administrator, "publisher")
-    operator = _provision(client, administrator, "operator")
     project = _create_project(client, administrator, "incident-a")
-    _grant_membership(client, administrator, project["id"], publisher["id"], "publisher")
-    _grant_membership(client, administrator, project["id"], operator["id"], "operator")
+    _provision_project_account(client, administrator, "publisher", str(project["id"]), "publisher")
+    _provision_project_account(client, administrator, "operator", str(project["id"]), "operator")
     manifest_reference = _write_trusted_manifest(api.workspace)
 
     publisher_headers = _login(client, "publisher")
@@ -409,9 +425,8 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
 def test_registration_rejects_non_hdfs_or_outside_workspace_artifacts(api: ApiFixture) -> None:
     client = api.client
     administrator = _login(client, "admin")
-    publisher = _provision(client, administrator, "publisher")
     project = _create_project(client, administrator, "incident-a")
-    _grant_membership(client, administrator, project["id"], publisher["id"], "publisher")
+    _provision_project_account(client, administrator, "publisher", str(project["id"]), "publisher")
     publisher_headers = _login(client, "publisher")
     bgl_manifest = _write_trusted_manifest(api.workspace, dataset="bgl")
 
@@ -440,3 +455,247 @@ def test_registration_rejects_non_hdfs_or_outside_workspace_artifacts(api: ApiFi
     )
     assert outside.status_code == 422
     assert "trusted workspace" in outside.json()["detail"]
+
+
+def test_administration_lifecycle_requires_administrator(api: ApiFixture) -> None:
+    client = api.client
+    administrator = _login(client, "admin")
+    project = _create_project(client, administrator, "incident-a")
+    account = _provision_project_account(
+        client, administrator, "operator", str(project["id"]), "operator"
+    )
+    operator_headers = _login(client, "operator")
+
+    assert client.post("/admin/project-accounts").status_code == 401
+    assert client.get("/admin/users").status_code == 401
+    assert client.get("/admin/audit-events").status_code == 401
+    assert client.post("/admin/users", json={"username": "x", "password": PASSWORD}).status_code == 405
+
+    forbidden_bodies = [
+        client.post(
+            "/admin/project-accounts",
+            headers=operator_headers,
+            json={
+                "username": "another",
+                "password": PASSWORD,
+                "project_id": project["id"],
+                "role": "operator",
+            },
+        ),
+        client.get("/admin/users", headers=operator_headers),
+        client.patch(
+            f"/admin/users/{account['id']}/activation",
+            headers=operator_headers,
+            json={"is_active": False},
+        ),
+        client.get("/admin/audit-events", headers=operator_headers),
+        client.post(
+            f"/projects/{project['id']}/members",
+            headers=operator_headers,
+            json={"user_id": account["id"], "role": "publisher"},
+        ),
+        client.patch(
+            f"/projects/{project['id']}/members/{account['id']}",
+            headers=operator_headers,
+            json={"role": "publisher"},
+        ),
+        client.delete(
+            f"/projects/{project['id']}/members/{account['id']}",
+            headers=operator_headers,
+        ),
+    ]
+    assert all(response.status_code == 403 for response in forbidden_bodies)
+
+
+def test_project_account_lifecycle_isolation_and_audit(api: ApiFixture) -> None:
+    client = api.client
+    administrator = _login(client, "admin")
+    first_project = _create_project(client, administrator, "incident-a")
+    second_project = _create_project(client, administrator, "incident-b")
+
+    provisioned = client.post(
+        "/admin/project-accounts",
+        headers=administrator,
+        json={
+            "username": "Mixed.User",
+            "password": PASSWORD,
+            "project_id": first_project["id"],
+            "role": "operator",
+        },
+    )
+    assert provisioned.status_code == 201, provisioned.text
+    account = provisioned.json()["account"]
+    membership = provisioned.json()["membership"]
+    assert account["username"] == "mixed.user"
+    assert account["is_active"] is True
+    assert membership["username"] == "mixed.user"
+    assert membership["role"] == "operator"
+
+    duplicate = client.post(
+        "/admin/project-accounts",
+        headers=administrator,
+        json={
+            "username": "MIXED.USER",
+            "password": PASSWORD,
+            "project_id": first_project["id"],
+            "role": "publisher",
+        },
+    )
+    assert duplicate.status_code == 409
+
+    users = client.get("/admin/users", headers=administrator)
+    assert users.status_code == 200
+    usernames = {item["username"] for item in users.json()}
+    assert {"admin", "mixed.user"} <= usernames
+    assert all("password" not in item and "is_administrator" not in item for item in users.json())
+
+    second_membership = _grant_membership(
+        client, administrator, str(second_project["id"]), str(account["id"]), "publisher"
+    )
+    assert second_membership["role"] == "publisher"
+
+    duplicate_membership = client.post(
+        f"/projects/{first_project['id']}/members",
+        headers=administrator,
+        json={"user_id": account["id"], "role": "publisher"},
+    )
+    assert duplicate_membership.status_code == 409
+
+    role_change = client.patch(
+        f"/projects/{first_project['id']}/members/{account['id']}",
+        headers=administrator,
+        json={"role": "publisher"},
+    )
+    assert role_change.status_code == 200, role_change.text
+    assert role_change.json()["role"] == "publisher"
+
+    missing_role_change = client.patch(
+        f"/projects/{first_project['id']}/members/{UUID(int=0)}",
+        headers=administrator,
+        json={"role": "operator"},
+    )
+    assert missing_role_change.status_code == 404
+
+    publisher_headers = _login(client, "mixed.user")
+    assert (
+        client.get(f"/projects/{first_project['id']}/analysis-runs", headers=publisher_headers).status_code
+        == 200
+    )
+    assert (
+        client.get(f"/projects/{second_project['id']}/models", headers=publisher_headers).status_code
+        == 200
+    )
+
+    issued_token = publisher_headers
+    revoke = client.delete(
+        f"/projects/{first_project['id']}/members/{account['id']}",
+        headers=administrator,
+    )
+    assert revoke.status_code == 204
+    assert (
+        client.get(f"/projects/{first_project['id']}/models", headers=issued_token).status_code == 404
+    )
+    assert (
+        client.get(f"/projects/{second_project['id']}/models", headers=issued_token).status_code == 200
+    )
+
+    missing_revoke = client.delete(
+        f"/projects/{first_project['id']}/members/{account['id']}",
+        headers=administrator,
+    )
+    assert missing_revoke.status_code == 404
+
+    deactivation = client.patch(
+        f"/admin/users/{account['id']}/activation",
+        headers=administrator,
+        json={"is_active": False},
+    )
+    assert deactivation.status_code == 200
+    assert deactivation.json()["is_active"] is False
+    assert client.get("/users/me", headers=issued_token).status_code == 401
+    assert client.post("/auth/token", json={"username": "mixed.user", "password": PASSWORD}).status_code == 401
+
+    admin_user = next(item for item in users.json() if item["username"] == "admin")
+    assert (
+        client.patch(
+            f"/admin/users/{admin_user['id']}/activation",
+            headers=administrator,
+            json={"is_active": False},
+        ).status_code
+        == 409
+    )
+
+    reactivation = client.patch(
+        f"/admin/users/{account['id']}/activation",
+        headers=administrator,
+        json={"is_active": True},
+    )
+    assert reactivation.status_code == 200
+    assert reactivation.json()["is_active"] is True
+    restored = _login(client, "MIXED.USER")
+    assert client.get("/projects", headers=restored).status_code == 200
+
+    project_audit = client.get(f"/projects/{first_project['id']}/audit-events", headers=administrator)
+    assert project_audit.status_code == 200
+    project_actions = {event["action"] for event in project_audit.json()}
+    assert {
+        "project.created",
+        "project.membership_granted",
+        "project.membership_role_changed",
+        "project.membership_revoked",
+    } <= project_actions
+
+    second_audit = client.get(f"/projects/{second_project['id']}/audit-events", headers=administrator)
+    assert {event["action"] for event in second_audit.json()} >= {
+        "project.created",
+        "project.membership_granted",
+    }
+
+    system_audit = client.get("/admin/audit-events", headers=administrator)
+    assert system_audit.status_code == 200
+    system_actions = {event["action"] for event in system_audit.json()}
+    assert {
+        "user.bootstrapped",
+        "user.provisioned",
+        "user.signed_in",
+        "user.deactivated",
+        "user.reactivated",
+    } <= system_actions
+    assert all(event["resource_type"] == "user" for event in system_audit.json())
+    assert "project.membership_granted" not in system_actions
+
+
+def test_openapi_exposes_administration_lifecycle_without_legacy_user_create(
+    api: ApiFixture,
+) -> None:
+    schema = api.client.get("/openapi.json").json()
+    paths = schema["paths"]
+
+    assert "/admin/users" in paths
+    assert "post" not in paths["/admin/users"]
+    assert "get" in paths["/admin/users"]
+    assert "/admin/project-accounts" in paths
+    assert "post" in paths["/admin/project-accounts"]
+    assert "/admin/users/{user_id}/activation" in paths
+    assert "patch" in paths["/admin/users/{user_id}/activation"]
+    assert "/admin/audit-events" in paths
+    assert "get" in paths["/admin/audit-events"]
+    assert "post" in paths["/projects/{project_id}/members"]
+    assert "patch" in paths["/projects/{project_id}/members/{user_id}"]
+    assert "delete" in paths["/projects/{project_id}/members/{user_id}"]
+
+    assert "/register" not in paths
+    assert "/signup" not in paths
+    assert "/auth/register" not in paths
+
+    secured_operations = [
+        paths["/admin/project-accounts"]["post"],
+        paths["/admin/users"]["get"],
+        paths["/admin/users/{user_id}/activation"]["patch"],
+        paths["/admin/audit-events"]["get"],
+        paths["/projects/{project_id}/members"]["post"],
+        paths["/projects/{project_id}/members/{user_id}"]["patch"],
+        paths["/projects/{project_id}/members/{user_id}"]["delete"],
+    ]
+    for operation in secured_operations:
+        assert "HTTPBearer" in str(operation.get("security", schema.get("components", {})))

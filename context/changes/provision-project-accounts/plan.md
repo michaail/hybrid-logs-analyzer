@@ -454,26 +454,26 @@ must be planned separately as an additive, backward-compatible change.
 
 #### Automated
 
-- [x] 1.1 Focused migration tests prove the fresh initial schema is idempotent, initializes active state, accepts normalized lowercase identities, and rejects duplicate names
-- [x] 1.2 Focused repository tests prove each account/membership mutation rolls back when its audit insert fails
-- [x] 1.3 `ruff check src/api tests/test_api.py` and `mypy` pass
+- [x] 1.1 Focused migration tests prove the fresh initial schema is idempotent, initializes active state, accepts normalized lowercase identities, and rejects duplicate names — 326f40c
+- [x] 1.2 Focused repository tests prove each account/membership mutation rolls back when its audit insert fails — 326f40c
+- [x] 1.3 `ruff check src/api tests/test_api.py` and `mypy` pass — 326f40c
 
 #### Manual
 
-- [x] 1.4 Remove a disposable local API metadata database, rerun migrations, and confirm the bootstrapped Administrator and provisioned users can sign in using case-insensitive input
+- [x] 1.4 Remove a disposable local API metadata database, rerun migrations, and confirm the bootstrapped Administrator and provisioned users can sign in using case-insensitive input — 326f40c
 
 ### Phase 2: Administration API contract
 
 #### Automated
 
-- [ ] 2.1 `python -m pytest tests/test_api.py` passes the existing API behavior plus all account-lifecycle, isolation, and atomic-audit cases, including rollback of account, membership, and project creation when an audit insertion fails
-- [ ] 2.2 `ruff check src/api tests/test_api.py` and `mypy` pass
-- [ ] 2.3 Generated OpenAPI exposes the named Administrator-only lifecycle routes, no unauthenticated account-provisioning or membership mutation operation, and no retained `POST /admin/users` route
+- [x] 2.1 `python -m pytest tests/test_api.py` passes the existing API behavior plus all account-lifecycle, isolation, and atomic-audit cases, including rollback of account, membership, and project creation when an audit insertion fails
+- [x] 2.2 `ruff check src/api tests/test_api.py` and `mypy` pass
+- [x] 2.3 Generated OpenAPI exposes the named Administrator-only lifecycle routes, no unauthenticated account-provisioning or membership mutation operation, and no retained `POST /admin/users` route
 
 #### Manual
 
-- [ ] 2.4 Sign in as the bootstrapped Administrator and exercise every lifecycle API operation through `/docs`; verify non-administrator credentials cannot use them
-- [ ] 2.5 Confirm project audit events include the associated membership action and the system audit view includes provisioning and account activation-state transitions
+- [x] 2.4 Sign in as the bootstrapped Administrator and exercise every lifecycle API operation through `/docs`; verify non-administrator credentials cannot use them
+- [x] 2.5 Confirm project audit events include the associated membership action and the system audit view includes provisioning and account activation-state transitions
 
 ### Phase 3: Administrator interface
 

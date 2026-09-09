@@ -55,7 +55,7 @@ controlled model lifecycle that every later analysis run requires.
 | --- | --- | --- | --- | --- | --- |
 | F-01 | shared-durable-runtime-state | (foundation) Model, run, and result records have a minimal shared, durable ownership and version boundary for the deployed workflow. | — | FR-006, FR-008 | ready |
 | F-02 | trusted-model-package-contract | (foundation) A declared, non-executable model-package contract is checked before a model can enter the workflow; it does not run the model itself. | — | FR-002, FR-003, FR-004, FR-008 | ready |
-| S-01 | provision-project-accounts | An administrator can provision a project-authorized Operator or Publisher account without public sign-up. | — | FR-001, FR-008 | ready |
+| S-01 | provision-project-accounts | An administrator can provision a project-authorized Operator or Publisher account without public sign-up. | — | FR-001, FR-008 | in-progress |
 | S-02 | publish-hdfs-model-package | A Publisher can upload a complete HDFS-compatible model package, receive a clear rejection when ineligible, and explicitly publish the eligible version. | F-01, F-02, S-01 | US-01, FR-002, FR-003, FR-004, FR-008 | proposed |
 | S-03 | intake-hdfs-dataset | An Operator can upload or select an HDFS dataset and receive a clear whole-dataset acceptance or rejection result. | F-01, S-01 | US-02, FR-005, FR-008 | proposed |
 | S-04 | run-parity-hdfs-analysis | An Operator can start asynchronous analysis of an HDFS dataset with a compatible, published same-project model and see a terminal run status. | F-01, F-02, S-02, S-03 | US-02, FR-006, FR-010, FR-011 | blocked |
@@ -135,7 +135,7 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 - **Unknowns:** —
 - **Risk:** Provisioning must stay on the existing administrator-created account
   boundary and must not weaken project role isolation.
-- **Status:** ready
+- **Status:** in-progress
 
 ### S-02: Publish an HDFS model package
 
@@ -209,15 +209,14 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
    accounts with no public sign-up; do not introduce a separate self-serve sign-up
    path. — Owner: user. Block: none.
 2. **What languages, frameworks, storage, and infrastructure make up the current
-   notebook system?** — Owner: user. Block: roadmap-wide.
+   notebook system? (resolved 2026-09-09)** — Jupyter notebooks in python, storage: local artifacts, infrastructure: local.
 3. **Model-package format decision (resolved 2026-09-09):** Publishers provide
    pretrained PyTorch `.pt` models inside the package contract (metadata, metrics,
    source compatibility, and external-evaluation evidence remain required). —
    Owner: user. Block: none.
-4. **Which notebook and configuration form the agreed parity baseline?** — Owner:
-   user. Block: S-04.
-5. **What is the current user scale of the notebook system?** — Owner: user. Block:
-   roadmap-wide.
+4. **Which notebook and configuration form the agreed parity baseline? (resolved 2026-09-09)** — Owner:
+   user. Block: S-04. - This will be provided in due course as the baseline models needs to be trained first
+5. **What is the current user scale of the notebook system? (resolved 2026-09-09)** — One user, same as admin, owner of the solution and infrastructure
 
 ## Parked
 
