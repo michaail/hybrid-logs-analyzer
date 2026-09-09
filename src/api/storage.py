@@ -24,6 +24,29 @@ class DatabaseIntegrityError(RuntimeError):
     """Normalize database constraint failures across supported drivers."""
 
 
+class DatasetPointerError(ValueError):
+    """Raised when a kinded byte pointer cannot be stored."""
+
+
+class RunStatusConflict(RuntimeError):
+    """Raised when a compare-and-swap analysis-run transition does not apply."""
+
+
+_STORAGE_KINDS = frozenset({"workspace", "object"})
+_INITIAL_RUN_STATUSES = frozenset({"queued", "rejected", "not_supported"})
+_LEGAL_RUN_TRANSITIONS = frozenset(
+    {("queued", "running"), ("running", "completed"), ("running", "failed")}
+)
+_ANALYSIS_AUDIT_ACTIONS = {
+    "queued": "analysis.queued",
+    "running": "analysis.running",
+    "completed": "analysis.completed",
+    "failed": "analysis.failed",
+    "rejected": "analysis.rejected",
+    "not_supported": "analysis.not_supported",
+}
+
+
 DatabaseRow = dict[str, Any]
 
 
@@ -448,17 +471,21 @@ class ApiDatabase:
         metrics_json: str,
         metadata_json: str,
         external_evaluation_evidence: str,
+        storage_kind: str = "workspace",
+        checksum: str | None = None,
+        actor_user_id: UUID | None = None,
     ) -> DatabaseRow:
         model_id = str(uuid4())
         created_at = utc_now()
+        pointer_checksum = _normalized_checksum(storage_kind, checksum)
         with self.session() as connection:
             connection.execute(
                 """
                 INSERT INTO model_versions (
                     id, project_id, model_identifier, version, source_compatibility, status,
                     pipeline_run_id, artifact_reference, metrics_json, metadata_json,
-                    external_evaluation_evidence, created_at
-                ) VALUES (?, ?, ?, ?, 'hdfs', 'eligible', ?, ?, ?, ?, ?, ?)
+                    external_evaluation_evidence, created_at, storage_kind, checksum
+                ) VALUES (?, ?, ?, ?, 'hdfs', 'eligible', ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     model_id,
@@ -471,8 +498,28 @@ class ApiDatabase:
                     metadata_json,
                     external_evaluation_evidence,
                     created_at,
+                    storage_kind,
+                    pointer_checksum,
                 ),
             )
+            if actor_user_id is not None:
+                self._insert_audit_event(
+                    connection,
+                    actor_user_id=actor_user_id,
+                    project_id=project_id,
+                    action="model.registered",
+                    resource_type="model_version",
+                    resource_id=UUID(model_id),
+                    details_json=json.dumps(
+                        {
+                            "artifact_reference": artifact_reference,
+                            "model_identifier": model_identifier,
+                            "pipeline_run_id": pipeline_run_id,
+                            "version": version,
+                        },
+                        sort_keys=True,
+                    ),
+                )
         return self.get_model_version(UUID(model_id)) or self._missing_record("model version")
 
     def get_model_version(self, model_id: UUID) -> DatabaseRow | None:
@@ -488,9 +535,22 @@ class ApiDatabase:
             (str(project_id),),
         )
 
-    def publish_model_version(self, model_id: UUID, publisher_id: UUID) -> DatabaseRow:
+    def publish_model_version(
+        self,
+        model_id: UUID,
+        publisher_id: UUID,
+        *,
+        actor_user_id: UUID | None = None,
+    ) -> DatabaseRow:
         published_at = utc_now()
         with self.session() as connection:
+            existing = connection.execute(
+                "SELECT * FROM model_versions WHERE id = ?",
+                (str(model_id),),
+            ).fetchone()
+            if existing is None:
+                raise ValueError("Model version is not eligible for publication.")
+            model = dict(existing)
             updated_rows = connection.execute(
                 """
                 UPDATE model_versions
@@ -501,6 +561,22 @@ class ApiDatabase:
             ).rowcount
             if updated_rows != 1:
                 raise ValueError("Model version is not eligible for publication.")
+            if actor_user_id is not None:
+                self._insert_audit_event(
+                    connection,
+                    actor_user_id=actor_user_id,
+                    project_id=UUID(str(model["project_id"])),
+                    action="model.published",
+                    resource_type="model_version",
+                    resource_id=model_id,
+                    details_json=json.dumps(
+                        {
+                            "model_identifier": str(model["model_identifier"]),
+                            "version": str(model["version"]),
+                        },
+                        sort_keys=True,
+                    ),
+                )
         return self.get_model_version(model_id) or self._missing_record("model version")
 
     def create_analysis_run(
@@ -514,24 +590,31 @@ class ApiDatabase:
         validation_report_json: str | None,
         error_code: str | None,
         completed_at: str | None,
+        actor_user_id: UUID | None = None,
+        results_summary_json: str | None = None,
     ) -> DatabaseRow:
+        if status not in _INITIAL_RUN_STATUSES:
+            raise ValueError(f"Analysis runs cannot be created with status {status!r}.")
         run_id = str(uuid4())
         created_at = utc_now()
         with self.session() as connection:
             dataset_id = None
             if status != "rejected":
-                dataset_id = self._workspace_dataset_id(
+                dataset_id = self._upsert_dataset(
                     connection,
                     project_id=project_id,
+                    storage_kind="workspace",
                     object_reference=log_reference,
+                    checksum=None,
+                    actor_user_id=actor_user_id,
                 )
             connection.execute(
                 """
                 INSERT INTO analysis_runs (
                     id, project_id, model_version_id, requested_by_user_id, source_compatibility,
                     log_reference, status, validation_report_json, error_code, created_at,
-                    completed_at, dataset_id
-                ) VALUES (?, ?, ?, ?, 'hdfs', ?, ?, ?, ?, ?, ?, ?)
+                    completed_at, dataset_id, results_summary_json
+                ) VALUES (?, ?, ?, ?, 'hdfs', ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -545,24 +628,75 @@ class ApiDatabase:
                     created_at,
                     completed_at,
                     dataset_id,
+                    results_summary_json,
                 ),
             )
+            if actor_user_id is not None:
+                self._insert_audit_event(
+                    connection,
+                    actor_user_id=actor_user_id,
+                    project_id=project_id,
+                    action=_ANALYSIS_AUDIT_ACTIONS[status],
+                    resource_type="analysis_run",
+                    resource_id=UUID(run_id),
+                    details_json=json.dumps(
+                        {"error_code": error_code, "status": status},
+                        sort_keys=True,
+                    ),
+                )
         return self.get_analysis_run(UUID(run_id)) or self._missing_record("analysis run")
 
-    def _workspace_dataset_id(
+    def upsert_dataset(
+        self,
+        *,
+        project_id: UUID,
+        storage_kind: str,
+        object_reference: str,
+        checksum: str | None = None,
+        actor_user_id: UUID | None = None,
+    ) -> DatabaseRow:
+        """Return the project-owned dataset for a kinded pointer, inserting on first use."""
+        with self.session() as connection:
+            dataset_id = self._upsert_dataset(
+                connection,
+                project_id=project_id,
+                storage_kind=storage_kind,
+                object_reference=object_reference,
+                checksum=checksum,
+                actor_user_id=actor_user_id,
+            )
+        return self.get_dataset(UUID(dataset_id)) or self._missing_record("dataset")
+
+    def get_dataset(self, dataset_id: UUID) -> DatabaseRow | None:
+        return self._one("SELECT * FROM datasets WHERE id = ?", (str(dataset_id),))
+
+    def list_datasets(self, project_id: UUID) -> list[DatabaseRow]:
+        return self._all(
+            """
+            SELECT * FROM datasets
+            WHERE project_id = ?
+            ORDER BY created_at, object_reference
+            """,
+            (str(project_id),),
+        )
+
+    def _upsert_dataset(
         self,
         connection: _DatabaseConnection,
         *,
         project_id: UUID,
+        storage_kind: str,
         object_reference: str,
+        checksum: str | None,
+        actor_user_id: UUID | None,
     ) -> str:
-        """Return the project-owned workspace dataset for a stored object reference."""
+        pointer_checksum = _normalized_checksum(storage_kind, checksum)
         row = connection.execute(
             """
             SELECT id FROM datasets
-            WHERE project_id = ? AND storage_kind = 'workspace' AND object_reference = ?
+            WHERE project_id = ? AND storage_kind = ? AND object_reference = ?
             """,
-            (str(project_id), object_reference),
+            (str(project_id), storage_kind, object_reference),
         ).fetchone()
         if row is not None:
             return str(dict(row)["id"])
@@ -572,11 +706,148 @@ class ApiDatabase:
             INSERT INTO datasets (
                 id, project_id, storage_kind, object_reference, checksum,
                 source_compatibility, created_at
-            ) VALUES (?, ?, 'workspace', ?, NULL, 'hdfs', ?)
+            ) VALUES (?, ?, ?, ?, ?, 'hdfs', ?)
             """,
-            (dataset_id, str(project_id), object_reference, utc_now()),
+            (
+                dataset_id,
+                str(project_id),
+                storage_kind,
+                object_reference,
+                pointer_checksum,
+                utc_now(),
+            ),
         )
+        if actor_user_id is not None:
+            self._insert_audit_event(
+                connection,
+                actor_user_id=actor_user_id,
+                project_id=project_id,
+                action="dataset.registered",
+                resource_type="dataset",
+                resource_id=UUID(dataset_id),
+                details_json=json.dumps(
+                    {
+                        "object_reference": object_reference,
+                        "storage_kind": storage_kind,
+                    },
+                    sort_keys=True,
+                ),
+            )
         return dataset_id
+
+    def transition_analysis_run(
+        self,
+        run_id: UUID,
+        *,
+        expected_status: str,
+        next_status: str,
+        actor_user_id: UUID | None = None,
+        error_code: str | None = None,
+        results_summary_json: str | None = None,
+        anomaly_results: Iterable[dict[str, Any]] | None = None,
+    ) -> DatabaseRow:
+        """Apply a legal compare-and-swap status transition inside one transaction."""
+        if (expected_status, next_status) not in _LEGAL_RUN_TRANSITIONS:
+            raise RunStatusConflict("Analysis run status transition was not applied.")
+        if next_status == "completed" and results_summary_json is None:
+            raise ValueError("Completed analysis runs require a stored results summary.")
+        completed_at = utc_now() if next_status in {"completed", "failed"} else None
+        with self.session() as connection:
+            existing = connection.execute(
+                "SELECT * FROM analysis_runs WHERE id = ?",
+                (str(run_id),),
+            ).fetchone()
+            if existing is None:
+                raise RunStatusConflict("Analysis run status transition was not applied.")
+            run = dict(existing)
+            if next_status == "running":
+                updated_rows = connection.execute(
+                    "UPDATE analysis_runs SET status = ? WHERE id = ? AND status = ?",
+                    (next_status, str(run_id), expected_status),
+                ).rowcount
+            elif next_status == "failed":
+                updated_rows = connection.execute(
+                    """
+                    UPDATE analysis_runs
+                    SET status = ?, error_code = ?, completed_at = ?
+                    WHERE id = ? AND status = ?
+                    """,
+                    (next_status, error_code, completed_at, str(run_id), expected_status),
+                ).rowcount
+            else:
+                updated_rows = connection.execute(
+                    """
+                    UPDATE analysis_runs
+                    SET status = ?, results_summary_json = ?, completed_at = ?
+                    WHERE id = ? AND status = ?
+                    """,
+                    (
+                        next_status,
+                        results_summary_json,
+                        completed_at,
+                        str(run_id),
+                        expected_status,
+                    ),
+                ).rowcount
+            if updated_rows != 1:
+                raise RunStatusConflict("Analysis run status transition was not applied.")
+            if next_status == "completed":
+                self.replace_anomaly_results(
+                    connection,
+                    run_id,
+                    anomaly_results or (),
+                )
+            if actor_user_id is not None:
+                self._insert_audit_event(
+                    connection,
+                    actor_user_id=actor_user_id,
+                    project_id=UUID(str(run["project_id"])),
+                    action=_ANALYSIS_AUDIT_ACTIONS[next_status],
+                    resource_type="analysis_run",
+                    resource_id=run_id,
+                    details_json=json.dumps(
+                        {
+                            "error_code": error_code,
+                            "from_status": expected_status,
+                            "status": next_status,
+                        },
+                        sort_keys=True,
+                    ),
+                )
+        return self.get_analysis_run(run_id) or self._missing_record("analysis run")
+
+    def replace_anomaly_results(
+        self,
+        connection: _DatabaseConnection,
+        run_id: UUID,
+        results: Iterable[dict[str, Any]],
+    ) -> None:
+        """Replace every anomaly row for a run inside the caller's transaction."""
+        connection.execute(
+            "DELETE FROM anomaly_results WHERE analysis_run_id = ?",
+            (str(run_id),),
+        )
+        for item in results:
+            context_json = item.get("context_json")
+            if context_json is None:
+                context_json = json.dumps(item.get("context") or {}, sort_keys=True)
+            connection.execute(
+                """
+                INSERT INTO anomaly_results (
+                    id, analysis_run_id, record_reference, anomaly_score, anomaly_level,
+                    decision_threshold, context_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(item.get("id") or uuid4()),
+                    str(run_id),
+                    str(item["record_reference"]),
+                    item.get("anomaly_score"),
+                    item.get("anomaly_level"),
+                    item.get("decision_threshold"),
+                    str(context_json),
+                ),
+            )
 
     def get_analysis_run(self, run_id: UUID) -> DatabaseRow | None:
         return self._one("SELECT * FROM analysis_runs WHERE id = ?", (str(run_id),))
@@ -692,3 +963,16 @@ def _sqlite_path_from_url(database_url: str) -> Path:
     if not database_path or database_path == "/":
         raise RuntimeError("SQLite database URL must include a database path.")
     return Path(database_path).resolve()
+
+
+def _normalized_checksum(storage_kind: str, checksum: str | None) -> str | None:
+    """Reject object-kind pointers that are missing a checksum before insert."""
+    if storage_kind not in _STORAGE_KINDS:
+        raise DatasetPointerError(f"Unsupported storage kind {storage_kind!r}.")
+    if checksum is None:
+        normalized = None
+    else:
+        normalized = checksum.strip() or None
+    if storage_kind == "object" and normalized is None:
+        raise DatasetPointerError("Object-kind pointers require a non-empty checksum.")
+    return normalized

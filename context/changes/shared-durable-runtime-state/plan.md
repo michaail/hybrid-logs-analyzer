@@ -511,26 +511,26 @@ rows are test-only until S-02/S-03.
 
 #### Automated
 
-- [x] 1.1 Focused migration tests prove `001`+`002` are idempotent on SQLite and create the datasets table, kinded pointer columns, expanded run statuses, and `results_summary_json`
-- [x] 1.2 `@pytest.mark.postgres` tests skip when `TEST_DATABASE_URL` is unset and, when set, apply `002` and pass `healthcheck`
-- [x] 1.3 `ruff check src/api tests` and `mypy` pass
+- [x] 1.1 Focused migration tests prove `001`+`002` are idempotent on SQLite and create the datasets table, kinded pointer columns, expanded run statuses, and `results_summary_json` — 292ac2a
+- [x] 1.2 `@pytest.mark.postgres` tests skip when `TEST_DATABASE_URL` is unset and, when set, apply `002` and pass `healthcheck` — 292ac2a
+- [x] 1.3 `ruff check src/api tests` and `mypy` pass — 292ac2a
 
 #### Manual
 
-- [x] 1.4 `docker compose -f tests/postgres/compose.yaml up -d`, set `TEST_DATABASE_URL`, run `python -m src.api.migrations` against that URL, and confirm `schema_migrations` lists `002`
-- [x] 1.5 Remove the disposable local SQLite file at `.api/analyzer.db` if present, rerun migrations, and confirm the API still bootstraps
+- [x] 1.4 `docker compose -f tests/postgres/compose.yaml up -d`, set `TEST_DATABASE_URL`, run `python -m src.api.migrations` against that URL, and confirm `schema_migrations` lists `002` — 292ac2a
+- [x] 1.5 Remove the disposable local SQLite file at `.api/analyzer.db` if present, rerun migrations, and confirm the API still bootstraps — 292ac2a
 
 ### Phase 2: Repository ownership, audit, and status CAS
 
 #### Automated
 
-- [ ] 2.1 Repository tests prove dataset reuse vs insert, object-kind checksum rejection, workspace-kind null checksum, audit rollback for model/dataset/run/result writes, legal CAS, illegal CAS, and stored summary+rows after a completed transition
-- [ ] 2.2 Postgres-marked tests, when `TEST_DATABASE_URL` is set, cover unique dataset identity, object-kind checksum CHECK, and CAS conflict
-- [ ] 2.3 `ruff check src/api tests` and `mypy` pass
+- [x] 2.1 Repository tests prove dataset reuse vs insert, object-kind checksum rejection, workspace-kind null checksum, audit rollback for model/dataset/run/result writes, legal CAS, illegal CAS, and stored summary+rows after a completed transition
+- [x] 2.2 Postgres-marked tests, when `TEST_DATABASE_URL` is set, cover unique dataset identity, object-kind checksum CHECK, and CAS conflict
+- [x] 2.3 `ruff check src/api tests` and `mypy` pass
 
 #### Manual
 
-- [ ] 2.4 Against local SQLite, insert a workspace dataset twice and confirm a single row; confirm an object-kind insert without checksum fails
+- [x] 2.4 Against local SQLite, insert a workspace dataset twice and confirm a single row; confirm an object-kind insert without checksum fails
 
 ### Phase 3: Additive HTTP reads and analyze upsert
 

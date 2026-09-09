@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import os
-from collections.abc import Iterator
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 import pytest
@@ -131,7 +128,23 @@ def test_seeded_initial_schema_preserves_ids_across_shared_state_upgrade(tmp_pat
     apply_migrations(database, target=INITIAL_SCHEMA_VERSION)
     assert _applied_versions(database) == {INITIAL_SCHEMA_VERSION}
 
-    project_id, user_id, model_id = _seed_model(database)
+    project = database.create_project("incident-a")
+    user = database.create_user(username="publisher", password_hash="x", is_administrator=False)
+    project_id = UUID(str(project["id"]))
+    user_id = UUID(str(user["id"]))
+    model_id = uuid4()
+    with database.session() as connection:
+        connection.execute(
+            """
+            INSERT INTO model_versions (
+                id, project_id, model_identifier, version, source_compatibility, status,
+                pipeline_run_id, artifact_reference, metrics_json, metadata_json,
+                external_evaluation_evidence, created_at
+            ) VALUES (?, ?, 'attribute-gae', '2026.09', 'hdfs', 'eligible', 'baseline',
+                      'outputs/hdfs/baseline/attribute_gae.pt', '{}', '{}', 'evidence', ?)
+            """,
+            (str(model_id), str(project_id), utc_now()),
+        )
     accepted_run_id = str(uuid4())
     rejected_run_id = str(uuid4())
     anomaly_id = str(uuid4())
@@ -181,51 +194,6 @@ def test_seeded_initial_schema_preserves_ids_across_shared_state_upgrade(tmp_pat
     with database.session() as connection:
         dataset_count = connection.execute("SELECT COUNT(*) AS n FROM datasets").fetchone()
         assert int(dict(dataset_count)["n"]) == 1
-
-
-@pytest.fixture
-def postgres_database() -> Iterator[ApiDatabase]:
-    url = os.environ.get("TEST_DATABASE_URL")
-    if not url:
-        pytest.skip("TEST_DATABASE_URL is unset")
-    try:
-        import psycopg
-        from psycopg import sql
-    except ImportError:
-        pytest.skip("psycopg is required for postgres-marked tests")
-
-    parsed = urlsplit(url)
-    database_name = f"f01_{uuid4().hex}"
-    admin_url = urlunsplit(
-        (str(parsed.scheme), str(parsed.netloc), "/postgres", str(parsed.query), str(parsed.fragment))
-    )
-    test_url = urlunsplit(
-        (
-            str(parsed.scheme),
-            str(parsed.netloc),
-            f"/{database_name}",
-            str(parsed.query),
-            str(parsed.fragment),
-        )
-    )
-    admin = psycopg.connect(admin_url, autocommit=True)
-    try:
-        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database_name)))
-    finally:
-        admin.close()
-    database = ApiDatabase(test_url)
-    try:
-        yield database
-    finally:
-        cleanup = psycopg.connect(admin_url, autocommit=True)
-        try:
-            cleanup.execute(
-                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
-                    sql.Identifier(database_name)
-                )
-            )
-        finally:
-            cleanup.close()
 
 
 @pytest.mark.postgres
