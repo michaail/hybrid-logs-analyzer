@@ -120,7 +120,7 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 - **Risk:** Pretrained PyTorch `.pt` artifacts must enter only through a trusted
   Publisher package contract; the control plane must not treat upload as license to
   deserialize untrusted model code.
-- **Status:** ready
+- **Status:** in-progress
 
 ## Slices
 

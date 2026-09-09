@@ -1,0 +1,30 @@
+{
+  "model_identifier": "attribute-gae",
+  "version": "fixture",
+  "source_compatibility": "hdfs",
+  "format": "attribute-aware-gae-v1",
+  "metrics": {},
+  "architecture": {
+    "node_dim": 2,
+    "edge_dim": 1,
+    "hidden_dim": 2,
+    "latent_dim": 2,
+    "gine_aggregation": "sum",
+    "node_transformation": "mlp",
+    "edge_mean": [0.0],
+    "edge_std": [0.2]
+  },
+  "scoring": {
+    "alpha": 1.0,
+    "beta": 1.0,
+    "gamma": 0.0
+  },
+  "files": {
+    "artifact": "model.pt",
+    "evidence": "evidence.json",
+    "checksums": {
+      "model.pt": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "evidence.json": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  }
+}

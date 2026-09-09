@@ -22,7 +22,7 @@ select = ["E4", "E7", "E9", "F"]
 [tool.mypy]
 python_version = "3.10"
 plugins = ["pydantic.mypy"]
-files = ["src/api", "src/modules", "tests", "run_ablation.py"]
+files = ["src/api", "src/modules", "src/model_validator", "tests", "run_ablation.py"]
 exclude = ["src/notebooks"]
 check_untyped_defs = true
 explicit_package_bases = true

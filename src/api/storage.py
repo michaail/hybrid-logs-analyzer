@@ -92,6 +92,8 @@ class ApiDatabase:
         """Yield a transaction with foreign keys enabled when using SQLite."""
         connection = self._open_connection()
         try:
+            if not self._uses_postgresql:
+                connection.execute("BEGIN")
             yield _DatabaseConnection(connection, uses_postgresql=self._uses_postgresql)
             connection.commit()
         except BaseException as error:
@@ -114,7 +116,11 @@ class ApiDatabase:
         if not self._uses_postgresql:
             database_path = _sqlite_path_from_url(self.database_url)
             database_path.parent.mkdir(parents=True, exist_ok=True)
-            connection = sqlite3.connect(database_path, check_same_thread=False)
+            connection = sqlite3.connect(
+                database_path,
+                check_same_thread=False,
+                isolation_level=None,
+            )
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
             return connection
@@ -473,6 +479,8 @@ class ApiDatabase:
         version: str,
         pipeline_run_id: str,
         artifact_reference: str,
+        package_reference: str,
+        artifact_sha256: str,
         metrics_json: str,
         metadata_json: str,
         external_evaluation_evidence: str,
@@ -488,8 +496,8 @@ class ApiDatabase:
                 """
                 INSERT INTO model_versions (
                     id, project_id, model_identifier, version, source_compatibility, status,
-                    pipeline_run_id, artifact_reference, metrics_json, metadata_json,
-                    external_evaluation_evidence, created_at, storage_kind, checksum
+                    pipeline_run_id, artifact_reference, package_reference, artifact_sha256,
+                    metrics_json, metadata_json, external_evaluation_evidence, created_at
                 ) VALUES (?, ?, ?, ?, 'hdfs', 'eligible', ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
@@ -499,6 +507,8 @@ class ApiDatabase:
                     version,
                     pipeline_run_id,
                     artifact_reference,
+                    package_reference,
+                    artifact_sha256,
                     metrics_json,
                     metadata_json,
                     external_evaluation_evidence,

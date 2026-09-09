@@ -51,6 +51,8 @@ export interface ModelVersion {
   status: ModelStatus;
   pipeline_run_id: string;
   artifact_reference: string;
+  package_reference: string;
+  artifact_sha256: string;
   metrics: Record<string, unknown>;
   metadata: Record<string, unknown>;
   external_evaluation_evidence: string;
@@ -125,11 +127,7 @@ export interface AuditEvent {
 }
 
 export interface ModelRegistration {
-  model_identifier: string;
-  version: string;
-  pipeline_run_manifest: string;
-  external_evaluation_evidence: string;
-  metadata: Record<string, unknown>;
+  package_reference: string;
 }
 
 interface TokenResponse {
@@ -184,7 +182,7 @@ export class ApiClient {
   registerModel(projectId: string, model: ModelRegistration): Promise<ModelVersion> {
     return this.request<ModelVersion>(`/projects/${projectId}/models`, {
       method: "POST",
-      body: { ...model, source_compatibility: "hdfs" },
+      body: model,
     });
   }
 
@@ -313,13 +311,29 @@ export class ApiClient {
 async function responseMessage(response: Response): Promise<string> {
   try {
     const payload: unknown = await response.json();
-    if (
-      typeof payload === "object" &&
-      payload !== null &&
-      "detail" in payload &&
-      typeof payload.detail === "string"
-    ) {
-      return payload.detail;
+    if (typeof payload === "object" && payload !== null && "detail" in payload) {
+      const detail = payload.detail;
+      if (typeof detail === "string") {
+        return detail;
+      }
+      if (
+        typeof detail === "object" &&
+        detail !== null &&
+        "issues" in detail &&
+        Array.isArray(detail.issues)
+      ) {
+        const reasons = detail.issues
+          .map((issue) => {
+            if (typeof issue === "object" && issue !== null && "reason" in issue) {
+              return String(issue.reason);
+            }
+            return "";
+          })
+          .filter((reason) => reason.length > 0);
+        if (reasons.length > 0) {
+          return reasons.join(" ");
+        }
+      }
     }
   } catch {
     // A non-JSON response is still a useful HTTP failure.
