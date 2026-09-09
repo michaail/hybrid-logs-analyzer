@@ -518,12 +518,20 @@ class ApiDatabase:
         run_id = str(uuid4())
         created_at = utc_now()
         with self.session() as connection:
+            dataset_id = None
+            if status != "rejected":
+                dataset_id = self._workspace_dataset_id(
+                    connection,
+                    project_id=project_id,
+                    object_reference=log_reference,
+                )
             connection.execute(
                 """
                 INSERT INTO analysis_runs (
                     id, project_id, model_version_id, requested_by_user_id, source_compatibility,
-                    log_reference, status, validation_report_json, error_code, created_at, completed_at
-                ) VALUES (?, ?, ?, ?, 'hdfs', ?, ?, ?, ?, ?, ?)
+                    log_reference, status, validation_report_json, error_code, created_at,
+                    completed_at, dataset_id
+                ) VALUES (?, ?, ?, ?, 'hdfs', ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -536,9 +544,39 @@ class ApiDatabase:
                     error_code,
                     created_at,
                     completed_at,
+                    dataset_id,
                 ),
             )
         return self.get_analysis_run(UUID(run_id)) or self._missing_record("analysis run")
+
+    def _workspace_dataset_id(
+        self,
+        connection: _DatabaseConnection,
+        *,
+        project_id: UUID,
+        object_reference: str,
+    ) -> str:
+        """Return the project-owned workspace dataset for a stored object reference."""
+        row = connection.execute(
+            """
+            SELECT id FROM datasets
+            WHERE project_id = ? AND storage_kind = 'workspace' AND object_reference = ?
+            """,
+            (str(project_id), object_reference),
+        ).fetchone()
+        if row is not None:
+            return str(dict(row)["id"])
+        dataset_id = str(uuid4())
+        connection.execute(
+            """
+            INSERT INTO datasets (
+                id, project_id, storage_kind, object_reference, checksum,
+                source_compatibility, created_at
+            ) VALUES (?, ?, 'workspace', ?, NULL, 'hdfs', ?)
+            """,
+            (dataset_id, str(project_id), object_reference, utc_now()),
+        )
+        return dataset_id
 
     def get_analysis_run(self, run_id: UUID) -> DatabaseRow | None:
         return self._one("SELECT * FROM analysis_runs WHERE id = ?", (str(run_id),))

@@ -511,14 +511,14 @@ rows are test-only until S-02/S-03.
 
 #### Automated
 
-- [ ] 1.1 Focused migration tests prove `001`+`002` are idempotent on SQLite and create the datasets table, kinded pointer columns, expanded run statuses, and `results_summary_json`
-- [ ] 1.2 `@pytest.mark.postgres` tests skip when `TEST_DATABASE_URL` is unset and, when set, apply `002` and pass `healthcheck`
-- [ ] 1.3 `ruff check src/api tests` and `mypy` pass
+- [x] 1.1 Focused migration tests prove `001`+`002` are idempotent on SQLite and create the datasets table, kinded pointer columns, expanded run statuses, and `results_summary_json`
+- [x] 1.2 `@pytest.mark.postgres` tests skip when `TEST_DATABASE_URL` is unset and, when set, apply `002` and pass `healthcheck`
+- [x] 1.3 `ruff check src/api tests` and `mypy` pass
 
 #### Manual
 
-- [ ] 1.4 `docker compose -f tests/postgres/compose.yaml up -d`, set `TEST_DATABASE_URL`, run `python -m src.api.migrations` against that URL, and confirm `schema_migrations` lists `002`
-- [ ] 1.5 Remove the disposable local SQLite file at `.api/analyzer.db` if present, rerun migrations, and confirm the API still bootstraps
+- [x] 1.4 `docker compose -f tests/postgres/compose.yaml up -d`, set `TEST_DATABASE_URL`, run `python -m src.api.migrations` against that URL, and confirm `schema_migrations` lists `002`
+- [x] 1.5 Remove the disposable local SQLite file at `.api/analyzer.db` if present, rerun migrations, and confirm the API still bootstraps
 
 ### Phase 2: Repository ownership, audit, and status CAS
 
