@@ -606,12 +606,12 @@ empty database. Do not rewrite `001_initial_schema`.
 
 #### Automated
 
-- [ ] 1.1 Focused package tests cover the directory contract cases above, including extra-file acceptance and pickle-payload rejection
-- [ ] 1.2 `ruff check src/modules/model_package.py tests/test_model_package.py` and `mypy` pass
+- [x] 1.1 Focused package tests cover the directory contract cases above, including extra-file acceptance and pickle-payload rejection
+- [x] 1.2 `ruff check src/modules/model_package.py tests/test_model_package.py` and `mypy` pass
 
 #### Manual
 
-- [ ] 1.3 Inspect one valid fixture directory and one invalid fixture and confirm the validator report paths match the broken fields
+- [x] 1.3 Inspect one valid fixture directory and one invalid fixture and confirm the validator report paths match the broken fields
 
 ### Phase 2: Zip transport and resource limits
 

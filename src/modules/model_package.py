@@ -1,0 +1,493 @@
+"""Trusted HDFS model-package contract. This module never imports PyTorch."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import re
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+MANIFEST_NAME = "manifest.json"
+DEFAULT_ARTIFACT_NAME = "model.pt"
+DEFAULT_EVIDENCE_NAME = "evidence.json"
+PACKAGE_FORMAT = "attribute-aware-gae-v1"
+_IDENTIFIER_PATTERN = r"^[A-Za-z0-9_.-]+$"
+_SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_FLOAT_DTYPES = frozenset({"float32", "torch.float32"})
+_INT64_DTYPES = frozenset({"int64", "torch.int64"})
+_SHA256_PATTERN_COMPILED = re.compile(_SHA256_PATTERN)
+StateDictLoader = Callable[[Path], Mapping[str, Any]]
+
+
+class PackageModel(BaseModel):
+    """Closed package-schema base that rejects unspecified fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PackageValidationIssue(PackageModel):
+    """One completeness or compatibility failure inside a package."""
+
+    path: str
+    reason: str
+
+
+class PackageValidationResult(PackageModel):
+    """Collected eligibility report; valid only when issues is empty."""
+
+    valid: bool
+    issues: list[PackageValidationIssue]
+
+    @classmethod
+    def from_issues(cls, issues: Sequence[PackageValidationIssue]) -> PackageValidationResult:
+        collected = list(issues)
+        return cls(valid=len(collected) == 0, issues=collected)
+
+
+class PackageMetrics(BaseModel):
+    """Evaluation metrics; only best_threshold is required for eligibility."""
+
+    model_config = ConfigDict(extra="allow")
+
+    best_threshold: float
+
+    @field_validator("best_threshold")
+    @classmethod
+    def _finite_threshold(cls, value: float) -> float:
+        if isinstance(value, bool) or not math.isfinite(value):
+            raise ValueError("best_threshold must be a finite number")
+        return value
+
+
+class PackageArchitecture(PackageModel):
+    """Declared AttributeAwareGAE reconstruction fields."""
+
+    node_dim: int = Field(gt=0)
+    edge_dim: int = Field(ge=0)
+    hidden_dim: int = Field(gt=0)
+    latent_dim: int = Field(gt=0)
+    gine_aggregation: Literal["sum", "mean", "max"]
+    node_transformation: Literal["mlp", "linear"]
+    edge_mean: list[float] | None = None
+    edge_std: list[float] | None = None
+
+    @model_validator(mode="after")
+    def _paired_normalization(self) -> PackageArchitecture:
+        if (self.edge_mean is None) != (self.edge_std is None):
+            raise ValueError("edge_mean and edge_std must both be null or both present")
+        if self.edge_mean is None or self.edge_std is None:
+            return self
+        if len(self.edge_mean) != self.edge_dim or len(self.edge_std) != self.edge_dim:
+            raise ValueError("edge_mean and edge_std must each have length edge_dim")
+        if any(not math.isfinite(value) for value in (*self.edge_mean, *self.edge_std)):
+            raise ValueError("edge_mean and edge_std values must be finite")
+        if any(value < 0.1 for value in self.edge_std):
+            raise ValueError("each edge_std value must be at least 0.1")
+        return self
+
+
+class PackageScoring(PackageModel):
+    """Anomaly-score mix weights used with the declared threshold."""
+
+    alpha: float
+    beta: float
+    gamma: float
+
+    @model_validator(mode="after")
+    def _non_negative_and_active(self) -> PackageScoring:
+        values = (self.alpha, self.beta, self.gamma)
+        if any(isinstance(value, bool) or not math.isfinite(value) or value < 0 for value in values):
+            raise ValueError("alpha, beta, and gamma must be finite and non-negative")
+        if not any(value > 0 for value in values):
+            raise ValueError("at least one of alpha, beta, or gamma must be positive")
+        return self
+
+
+class PackageFiles(PackageModel):
+    """Declared package members and their SHA-256 digests."""
+
+    artifact: str
+    evidence: str
+    checksums: dict[str, str]
+
+    @field_validator("artifact", "evidence")
+    @classmethod
+    def _relative_posix_path(cls, value: str) -> str:
+        return _require_relative_posix(value)
+
+    @field_validator("checksums")
+    @classmethod
+    def _lowercase_checksums(cls, value: dict[str, str]) -> dict[str, str]:
+        for path, digest in value.items():
+            _require_relative_posix(path)
+            if not _SHA256_PATTERN_COMPILED.match(digest):
+                raise ValueError(f"checksum for {path} must be a lowercase hex SHA-256")
+        return value
+
+    @model_validator(mode="after")
+    def _checksums_match_declared_files(self) -> PackageFiles:
+        expected = {self.artifact, self.evidence}
+        actual = set(self.checksums)
+        if actual != expected:
+            raise ValueError("checksums must contain exactly the artifact and evidence paths")
+        return self
+
+
+class ModelPackageManifest(PackageModel):
+    """Closed inspectable contract for an HDFS AttributeAwareGAE package."""
+
+    model_identifier: str = Field(min_length=1, max_length=128, pattern=_IDENTIFIER_PATTERN)
+    version: str = Field(min_length=1, max_length=64, pattern=_IDENTIFIER_PATTERN)
+    source_compatibility: Literal["hdfs"]
+    format: Literal["attribute-aware-gae-v1"]
+    pipeline_run_id: str | None = Field(default=None, min_length=1)
+    metrics: PackageMetrics
+    architecture: PackageArchitecture
+    scoring: PackageScoring
+    files: PackageFiles
+
+
+class TensorSpec:
+    """Expected tensor identity for one state-dict entry."""
+
+    def __init__(self, shape: tuple[int, ...], dtypes: frozenset[str]) -> None:
+        self.shape = shape
+        self.dtypes = dtypes
+
+
+def expected_state_dict_spec(architecture: PackageArchitecture) -> dict[str, TensorSpec]:
+    """Return the attribute-aware-gae-v1 tensor key set for an architecture."""
+
+    node_dim = architecture.node_dim
+    edge_dim = architecture.edge_dim
+    hidden_dim = architecture.hidden_dim
+    latent_dim = architecture.latent_dim
+    float_spec = _FLOAT_DTYPES
+    int_spec = _INT64_DTYPES
+    spec: dict[str, TensorSpec] = {
+        "raw_node_norm.running_mean": TensorSpec((node_dim,), float_spec),
+        "raw_node_norm.running_var": TensorSpec((node_dim,), float_spec),
+        "raw_node_norm.num_batches_tracked": TensorSpec((), int_spec),
+        "node_proj.weight": TensorSpec((hidden_dim, node_dim), float_spec),
+        "node_proj.bias": TensorSpec((hidden_dim,), float_spec),
+        "edge_proj.weight": TensorSpec((hidden_dim, edge_dim), float_spec),
+        "edge_proj.bias": TensorSpec((hidden_dim,), float_spec),
+        "encoder_conv.eps": TensorSpec((1,), float_spec),
+        "encoder_conv.lin.weight": TensorSpec((hidden_dim, hidden_dim), float_spec),
+        "encoder_conv.lin.bias": TensorSpec((hidden_dim,), float_spec),
+        "node_decoder.0.weight": TensorSpec((hidden_dim, latent_dim), float_spec),
+        "node_decoder.0.bias": TensorSpec((hidden_dim,), float_spec),
+        "node_decoder.2.weight": TensorSpec((node_dim, hidden_dim), float_spec),
+        "node_decoder.2.bias": TensorSpec((node_dim,), float_spec),
+        "edge_decoder.0.weight": TensorSpec((hidden_dim, latent_dim * 2), float_spec),
+        "edge_decoder.0.bias": TensorSpec((hidden_dim,), float_spec),
+        "edge_decoder.2.weight": TensorSpec((edge_dim, hidden_dim), float_spec),
+        "edge_decoder.2.bias": TensorSpec((edge_dim,), float_spec),
+    }
+    if architecture.node_transformation == "mlp":
+        spec.update(
+            {
+                "encoder_conv.nn.0.weight": TensorSpec((hidden_dim, hidden_dim), float_spec),
+                "encoder_conv.nn.0.bias": TensorSpec((hidden_dim,), float_spec),
+                "encoder_conv.nn.1.weight": TensorSpec((hidden_dim,), float_spec),
+                "encoder_conv.nn.1.bias": TensorSpec((hidden_dim,), float_spec),
+                "encoder_conv.nn.1.running_mean": TensorSpec((hidden_dim,), float_spec),
+                "encoder_conv.nn.1.running_var": TensorSpec((hidden_dim,), float_spec),
+                "encoder_conv.nn.1.num_batches_tracked": TensorSpec((), int_spec),
+                "encoder_conv.nn.3.weight": TensorSpec((latent_dim, hidden_dim), float_spec),
+                "encoder_conv.nn.3.bias": TensorSpec((latent_dim,), float_spec),
+            }
+        )
+    else:
+        spec.update(
+            {
+                "encoder_conv.nn.weight": TensorSpec((latent_dim, hidden_dim), float_spec),
+                "encoder_conv.nn.bias": TensorSpec((latent_dim,), float_spec),
+            }
+        )
+    return spec
+
+
+def validate_state_dict(
+    payload: Mapping[str, Any],
+    architecture: PackageArchitecture,
+) -> list[PackageValidationIssue]:
+    """Check a loaded mapping against the static AttributeAwareGAE tensor schema."""
+
+    issues: list[PackageValidationIssue] = []
+    if not payload:
+        issues.append(
+            PackageValidationIssue(
+                path="files.artifact",
+                reason="Artifact state dict must be a non-empty tensor mapping.",
+            )
+        )
+        return issues
+    expected = expected_state_dict_spec(architecture)
+    actual_keys = set(payload)
+    expected_keys = set(expected)
+    for missing in sorted(expected_keys - actual_keys):
+        issues.append(
+            PackageValidationIssue(
+                path=f"files.artifact:{missing}",
+                reason="Required state-dict tensor is missing.",
+            )
+        )
+    for unexpected in sorted(actual_keys - expected_keys):
+        issues.append(
+            PackageValidationIssue(
+                path=f"files.artifact:{unexpected}",
+                reason="Unexpected state-dict entry is not part of attribute-aware-gae-v1.",
+            )
+        )
+    for key in sorted(actual_keys & expected_keys):
+        issues.extend(_check_tensor_entry(key, payload[key], expected[key]))
+    return issues
+
+
+def validate_model_package(
+    root: Path,
+    *,
+    load_state_dict: StateDictLoader | None = None,
+) -> PackageValidationResult:
+    """Collect every directory-package eligibility failure without running a model.
+
+    The tensor probe runs only when ``load_state_dict`` is provided. The isolated
+    package-validation process always supplies a ``weights_only=True`` loader.
+    This module never imports PyTorch.
+    """
+
+    issues: list[PackageValidationIssue] = []
+    package_root = root.expanduser()
+    if not package_root.is_dir():
+        return PackageValidationResult.from_issues(
+            [
+                PackageValidationIssue(
+                    path=str(root),
+                    reason="Package root must be an existing directory.",
+                )
+            ]
+        )
+
+    manifest, manifest_issues = _load_manifest(package_root)
+    issues.extend(manifest_issues)
+    if manifest is None:
+        return PackageValidationResult.from_issues(issues)
+
+    declared_paths = (manifest.files.artifact, manifest.files.evidence)
+    resolved: dict[str, Path] = {}
+    for relative in declared_paths:
+        located, path_issues = _resolve_declared_file(package_root, relative)
+        issues.extend(path_issues)
+        if located is not None:
+            resolved[relative] = located
+
+    for relative, digest in manifest.files.checksums.items():
+        located = resolved.get(relative)
+        if located is None:
+            continue
+        actual = _sha256_file(located)
+        if actual != digest:
+            issues.append(
+                PackageValidationIssue(
+                    path=relative,
+                    reason="SHA-256 does not match files.checksums.",
+                )
+            )
+
+    evidence_path = resolved.get(manifest.files.evidence)
+    if evidence_path is not None:
+        issues.extend(_validate_evidence_file(evidence_path, manifest.files.evidence))
+
+    artifact_relative = manifest.files.artifact
+    if not artifact_relative.endswith(".pt"):
+        issues.append(
+            PackageValidationIssue(
+                path="files.artifact",
+                reason="Artifact path must end with .pt.",
+            )
+        )
+    artifact_path = resolved.get(artifact_relative)
+    if artifact_path is not None and load_state_dict is not None:
+        issues.extend(_probe_state_dict(artifact_path, artifact_relative, manifest, load_state_dict))
+
+    return PackageValidationResult.from_issues(issues)
+
+
+def _load_manifest(
+    package_root: Path,
+) -> tuple[ModelPackageManifest | None, list[PackageValidationIssue]]:
+    manifest_path = package_root / MANIFEST_NAME
+    if not manifest_path.is_file():
+        return None, [
+            PackageValidationIssue(path=MANIFEST_NAME, reason="manifest.json is missing.")
+        ]
+    try:
+        raw_text = manifest_path.read_text(encoding="utf-8")
+        payload = json.loads(raw_text)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None, [
+            PackageValidationIssue(
+                path=MANIFEST_NAME,
+                reason="manifest.json must be readable UTF-8 JSON.",
+            )
+        ]
+    if not isinstance(payload, dict):
+        return None, [
+            PackageValidationIssue(
+                path=MANIFEST_NAME,
+                reason="manifest.json must contain a JSON object.",
+            )
+        ]
+    try:
+        return ModelPackageManifest.model_validate(payload), []
+    except Exception as error:
+        return None, _pydantic_issues(error)
+
+
+def _pydantic_issues(error: Exception) -> list[PackageValidationIssue]:
+    issues: list[PackageValidationIssue] = []
+    errors = getattr(error, "errors", None)
+    if callable(errors):
+        for item in errors():
+            location = ".".join(str(part) for part in item.get("loc", ()))
+            path = f"{MANIFEST_NAME}:{location}" if location else MANIFEST_NAME
+            issues.append(
+                PackageValidationIssue(
+                    path=path,
+                    reason=str(item.get("msg", "Manifest field is invalid.")),
+                )
+            )
+        if issues:
+            return issues
+    return [
+        PackageValidationIssue(path=MANIFEST_NAME, reason="manifest.json does not match the contract.")
+    ]
+
+
+def _resolve_declared_file(
+    package_root: Path,
+    relative: str,
+) -> tuple[Path | None, list[PackageValidationIssue]]:
+    try:
+        _require_relative_posix(relative)
+    except ValueError as error:
+        return None, [PackageValidationIssue(path=relative, reason=str(error))]
+    candidate = (package_root / relative).resolve()
+    try:
+        candidate.relative_to(package_root.resolve())
+    except ValueError:
+        return None, [
+            PackageValidationIssue(
+                path=relative,
+                reason="Declared path must stay inside the package root.",
+            )
+        ]
+    if not candidate.is_file() or candidate.is_symlink():
+        return None, [
+            PackageValidationIssue(
+                path=relative,
+                reason="Declared path must be a regular file inside the package.",
+            )
+        ]
+    return candidate, []
+
+
+def _validate_evidence_file(path: Path, relative: str) -> list[PackageValidationIssue]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return [
+            PackageValidationIssue(
+                path=relative,
+                reason="Evidence file must be readable UTF-8 JSON.",
+            )
+        ]
+    if not isinstance(payload, dict) or not payload:
+        return [
+            PackageValidationIssue(
+                path=relative,
+                reason="Evidence file must be a non-empty JSON object.",
+            )
+        ]
+    return []
+
+
+def _probe_state_dict(
+    artifact_path: Path,
+    relative: str,
+    manifest: ModelPackageManifest,
+    load_state_dict: StateDictLoader,
+) -> list[PackageValidationIssue]:
+    try:
+        payload = load_state_dict(artifact_path)
+    except Exception:
+        return [
+            PackageValidationIssue(
+                path=relative,
+                reason="Artifact must load as a weights_only tensor state dict.",
+            )
+        ]
+    if not isinstance(payload, Mapping):
+        return [
+            PackageValidationIssue(
+                path=relative,
+                reason="Artifact state dict must be a mapping of tensor values.",
+            )
+        ]
+    return validate_state_dict(payload, manifest.architecture)
+
+
+def _check_tensor_entry(key: str, value: Any, spec: TensorSpec) -> list[PackageValidationIssue]:
+    issues: list[PackageValidationIssue] = []
+    shape = getattr(value, "shape", None)
+    dtype = getattr(value, "dtype", None)
+    if shape is None or dtype is None:
+        return [
+            PackageValidationIssue(
+                path=f"files.artifact:{key}",
+                reason="State-dict entry must be a tensor.",
+            )
+        ]
+    actual_shape = tuple(int(dim) for dim in shape)
+    if actual_shape != spec.shape:
+        issues.append(
+            PackageValidationIssue(
+                path=f"files.artifact:{key}",
+                reason=f"Tensor shape {actual_shape} does not match {spec.shape}.",
+            )
+        )
+    dtype_name = _dtype_name(dtype)
+    if dtype_name not in spec.dtypes:
+        issues.append(
+            PackageValidationIssue(
+                path=f"files.artifact:{key}",
+                reason=f"Tensor dtype {dtype_name} is not permitted for this key.",
+            )
+        )
+    return issues
+
+
+def _dtype_name(dtype: object) -> str:
+    name = getattr(dtype, "name", None)
+    if isinstance(name, str):
+        return name
+    text = str(dtype)
+    return text.removeprefix("torch.") if text.startswith("torch.") else text
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _require_relative_posix(value: str) -> str:
+    if not value or value.startswith("/") or "\\" in value or Path(value).is_absolute():
+        raise ValueError("path must be a relative POSIX path")
+    if ".." in Path(value).parts:
+        raise ValueError("path must not contain '..' segments")
+    return value
