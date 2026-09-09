@@ -479,24 +479,24 @@ must be planned separately as an additive, backward-compatible change.
 
 #### Automated
 
-- [x] 3.1 `cd frontend && npm run build` completes without TypeScript or production-build errors
-- [x] 3.2 Phase 2 endpoint-level API contract tests pass before this client is connected to the new lifecycle routes
+- [x] 3.1 `cd frontend && npm run build` completes without TypeScript or production-build errors — 5c3ce7e
+- [x] 3.2 Phase 2 endpoint-level API contract tests pass before this client is connected to the new lifecycle routes — 5c3ce7e
 
 #### Manual
 
-- [x] 3.3 As an Administrator, provision a lowercase Operator and Publisher into the selected project; sign in as each and confirm they see only their authorized project behavior
-- [x] 3.4 Grant an existing account a different role in a second project, change a role, revoke its first membership, deactivate/reactivate the account, and confirm each result refreshes correctly
-- [x] 3.5 Confirm an Operator/Publisher cannot reach account controls and that failed form submissions present a safe, actionable server message
+- [x] 3.3 As an Administrator, provision a lowercase Operator and Publisher into the selected project; sign in as each and confirm they see only their authorized project behavior — 5c3ce7e
+- [x] 3.4 Grant an existing account a different role in a second project, change a role, revoke its first membership, deactivate/reactivate the account, and confirm each result refreshes correctly — 5c3ce7e
+- [x] 3.5 Confirm an Operator/Publisher cannot reach account controls and that failed form submissions present a safe, actionable server message — 5c3ce7e
 
 ### Phase 4: Verification and documentation
 
 #### Automated
 
-- [ ] 4.1 `python -m pytest tests/test_api.py tests/test_artifacts.py` passes
-- [ ] 4.2 `ruff check src tests scripts run_ablation.py` and `mypy` pass
-- [ ] 4.3 `cd frontend && npm ci && npm run build` passes
+- [x] 4.1 `python -m pytest tests/test_api.py tests/test_artifacts.py` passes
+- [x] 4.2 `ruff check src tests scripts run_ablation.py` and `mypy` pass
+- [x] 4.3 `cd frontend && npm ci && npm run build` passes
 
 #### Manual
 
-- [ ] 4.4 Follow the documented local bootstrap, Administrator sign-in, project-account provisioning, membership change, revocation, deactivation, reactivation, and audit review flow without using undocumented database operations
-- [ ] 4.5 Review the docs and OpenAPI to confirm there is no public sign-up route or Administrator-creation control in the browser workflow
+- [x] 4.4 Follow the documented local bootstrap, Administrator sign-in, project-account provisioning, membership change, revocation, deactivation, reactivation, and audit review flow without using undocumented database operations
+- [x] 4.5 Review the docs and OpenAPI to confirm there is no public sign-up route or Administrator-creation control in the browser workflow
