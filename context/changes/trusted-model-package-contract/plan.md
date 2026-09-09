@@ -643,11 +643,11 @@ empty database. Do not rewrite `001_initial_schema`.
 
 #### Automated
 
-- [x] 4.1 `python -m pytest tests/test_api.py tests/test_artifacts.py tests/test_model_package.py` passes outside the cases that only fail from native sandbox limits
-- [x] 4.2 `ruff check src tests scripts run_ablation.py` and `mypy` pass
-- [x] 4.3 `cd frontend && npm ci && npm run build` passes
+- [x] 4.1 `python -m pytest tests/test_api.py tests/test_artifacts.py tests/test_model_package.py` passes outside the cases that only fail from native sandbox limits — 2d7428b
+- [x] 4.2 `ruff check src tests scripts run_ablation.py` and `mypy` pass — 2d7428b
+- [x] 4.3 `cd frontend && npm ci && npm run build` passes — 2d7428b
 
 #### Manual
 
-- [x] 4.4 Follow README to register a hand-built HDFS package, publish it, and observe `not_supported` analysis with no `torch.load(..., weights_only=False)` on the uploaded artifact
-- [x] 4.5 Review OpenAPI and the UI warning to confirm bytes are still not uploaded from the browser
+- [x] 4.4 Follow README to register a hand-built HDFS package, publish it, and observe `not_supported` analysis with no `torch.load(..., weights_only=False)` on the uploaded artifact — 2d7428b
+- [x] 4.5 Review OpenAPI and the UI warning to confirm bytes are still not uploaded from the browser — 2d7428b
