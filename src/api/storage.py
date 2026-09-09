@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Generator, Iterable
 from contextlib import contextmanager
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 from uuid import UUID, uuid4
+
+from src.api.security import canonical_username
 
 
 def utc_now() -> str:
@@ -102,7 +105,11 @@ class ApiDatabase:
         return self._one("SELECT * FROM users WHERE id = ?", (str(user_id),))
 
     def get_user_by_username(self, username: str) -> DatabaseRow | None:
-        return self._one("SELECT * FROM users WHERE username = ?", (username,))
+        return self._one("SELECT * FROM users WHERE username = ?", (username.lower(),))
+
+    def list_users(self) -> list[DatabaseRow]:
+        """List all provisioned accounts with their non-secret lifecycle state."""
+        return self._all("SELECT * FROM users ORDER BY username")
 
     def create_user(
         self,
@@ -116,12 +123,136 @@ class ApiDatabase:
         with self.session() as connection:
             connection.execute(
                 """
-                INSERT INTO users (id, username, password_hash, is_administrator, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO users (id, username, password_hash, is_administrator, is_active, created_at)
+                VALUES (?, ?, ?, ?, 1, ?)
                 """,
-                (user_id, username, password_hash, int(is_administrator), created_at),
+                (user_id, canonical_username(username), password_hash, int(is_administrator), created_at),
             )
         return self.get_user_by_id(UUID(user_id)) or self._missing_record("user")
+
+    def create_administrator(self, *, username: str, password_hash: str) -> DatabaseRow:
+        """Create the CLI-bootstrapped Administrator and its audit event atomically."""
+        canonical = canonical_username(username)
+        user_id = str(uuid4())
+        created_at = utc_now()
+        with self.session() as connection:
+            connection.execute(
+                """
+                INSERT INTO users (id, username, password_hash, is_administrator, is_active, created_at)
+                VALUES (?, ?, ?, 1, 1, ?)
+                """,
+                (user_id, canonical, password_hash, created_at),
+            )
+            self._insert_audit_event(
+                connection,
+                actor_user_id=None,
+                project_id=None,
+                action="user.bootstrapped",
+                resource_type="user",
+                resource_id=UUID(user_id),
+                details_json=json.dumps({"username": canonical}, sort_keys=True),
+            )
+        return self.get_user_by_id(UUID(user_id)) or self._missing_record("user")
+
+    def provision_project_account(
+        self,
+        *,
+        username: str,
+        password_hash: str,
+        project_id: UUID,
+        role: str,
+        actor_user_id: UUID,
+    ) -> tuple[DatabaseRow, DatabaseRow]:
+        """Create a non-administrator account and its initial membership atomically."""
+        canonical = canonical_username(username)
+        user_id = str(uuid4())
+        created_at = utc_now()
+        with self.session() as connection:
+            connection.execute(
+                """
+                INSERT INTO users (id, username, password_hash, is_administrator, is_active, created_at)
+                VALUES (?, ?, ?, 0, 1, ?)
+                """,
+                (user_id, canonical, password_hash, created_at),
+            )
+            connection.execute(
+                """
+                INSERT INTO memberships (project_id, user_id, role)
+                VALUES (?, ?, ?)
+                """,
+                (str(project_id), user_id, role),
+            )
+            self._insert_audit_event(
+                connection,
+                actor_user_id=actor_user_id,
+                project_id=None,
+                action="user.provisioned",
+                resource_type="user",
+                resource_id=UUID(user_id),
+                details_json=json.dumps(
+                    {"is_administrator": False, "username": canonical},
+                    sort_keys=True,
+                ),
+            )
+            self._insert_audit_event(
+                connection,
+                actor_user_id=actor_user_id,
+                project_id=project_id,
+                action="project.membership_granted",
+                resource_type="membership",
+                resource_id=UUID(user_id),
+                details_json=json.dumps(
+                    {"role": role, "user_id": user_id, "username": canonical},
+                    sort_keys=True,
+                ),
+            )
+        user = self.get_user_by_id(UUID(user_id)) or self._missing_record("user")
+        membership = self.get_membership(project_id, UUID(user_id)) or self._missing_record("membership")
+        return user, membership
+
+    def set_user_active(
+        self,
+        *,
+        user_id: UUID,
+        is_active: bool,
+        actor_user_id: UUID,
+    ) -> DatabaseRow | None:
+        """Activate or deactivate a non-administrator account with an audit event."""
+        with self.session() as connection:
+            row = connection.execute("SELECT * FROM users WHERE id = ?", (str(user_id),)).fetchone()
+            if row is None:
+                return None
+            user = dict(row)
+            if user["is_administrator"]:
+                raise ValueError(
+                    "Administrator accounts cannot be changed through account activation."
+                )
+            previous_is_active = bool(user["is_active"])
+            if previous_is_active == is_active:
+                raise ValueError(
+                    "Account is already active." if is_active else "Account is already deactivated."
+                )
+            connection.execute(
+                "UPDATE users SET is_active = ? WHERE id = ?",
+                (int(is_active), str(user_id)),
+            )
+            self._insert_audit_event(
+                connection,
+                actor_user_id=actor_user_id,
+                project_id=None,
+                action="user.reactivated" if is_active else "user.deactivated",
+                resource_type="user",
+                resource_id=user_id,
+                details_json=json.dumps(
+                    {
+                        "is_active": is_active,
+                        "previous_is_active": previous_is_active,
+                        "username": str(user["username"]),
+                    },
+                    sort_keys=True,
+                ),
+            )
+        return self.get_user_by_id(user_id) or self._missing_record("user")
 
     def create_project(self, name: str) -> DatabaseRow:
         project_id = str(uuid4())
@@ -130,6 +261,26 @@ class ApiDatabase:
             connection.execute(
                 "INSERT INTO projects (id, name, created_at) VALUES (?, ?, ?)",
                 (project_id, name, created_at),
+            )
+        return self.get_project(UUID(project_id)) or self._missing_record("project")
+
+    def create_project_with_audit(self, *, name: str, actor_user_id: UUID) -> DatabaseRow:
+        """Create a project and its audit event in one transaction."""
+        project_id = str(uuid4())
+        created_at = utc_now()
+        with self.session() as connection:
+            connection.execute(
+                "INSERT INTO projects (id, name, created_at) VALUES (?, ?, ?)",
+                (project_id, name, created_at),
+            )
+            self._insert_audit_event(
+                connection,
+                actor_user_id=actor_user_id,
+                project_id=UUID(project_id),
+                action="project.created",
+                resource_type="project",
+                resource_id=UUID(project_id),
+                details_json=json.dumps({"name": name}, sort_keys=True),
             )
         return self.get_project(UUID(project_id)) or self._missing_record("project")
 
@@ -161,6 +312,117 @@ class ApiDatabase:
                 (str(project_id), str(user_id), role),
             )
         return self.get_membership(project_id, user_id) or self._missing_record("membership")
+
+    def create_membership(
+        self,
+        *,
+        project_id: UUID,
+        user_id: UUID,
+        role: str,
+        actor_user_id: UUID,
+    ) -> DatabaseRow:
+        """Grant a missing membership; a duplicate raises DatabaseIntegrityError."""
+        with self.session() as connection:
+            row = connection.execute("SELECT * FROM users WHERE id = ?", (str(user_id),)).fetchone()
+            username = str(dict(row)["username"]) if row is not None else str(user_id)
+            connection.execute(
+                """
+                INSERT INTO memberships (project_id, user_id, role)
+                VALUES (?, ?, ?)
+                """,
+                (str(project_id), str(user_id), role),
+            )
+            self._insert_audit_event(
+                connection,
+                actor_user_id=actor_user_id,
+                project_id=project_id,
+                action="project.membership_granted",
+                resource_type="membership",
+                resource_id=user_id,
+                details_json=json.dumps(
+                    {"role": role, "user_id": str(user_id), "username": username},
+                    sort_keys=True,
+                ),
+            )
+        return self.get_membership(project_id, user_id) or self._missing_record("membership")
+
+    def update_membership_role(
+        self,
+        *,
+        project_id: UUID,
+        user_id: UUID,
+        role: str,
+        actor_user_id: UUID,
+    ) -> DatabaseRow | None:
+        """Change an existing membership role and record the before/after transition."""
+        with self.session() as connection:
+            row = connection.execute(
+                "SELECT * FROM memberships WHERE project_id = ? AND user_id = ?",
+                (str(project_id), str(user_id)),
+            ).fetchone()
+            if row is None:
+                return None
+            previous_role = str(dict(row)["role"])
+            if previous_role == role:
+                raise ValueError(f"Account already has the {role!r} role in this project.")
+            connection.execute(
+                """
+                UPDATE memberships SET role = ?
+                WHERE project_id = ? AND user_id = ?
+                """,
+                (role, str(project_id), str(user_id)),
+            )
+            self._insert_audit_event(
+                connection,
+                actor_user_id=actor_user_id,
+                project_id=project_id,
+                action="project.membership_role_changed",
+                resource_type="membership",
+                resource_id=user_id,
+                details_json=json.dumps(
+                    {
+                        "new_role": role,
+                        "previous_role": previous_role,
+                        "user_id": str(user_id),
+                    },
+                    sort_keys=True,
+                ),
+            )
+        return self.get_membership(project_id, user_id) or self._missing_record("membership")
+
+    def revoke_membership(
+        self,
+        *,
+        project_id: UUID,
+        user_id: UUID,
+        actor_user_id: UUID,
+    ) -> bool:
+        """Delete a membership; return whether one existed. Audit is transactional."""
+        with self.session() as connection:
+            row = connection.execute(
+                "SELECT * FROM memberships WHERE project_id = ? AND user_id = ?",
+                (str(project_id), str(user_id)),
+            ).fetchone()
+            if row is None:
+                return False
+            previous_role = str(dict(row)["role"])
+            connection.execute(
+                "DELETE FROM memberships WHERE project_id = ? AND user_id = ?",
+                (str(project_id), str(user_id)),
+            )
+            self._insert_audit_event(
+                connection,
+                actor_user_id=actor_user_id,
+                project_id=project_id,
+                action="project.membership_revoked",
+                resource_type="membership",
+                resource_id=user_id,
+                details_json=json.dumps(
+                    {"previous_role": previous_role, "user_id": str(user_id)},
+                    sort_keys=True,
+                ),
+            )
+        return True
 
     def get_membership(self, project_id: UUID, user_id: UUID) -> DatabaseRow | None:
         return self._one(
@@ -306,29 +568,61 @@ class ApiDatabase:
         details_json: str,
     ) -> None:
         with self.session() as connection:
-            connection.execute(
-                """
-                INSERT INTO audit_events (
-                    id, actor_user_id, project_id, action, resource_type, resource_id,
-                    details_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    str(uuid4()),
-                    str(actor_user_id) if actor_user_id else None,
-                    str(project_id) if project_id else None,
-                    action,
-                    resource_type,
-                    str(resource_id) if resource_id else None,
-                    details_json,
-                    utc_now(),
-                ),
+            self._insert_audit_event(
+                connection,
+                actor_user_id=actor_user_id,
+                project_id=project_id,
+                action=action,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                details_json=details_json,
             )
+
+    def _insert_audit_event(
+        self,
+        connection: _DatabaseConnection,
+        *,
+        actor_user_id: UUID | None,
+        project_id: UUID | None,
+        action: str,
+        resource_type: str,
+        resource_id: UUID | None,
+        details_json: str,
+    ) -> None:
+        """Insert one audit event inside the caller's transaction."""
+        connection.execute(
+            """
+            INSERT INTO audit_events (
+                id, actor_user_id, project_id, action, resource_type, resource_id,
+                details_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                str(actor_user_id) if actor_user_id else None,
+                str(project_id) if project_id else None,
+                action,
+                resource_type,
+                str(resource_id) if resource_id else None,
+                details_json,
+                utc_now(),
+            ),
+        )
 
     def list_audit_events(self, project_id: UUID) -> list[DatabaseRow]:
         return self._all(
             "SELECT * FROM audit_events WHERE project_id = ? ORDER BY created_at DESC",
             (str(project_id),),
+        )
+
+    def list_user_audit_events(self) -> list[DatabaseRow]:
+        """List Administrator-visible user-resource events across all projects."""
+        return self._all(
+            """
+            SELECT * FROM audit_events
+            WHERE resource_type = 'user'
+            ORDER BY created_at DESC
+            """
         )
 
     def _one(self, query: str, parameters: Iterable[object]) -> DatabaseRow | None:

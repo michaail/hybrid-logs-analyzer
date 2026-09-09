@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,7 +13,7 @@ from fastapi.testclient import TestClient
 from src.api.bootstrap import bootstrap_administrator
 from src.api.main import create_app
 from src.api.settings import ApiSettings
-from src.api.storage import ApiDatabase
+from src.api.storage import ApiDatabase, DatabaseIntegrityError
 
 PASSWORD = "correct-horse-battery-staple"
 
@@ -105,6 +107,173 @@ def test_migrations_are_idempotent_and_database_is_healthy(tmp_path: Path) -> No
     database.apply_migrations()
 
     assert database.healthcheck()
+
+
+def test_fresh_schema_enforces_canonical_lowercase_active_users(tmp_path: Path) -> None:
+    database = ApiDatabase(f"sqlite:///{tmp_path / 'api.db'}")
+    database.apply_migrations()
+
+    with database.session() as connection:
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(users)").fetchall()
+        }
+    assert {"id", "username", "password_hash", "is_administrator", "is_active", "created_at"} <= columns
+
+    user = database.create_user(
+        username="Mixed.Case_User",
+        password_hash="not-a-real-hash",
+        is_administrator=False,
+    )
+    assert user["username"] == "mixed.case_user"
+    assert bool(user["is_active"])
+    assert database.get_user_by_username("MIXED.CASE_USER") is not None
+
+    with pytest.raises(DatabaseIntegrityError):
+        database.create_user(
+            username="MIXED.CASE_USER",
+            password_hash="not-a-real-hash",
+            is_administrator=False,
+        )
+
+    with database.session() as connection:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO users (id, username, password_hash, is_administrator, created_at)
+                VALUES ('raw-id', 'RAWUPPER', 'x', 0, 'now')
+                """
+            )
+
+
+def test_bootstrap_normalizes_username_and_audits_atomically(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    settings = ApiSettings(
+        database_url=f"sqlite:///{tmp_path / 'api.db'}",
+        jwt_secret="test-secret-not-for-production",
+        trusted_workspace_root=workspace,
+    )
+    ApiDatabase(settings.database_url).apply_migrations()
+
+    user_id = bootstrap_administrator(settings, "ADMIN", PASSWORD)
+
+    database = ApiDatabase(settings.database_url)
+    user = database.get_user_by_id(user_id)
+    assert user is not None
+    assert user["username"] == "admin"
+    assert bool(user["is_administrator"])
+    assert bool(user["is_active"])
+    assert database.get_user_by_username("AdMiN") is not None
+
+    with pytest.raises(ValueError):
+        bootstrap_administrator(settings, "Admin", PASSWORD)
+    with pytest.raises(ValueError):
+        bootstrap_administrator(settings, "not valid!", PASSWORD)
+
+    with database.session() as connection:
+        audit_rows = connection.execute(
+            "SELECT action, details_json FROM audit_events WHERE resource_type = 'user'"
+        ).fetchall()
+    assert [dict(row)["action"] for row in audit_rows] == ["user.bootstrapped"]
+    assert json.loads(dict(audit_rows[0])["details_json"])["username"] == "admin"
+
+
+def _fail_audit_event(*args: object, **kwargs: object) -> None:
+    raise RuntimeError("forced audit failure")
+
+
+def test_provisioning_rolls_back_when_audit_insert_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = ApiDatabase(f"sqlite:///{tmp_path / 'api.db'}")
+    database.apply_migrations()
+    project = database.create_project("incident-a")
+    actor = database.create_user(
+        username="actor", password_hash="x", is_administrator=True
+    )
+    monkeypatch.setattr(ApiDatabase, "_insert_audit_event", _fail_audit_event)
+
+    with pytest.raises(RuntimeError, match="forced audit failure"):
+        database.provision_project_account(
+            username="New.User",
+            password_hash="x",
+            project_id=UUID(project["id"]),
+            role="operator",
+            actor_user_id=UUID(actor["id"]),
+        )
+
+    assert database.get_user_by_username("new.user") is None
+    assert database.list_memberships(UUID(project["id"])) == []
+
+
+def test_membership_lifecycle_rolls_back_when_audit_insert_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = ApiDatabase(f"sqlite:///{tmp_path / 'api.db'}")
+    database.apply_migrations()
+    project = database.create_project("incident-a")
+    actor = database.create_user(username="actor", password_hash="x", is_administrator=True)
+    member = database.create_user(username="member", password_hash="x", is_administrator=False)
+    project_id = UUID(project["id"])
+    actor_id = UUID(actor["id"])
+    member_id = UUID(member["id"])
+
+    monkeypatch.setattr(ApiDatabase, "_insert_audit_event", _fail_audit_event)
+    with pytest.raises(RuntimeError, match="forced audit failure"):
+        database.create_membership(
+            project_id=project_id, user_id=member_id, role="operator", actor_user_id=actor_id
+        )
+    assert database.get_membership(project_id, member_id) is None
+
+    monkeypatch.undo()
+    database.create_membership(
+        project_id=project_id, user_id=member_id, role="operator", actor_user_id=actor_id
+    )
+
+    monkeypatch.setattr(ApiDatabase, "_insert_audit_event", _fail_audit_event)
+    with pytest.raises(RuntimeError, match="forced audit failure"):
+        database.update_membership_role(
+            project_id=project_id, user_id=member_id, role="publisher", actor_user_id=actor_id
+        )
+    membership = database.get_membership(project_id, member_id)
+    assert membership is not None
+    assert membership["role"] == "operator"
+
+    with pytest.raises(RuntimeError, match="forced audit failure"):
+        database.revoke_membership(project_id=project_id, user_id=member_id, actor_user_id=actor_id)
+    assert database.get_membership(project_id, member_id) is not None
+
+
+def test_account_activation_rolls_back_when_audit_insert_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = ApiDatabase(f"sqlite:///{tmp_path / 'api.db'}")
+    database.apply_migrations()
+    actor = database.create_user(username="actor", password_hash="x", is_administrator=True)
+    member = database.create_user(username="member", password_hash="x", is_administrator=False)
+    actor_id = UUID(actor["id"])
+    member_id = UUID(member["id"])
+
+    monkeypatch.setattr(ApiDatabase, "_insert_audit_event", _fail_audit_event)
+    with pytest.raises(RuntimeError, match="forced audit failure"):
+        database.set_user_active(user_id=member_id, is_active=False, actor_user_id=actor_id)
+    member_after = database.get_user_by_id(member_id)
+    assert member_after is not None
+    assert bool(member_after["is_active"])
+
+
+def test_project_creation_rolls_back_when_audit_insert_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = ApiDatabase(f"sqlite:///{tmp_path / 'api.db'}")
+    database.apply_migrations()
+    actor = database.create_user(username="actor", password_hash="x", is_administrator=True)
+
+    monkeypatch.setattr(ApiDatabase, "_insert_audit_event", _fail_audit_event)
+    with pytest.raises(RuntimeError, match="forced audit failure"):
+        database.create_project_with_audit(name="incident-a", actor_user_id=UUID(actor["id"]))
+    assert database.list_projects_for_user(UUID(actor["id"]), True) == []
 
 
 def test_health_requires_a_reachable_database(api: ApiFixture) -> None:

@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+
+from src.api.security import canonical_username
+
+
+def _canonical_username(value: str) -> str:
+    return canonical_username(value)
+
+
+CanonicalUsername = Annotated[str, AfterValidator(_canonical_username)]
+"""A login identity validated against the canonical lowercase username contract."""
 
 
 class ProjectRole(str, Enum):
@@ -40,7 +50,7 @@ class ApiModel(BaseModel):
 class LoginRequest(ApiModel):
     """Credentials for an administrator-provisioned account."""
 
-    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    username: CanonicalUsername
     password: str = Field(min_length=12, max_length=256)
 
 
@@ -55,7 +65,7 @@ class TokenResponse(ApiModel):
 class UserCreate(ApiModel):
     """Administrator request to provision an account."""
 
-    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    username: CanonicalUsername
     password: str = Field(min_length=12, max_length=256)
     is_administrator: bool = False
 
