@@ -55,13 +55,17 @@ def test_scrub_environment_removes_application_secrets() -> None:
     environ = {
         "API_JWT_SECRET": "secret",
         "DATABASE_URL": "sqlite:///tmp.db",
+        "AZURE_OPENAI_API_KEY": "azure",
         "AWS_SECRET_ACCESS_KEY": "aws",
-        "SAFE_FLAG": "keep",
+        "PATH": "/usr/bin",
+        "SAFE_FLAG": "drop-me",
     }
     removed = scrub_environment(environ)
     assert "API_JWT_SECRET" in removed
+    assert "AZURE_OPENAI_API_KEY" in removed
     assert "DATABASE_URL" not in environ
-    assert environ["SAFE_FLAG"] == "keep"
+    assert "SAFE_FLAG" not in environ
+    assert environ["PATH"] == "/usr/bin"
 
 
 def test_report_json_is_typed_and_stable() -> None:

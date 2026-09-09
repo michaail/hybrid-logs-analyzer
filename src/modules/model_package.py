@@ -442,7 +442,15 @@ def _resolve_declared_file(
         _require_relative_posix(relative)
     except ValueError as error:
         return None, [PackageValidationIssue(path=relative, reason=str(error))]
-    candidate = (package_root / relative).resolve()
+    located = package_root / relative
+    if located.is_symlink() or not located.is_file():
+        return None, [
+            PackageValidationIssue(
+                path=relative,
+                reason="Declared path must be a regular file inside the package.",
+            )
+        ]
+    candidate = located.resolve()
     try:
         candidate.relative_to(package_root.resolve())
     except ValueError:
@@ -450,13 +458,6 @@ def _resolve_declared_file(
             PackageValidationIssue(
                 path=relative,
                 reason="Declared path must stay inside the package root.",
-            )
-        ]
-    if not candidate.is_file() or candidate.is_symlink():
-        return None, [
-            PackageValidationIssue(
-                path=relative,
-                reason="Declared path must be a regular file inside the package.",
             )
         ]
     return candidate, []
@@ -631,6 +632,7 @@ def _extract_zip_archive(
     destination: Path,
 ) -> list[PackageValidationIssue]:
     destination_root = destination.resolve()
+    written_total = 0
     for info in archive.infolist():
         target, issue = _resolved_zip_member_path(destination_root, info.filename)
         if issue is not None:
@@ -639,12 +641,40 @@ def _extract_zip_archive(
             target.mkdir(parents=True, exist_ok=True)
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        with archive.open(info) as source, target.open("wb") as output:
-            while True:
-                chunk = source.read(1024 * 1024)
-                if not chunk:
-                    break
-                output.write(chunk)
+        declared = max(info.file_size, 0)
+        member_written = 0
+        try:
+            with archive.open(info) as source, target.open("wb") as output:
+                while True:
+                    chunk = source.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    next_member = member_written + len(chunk)
+                    next_total = written_total + len(chunk)
+                    if next_member > declared:
+                        return [
+                            PackageValidationIssue(
+                                path=info.filename,
+                                reason="Zip member exceeds its declared uncompressed size.",
+                            )
+                        ]
+                    if next_total > MAX_ZIP_UNCOMPRESSED_BYTES:
+                        return [
+                            PackageValidationIssue(
+                                path=archive.filename or "package.zip",
+                                reason="Zip archive exceeds the 96 MiB uncompressed size limit.",
+                            )
+                        ]
+                    output.write(chunk)
+                    member_written = next_member
+                    written_total = next_total
+        except zipfile.BadZipFile:
+            return [
+                PackageValidationIssue(
+                    path=info.filename,
+                    reason="Zip member is corrupt or exceeds its declared uncompressed size.",
+                )
+            ]
     return []
 
 

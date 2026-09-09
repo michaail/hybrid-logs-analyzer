@@ -16,6 +16,7 @@ from src.api.bootstrap import bootstrap_administrator
 from src.api.main import create_app
 from src.api.settings import ApiSettings
 from src.api.storage import ApiDatabase, DatabaseIntegrityError
+from src.api.validation import ValidationError, admit_validated_package
 from tests.test_model_package import _write_package
 
 PASSWORD = "correct-horse-battery-staple"
@@ -122,7 +123,26 @@ def _register(client: TestClient, headers: dict[str, str], project_id: object, p
     )
 
 
+def test_admit_validated_package_rejects_artifact_symlink(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    reference = _stage_package(workspace)
+    package = workspace / reference
+    target = package / "model.pt"
+    real = package / "real.pt"
+    target.replace(real)
+    target.symlink_to(real.name)
+    with pytest.raises(ValidationError, match="regular file"):
+        admit_validated_package(package, workspace)
+
+
 def test_migrations_are_idempotent_and_database_is_healthy(tmp_path: Path) -> None:
+    database = ApiDatabase(f"sqlite:///{tmp_path / 'api.db'}")
+
+    database.apply_migrations()
+    database.apply_migrations()
+
+    assert database.healthcheck()
     database = ApiDatabase(f"sqlite:///{tmp_path / 'api.db'}")
 
     database.apply_migrations()
@@ -146,6 +166,28 @@ def test_model_package_admission_migration_adds_columns(tmp_path: Path) -> None:
     assert "package_reference" in columns
     assert "artifact_sha256" in columns
     assert "002_model_package_admission" in applied
+
+
+def test_model_package_admission_migration_retries_after_partial_apply(tmp_path: Path) -> None:
+    database = ApiDatabase(f"sqlite:///{tmp_path / 'api.db'}")
+    database.apply_migrations()
+    with database.session() as connection:
+        connection.execute(
+            "DELETE FROM schema_migrations WHERE version = ?",
+            ("002_model_package_admission",),
+        )
+    database.apply_migrations()
+    with database.session() as connection:
+        applied = {
+            str(row["version"])
+            for row in connection.execute("SELECT version FROM schema_migrations").fetchall()
+        }
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(model_versions)").fetchall()
+        }
+    assert "002_model_package_admission" in applied
+    assert {"package_reference", "artifact_sha256"} <= columns
 
 
 def test_fresh_schema_enforces_canonical_lowercase_active_users(tmp_path: Path) -> None:
@@ -776,6 +818,56 @@ def test_registration_rejects_dummy_artifact_with_probe_failure(tmp_path: Path) 
         )
         assert "torch" not in sys.modules
         assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+
+
+@pytest.mark.ml
+def test_http_admission_uses_real_validator_probe(tmp_path: Path) -> None:
+    import pickle
+
+    import torch
+
+    from src.modules.model_package import PackageArchitecture, expected_state_dict_spec
+    from tests.test_model_package import TINY_ARCHITECTURE
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    settings = _api_settings(
+        tmp_path,
+        workspace,
+        command=(sys.executable, "-m", "src.model_validator"),
+    )
+    ApiDatabase(settings.database_url).apply_migrations()
+    bootstrap_administrator(settings, "admin", PASSWORD)
+    with TestClient(create_app(settings)) as client:
+        api = ApiFixture(client=client, workspace=workspace, settings=settings)
+        _, headers, project_id = _publisher_client(api)
+
+        dummy_reference = _stage_package(workspace, name="dummy")
+        dummy = _register(client, headers, project_id, dummy_reference)
+        assert dummy.status_code == 422, dummy.text
+        assert any("model.pt" in issue["path"] for issue in dummy.json()["detail"]["issues"])
+
+        class Boom:
+            def __reduce__(self) -> tuple[object, tuple[str]]:
+                return exec, ("raise RuntimeError('pickle-executed')",)
+
+        pickle_bytes = pickle.dumps(Boom())
+        pickle_reference = _stage_package(workspace, name="pickle", artifact=pickle_bytes)
+        pickled = _register(client, headers, project_id, pickle_reference)
+        assert pickled.status_code == 422, pickled.text
+
+        architecture = PackageArchitecture.model_validate(TINY_ARCHITECTURE)
+        payload = {
+            key: torch.zeros(spec.shape, dtype=torch.int64 if "int64" in spec.dtypes else torch.float32)
+            for key, spec in expected_state_dict_spec(architecture).items()
+        }
+        artifact = tmp_path / "valid.pt"
+        torch.save(payload, artifact)
+        valid_reference = _stage_package(workspace, name="valid", artifact=artifact.read_bytes())
+        created = _register(client, headers, project_id, valid_reference)
+        assert created.status_code == 201, created.text
+        assert created.json()["status"] == "eligible"
+        assert client.get(f"/projects/{project_id}/models", headers=headers).json()[0]["status"] == "eligible"
 
 
 def test_unavailable_validator_does_not_insert_a_model(tmp_path: Path) -> None:

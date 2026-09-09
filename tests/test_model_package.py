@@ -205,6 +205,17 @@ def test_sha256_mismatch_is_rejected(tmp_path: Path) -> None:
     _assert_has_issue(result, "model.pt")
 
 
+def test_declared_symlink_is_rejected(tmp_path: Path) -> None:
+    package = _write_package(tmp_path)
+    target = package / "model.pt"
+    real = package / "real.pt"
+    target.replace(real)
+    target.symlink_to(real.name)
+    result = validate_model_package(package)
+    assert not result.valid
+    _assert_has_issue(result, "regular file")
+
+
 def test_missing_declared_file_is_rejected(tmp_path: Path) -> None:
     package = _write_package(tmp_path)
     (package / "model.pt").unlink()
@@ -370,6 +381,29 @@ def test_nested_archive_member_is_rejected(tmp_path: Path) -> None:
     assert not result.valid
     _assert_has_issue(result, "Nested archive")
     assert not (tmp_path / "payload.tar").exists()
+
+
+def test_zip_extract_rejects_lying_uncompressed_size(tmp_path: Path) -> None:
+    archive = tmp_path / "lie.zip"
+    payload = b"A" * 8192
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as handle:
+        handle.writestr("bomb.bin", payload)
+    data = bytearray(archive.read_bytes())
+    claimed = (1).to_bytes(4, "little")
+    local = data.find(b"PK\x03\x04")
+    central = data.find(b"PK\x01\x02")
+    assert local != -1 and central != -1
+    data[local + 22 : local + 26] = claimed
+    data[central + 24 : central + 28] = claimed
+    archive.write_bytes(data)
+    with zipfile.ZipFile(archive) as handle:
+        assert handle.infolist()[0].file_size == 1
+
+    result = validate_model_package_source(archive)
+    assert not result.valid
+    _assert_has_issue(result, "declared uncompressed size")
+    written = {path.name for path in tmp_path.rglob("*") if path.is_file()}
+    assert written == {"lie.zip"}
 
 
 def test_oversize_uncompressed_zip_is_rejected(tmp_path: Path) -> None:

@@ -10,28 +10,57 @@ from typing import Any
 
 from src.modules.model_package import PackageValidationResult, validate_model_package
 
-_SECRET_ENV_NAMES = frozenset(
+_ALLOWED_ENV_KEYS = frozenset(
     {
-        "API_JWT_SECRET",
-        "DATABASE_URL",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "BUCKET_ACCESS_KEY_ID",
-        "BUCKET_SECRET_ACCESS_KEY",
-        "RAILWAY_TOKEN",
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_MESSAGES",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "PYTHONPATH",
+        "VIRTUAL_ENV",
+        "PYTHONHOME",
+        "PYTHONNOUSERSITE",
+        "PYTHONSAFEPATH",
+        "USER",
+        "LOGNAME",
+        "TZ",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
     }
 )
-_SECRET_ENV_PREFIXES = ("API_", "AWS_", "RAILWAY_", "BUCKET_")
+
+
+def allowed_validator_environment(
+    environ: Mapping[str, str] | None = None,
+    *,
+    code_root: Path | None = None,
+) -> dict[str, str]:
+    """Return a copy of environ containing only variables the validator may see."""
+
+    source = os.environ if environ is None else environ
+    env = {key: value for key, value in source.items() if key in _ALLOWED_ENV_KEYS}
+    if code_root is not None:
+        pythonpath = str(code_root.resolve())
+        existing = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = pythonpath if not existing else pythonpath + os.pathsep + existing
+    return env
 
 
 def scrub_environment(environ: dict[str, str] | None = None) -> dict[str, str]:
-    """Remove application and object-storage secrets from a process environment."""
+    """Drop every variable the validator process is not allowed to keep."""
 
     target = os.environ if environ is None else environ
+    allowed = allowed_validator_environment(target)
     removed: dict[str, str] = {}
     for key in list(target):
-        if key in _SECRET_ENV_NAMES or key.startswith(_SECRET_ENV_PREFIXES):
+        if key not in allowed:
             removed[key] = target.pop(key)
     return removed
 

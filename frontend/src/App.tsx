@@ -553,7 +553,7 @@ function ModelsView({
       {models.length === 0 ? (
         <EmptyState
           title="No model versions yet"
-          description="A Publisher can register a complete HDFS pipeline manifest for this project."
+          description="A Publisher can register a pre-staged HDFS model package directory for this project."
         />
       ) : (
         <div className="model-grid">
@@ -611,8 +611,8 @@ function ModelsView({
       <div className="info-strip">
         <strong>Trusted artifact boundary</strong>
         <span>
-          This client registers a trusted pipeline manifest. It does not transmit model bytes,
-          and the API never deserializes uploaded artifacts.
+          This client registers a pre-staged HDFS model package directory. It does not transmit
+          model bytes, and the API never deserializes uploaded artifacts.
         </span>
       </div>
     </section>

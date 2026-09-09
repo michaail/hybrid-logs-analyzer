@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -12,25 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from src.api.settings import ApiSettings
+from src.model_validator.runtime import allowed_validator_environment
 from src.modules.model_package import MANIFEST_NAME, ModelPackageManifest, PackageValidationResult
 
 _HDFS_LINE = re.compile(
     r"^\d{6}\s+\d{6}\s+\S+\s+(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\s+\S+:\s+\S.+$"
 )
 _MAX_EXAMPLES = 20
-_SECRET_ENV_NAMES = frozenset(
-    {
-        "API_JWT_SECRET",
-        "DATABASE_URL",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "BUCKET_ACCESS_KEY_ID",
-        "BUCKET_SECRET_ACCESS_KEY",
-        "RAILWAY_TOKEN",
-    }
-)
-_SECRET_ENV_PREFIXES = ("API_", "AWS_", "RAILWAY_", "BUCKET_")
 
 
 class ValidationError(ValueError):
@@ -81,7 +70,7 @@ def run_private_package_validator(
             check=False,
             capture_output=True,
             text=True,
-            env=_scrubbed_subprocess_env(settings.code_root),
+            env=allowed_validator_environment(os.environ, code_root=settings.code_root),
             cwd=str(settings.code_root),
             timeout=120,
         )
@@ -107,13 +96,19 @@ def admit_validated_package(package_root: Path, workspace_root: Path) -> Admitte
         manifest = ModelPackageManifest.model_validate(payload)
     except Exception as error:
         raise ValidatorUnavailableError("Validated package manifest could not be re-read.") from error
-    artifact_path = (root / manifest.files.artifact).resolve()
+    declared_artifact = root / manifest.files.artifact
+    if declared_artifact.is_symlink() or not declared_artifact.is_file():
+        raise ValidationError("Package artifact must be a regular file.")
+    artifact_path = declared_artifact.resolve()
     try:
+        artifact_path.relative_to(root)
         artifact_path.relative_to(workspace)
     except ValueError as error:
         raise ValidationError("Package artifact must stay inside the trusted workspace.") from error
-    if not artifact_path.is_file() or artifact_path.is_symlink():
-        raise ValidationError("Package artifact must be a regular file.")
+    expected_sha256 = manifest.files.checksums[manifest.files.artifact]
+    actual_sha256 = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise ValidationError("Package artifact SHA-256 does not match the manifest.")
     return AdmittedModelPackage(
         model_identifier=manifest.model_identifier,
         version=manifest.version,
@@ -186,15 +181,3 @@ def _resolved_inside_workspace(reference: str, workspace_root: Path, resource_na
     except ValueError as error:
         raise ValidationError(f"{resource_name.capitalize()} must be inside the trusted workspace.") from error
     return resolved
-
-
-def _scrubbed_subprocess_env(code_root: Path) -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if _keep_env_key(key)}
-    pythonpath = str(code_root.resolve())
-    existing = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = pythonpath if not existing else pythonpath + os.pathsep + existing
-    return env
-
-
-def _keep_env_key(key: str) -> bool:
-    return key not in _SECRET_ENV_NAMES and not key.startswith(_SECRET_ENV_PREFIXES)

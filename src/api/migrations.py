@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from typing import Any
 
 from src.api.settings import ApiSettings
 from src.api.storage import ApiDatabase, utc_now
@@ -115,6 +116,12 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
 )
 _POSTGRES_MIGRATION_LOCK = 6_815_717_470_146_882_780
+_IDEMPOTENT_ADD_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "002_model_package_admission": (
+        ("model_versions", "package_reference"),
+        ("model_versions", "artifact_sha256"),
+    )
+}
 
 
 def apply_migrations(database: ApiDatabase) -> None:
@@ -134,8 +141,7 @@ def apply_migrations(database: ApiDatabase) -> None:
         for version, statements in _MIGRATIONS:
             if version in applied_versions:
                 continue
-            for statement in statements:
-                connection.execute(statement)
+            _apply_migration_statements(database, connection, version, statements)
             connection.execute(
                 "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                 (version, utc_now()),
@@ -148,6 +154,38 @@ def main() -> None:
     database = ApiDatabase(settings.database_url)
     database.apply_migrations()
     print("Database migrations completed.")
+
+
+def _apply_migration_statements(
+    database: ApiDatabase,
+    connection: Any,
+    version: str,
+    statements: tuple[str, ...],
+) -> None:
+    additions = _IDEMPOTENT_ADD_COLUMNS.get(version)
+    if additions is None:
+        for statement in statements:
+            connection.execute(statement)
+        return
+    for statement, (table, column) in zip(statements, additions, strict=True):
+        if column in _table_columns(database, connection, table):
+            continue
+        connection.execute(statement)
+
+
+def _table_columns(database: ApiDatabase, connection: Any, table: str) -> set[str]:
+    if database.uses_postgresql:
+        rows = connection.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = ?
+            """,
+            (table,),
+        ).fetchall()
+        return {str(row["column_name"]) for row in rows}
+    rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
+    return {str(row["name"]) for row in rows}
 
 
 def _applied_versions(rows: Iterable[Mapping[str, object]]) -> set[str]:
