@@ -257,6 +257,9 @@ def _upgrade_shared_state_sqlite(database: ApiDatabase) -> None:
         connection.execute("PRAGMA foreign_keys = OFF")
         connection.execute("BEGIN IMMEDIATE")
         executor = _SqliteRebuildConnection(connection)
+        if SHARED_STATE_VERSION in _read_applied_versions(executor):
+            connection.execute("ROLLBACK")
+            return
         _upgrade_shared_state(executor)
         _record_migration(executor, SHARED_STATE_VERSION)
         violations = connection.execute("PRAGMA foreign_key_check").fetchall()

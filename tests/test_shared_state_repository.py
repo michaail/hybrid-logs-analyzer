@@ -14,6 +14,7 @@ from src.api.storage import (
     DatabaseIntegrityError,
     DatasetPointerError,
     RunStatusConflict,
+    _DatabaseConnection,
     utc_now,
 )
 
@@ -76,6 +77,55 @@ def test_dataset_upsert_reuses_identity_and_allows_workspace_null_checksum(tmp_p
     )
     assert first["id"] == second["id"]
     assert first["checksum"] is None
+    assert [row["id"] for row in database.list_datasets(project_id)] == [first["id"]]
+    actions = [event["action"] for event in database.list_audit_events(project_id)]
+    assert actions.count("dataset.registered") == 1
+
+
+def test_dataset_insert_conflict_reuses_row_and_keeps_analysis_run(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    project_id, user_id, model_id = _seed_model(database)
+    first = database.upsert_dataset(
+        project_id=project_id,
+        storage_kind="workspace",
+        object_reference="data/stored-hdfs.log",
+        checksum=None,
+        actor_user_id=user_id,
+    )
+    skip_lookup = {"once": True}
+    original = _DatabaseConnection.execute
+
+    def execute(
+        self: _DatabaseConnection,
+        query: str,
+        parameters: tuple[object, ...] = (),
+    ) -> object:
+        compact = " ".join(query.split())
+        if skip_lookup["once"] and compact.startswith("SELECT id FROM datasets"):
+            skip_lookup["once"] = False
+
+            class _Empty:
+                def fetchone(self) -> None:
+                    return None
+
+            return _Empty()
+        return original(self, query, parameters)
+
+    with patch.object(_DatabaseConnection, "execute", execute):
+        run = database.create_analysis_run(
+            project_id=project_id,
+            model_version_id=model_id,
+            requested_by_user_id=user_id,
+            log_reference="data/stored-hdfs.log",
+            status="not_supported",
+            validation_report_json="{}",
+            error_code="INFERENCE_CONTRACT_UNAVAILABLE",
+            completed_at=utc_now(),
+            actor_user_id=user_id,
+        )
+
+    assert run["dataset_id"] == first["id"]
+    assert database.get_analysis_run(UUID(str(run["id"]))) is not None
     assert [row["id"] for row in database.list_datasets(project_id)] == [first["id"]]
     actions = [event["action"] for event in database.list_audit_events(project_id)]
     assert actions.count("dataset.registered") == 1

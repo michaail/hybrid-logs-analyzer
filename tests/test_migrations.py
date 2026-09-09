@@ -11,6 +11,7 @@ from src.api.migrations import (
     INITIAL_SCHEMA_VERSION,
     SHARED_STATE_VERSION,
     apply_migrations,
+    _upgrade_shared_state_sqlite,
 )
 from src.api.storage import ApiDatabase, DatabaseIntegrityError, utc_now
 
@@ -74,6 +75,14 @@ def test_shared_state_migration_is_idempotent_on_sqlite(tmp_path: Path) -> None:
     database.apply_migrations()
     database.apply_migrations()
 
+    _assert_shared_state_schema(database)
+    assert database.healthcheck()
+
+
+def test_sqlite_shared_state_upgrade_noops_when_already_recorded(tmp_path: Path) -> None:
+    database = ApiDatabase(f"sqlite:///{tmp_path / 'api.db'}")
+    database.apply_migrations()
+    _upgrade_shared_state_sqlite(database)
     _assert_shared_state_schema(database)
     assert database.healthcheck()
 

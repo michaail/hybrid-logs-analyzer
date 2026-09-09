@@ -376,7 +376,7 @@ Optional PostgreSQL dialect tests use a local Compose database and stay out of d
 
 ```bash
 docker compose -f tests/postgres/compose.yaml up -d
-TEST_DATABASE_URL=postgresql://analyzer:analyzer@127.0.0.1:5433/analyzer python -m pytest -m postgres
+TEST_DATABASE_URL=postgresql://analyzer:analyzer@127.0.0.1:5433/analyzer python -m pytest tests/test_migrations.py tests/test_shared_state_repository.py -m postgres
 ```
 
 ## React interface

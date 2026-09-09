@@ -462,7 +462,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     ) -> list[AnalysisRunResponse]:
         """List analysis runs scoped to an authorized project."""
         require_project_role(project_id, user, {ProjectRole.OPERATOR})
-        return [_analysis_run_from_store(database, item) for item in database.list_analysis_runs(project_id)]
+        return [_analysis_run_from_store(item) for item in database.list_analysis_runs(project_id)]
 
     @app.post(
         "/projects/{project_id}/analysis-runs",
@@ -513,7 +513,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     validation_report,
                 ),
             )
-            return _analysis_run_from_store(database, run)
+            return _analysis_run_from_store(run)
 
         if not validation_report["valid"]:
             run = database.create_analysis_run(
@@ -531,7 +531,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     validation_report,
                 ),
             )
-            return _analysis_run_from_store(database, run)
+            return _analysis_run_from_store(run)
 
         validation_report["execution"] = (
             "Not started: a non-executable HDFS inference artifact contract is not available."
@@ -551,7 +551,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 validation_report,
             ),
         )
-        return _analysis_run_from_store(database, run)
+        return _analysis_run_from_store(run)
 
     @app.get(
         "/projects/{project_id}/analysis-runs/{analysis_run_id}",
@@ -568,7 +568,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         run = database.get_analysis_run(analysis_run_id)
         if run is None or run["project_id"] != str(project_id):
             raise _not_found("Analysis run")
-        return _analysis_run_from_store(database, run)
+        return _analysis_run_from_store(run)
 
     @app.get(
         "/projects/{project_id}/analysis-runs/{analysis_run_id}/results",
@@ -585,7 +585,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         run = database.get_analysis_run(analysis_run_id)
         if run is None or run["project_id"] != str(project_id):
             raise _not_found("Analysis run")
-        response = _analysis_run_from_store(database, run)
+        response = _analysis_run_from_store(run)
         anomalies = [_anomaly_response(item) for item in database.list_anomaly_results(analysis_run_id)]
         if run["results_summary_json"]:
             summary = json.loads(str(run["results_summary_json"]))
@@ -766,10 +766,13 @@ def _model_response(row: Any) -> ModelVersionResponse:
     )
 
 
-def _analysis_run_from_store(database: ApiDatabase, row: Any) -> AnalysisRunResponse:
+def _analysis_run_from_store(row: Any) -> AnalysisRunResponse:
     dataset = None
-    if row["dataset_id"]:
-        dataset = database.get_dataset(UUID(str(row["dataset_id"])))
+    if row["dataset_storage_kind"] is not None:
+        dataset = {
+            "storage_kind": row["dataset_storage_kind"],
+            "checksum": row["dataset_checksum"],
+        }
     return _analysis_run_response(row, dataset)
 
 

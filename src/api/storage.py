@@ -45,6 +45,11 @@ _ANALYSIS_AUDIT_ACTIONS = {
     "rejected": "analysis.rejected",
     "not_supported": "analysis.not_supported",
 }
+_ANALYSIS_RUN_WITH_DATASET = """
+SELECT r.*, d.storage_kind AS dataset_storage_kind, d.checksum AS dataset_checksum
+FROM analysis_runs AS r
+LEFT JOIN datasets AS d ON d.id = r.dataset_id
+""".strip()
 
 
 DatabaseRow = dict[str, Any]
@@ -701,22 +706,36 @@ class ApiDatabase:
         if row is not None:
             return str(dict(row)["id"])
         dataset_id = str(uuid4())
-        connection.execute(
-            """
-            INSERT INTO datasets (
-                id, project_id, storage_kind, object_reference, checksum,
-                source_compatibility, created_at
-            ) VALUES (?, ?, ?, ?, ?, 'hdfs', ?)
-            """,
-            (
-                dataset_id,
-                str(project_id),
-                storage_kind,
-                object_reference,
-                pointer_checksum,
-                utc_now(),
-            ),
-        )
+        connection.execute("SAVEPOINT dataset_upsert")
+        try:
+            connection.execute(
+                """
+                INSERT INTO datasets (
+                    id, project_id, storage_kind, object_reference, checksum,
+                    source_compatibility, created_at
+                ) VALUES (?, ?, ?, ?, ?, 'hdfs', ?)
+                """,
+                (
+                    dataset_id,
+                    str(project_id),
+                    storage_kind,
+                    object_reference,
+                    pointer_checksum,
+                    utc_now(),
+                ),
+            )
+        except self._integrity_errors:
+            connection.execute("ROLLBACK TO SAVEPOINT dataset_upsert")
+            reused = connection.execute(
+                """
+                SELECT id FROM datasets
+                WHERE project_id = ? AND storage_kind = ? AND object_reference = ?
+                """,
+                (str(project_id), storage_kind, object_reference),
+            ).fetchone()
+            if reused is None:
+                raise
+            return str(dict(reused)["id"])
         if actor_user_id is not None:
             self._insert_audit_event(
                 connection,
@@ -850,11 +869,14 @@ class ApiDatabase:
             )
 
     def get_analysis_run(self, run_id: UUID) -> DatabaseRow | None:
-        return self._one("SELECT * FROM analysis_runs WHERE id = ?", (str(run_id),))
+        return self._one(
+            f"{_ANALYSIS_RUN_WITH_DATASET} WHERE r.id = ?",
+            (str(run_id),),
+        )
 
     def list_analysis_runs(self, project_id: UUID) -> list[DatabaseRow]:
         return self._all(
-            "SELECT * FROM analysis_runs WHERE project_id = ? ORDER BY created_at DESC",
+            f"{_ANALYSIS_RUN_WITH_DATASET} WHERE r.project_id = ? ORDER BY r.created_at DESC",
             (str(project_id),),
         )
 
