@@ -317,12 +317,13 @@ We will refactor the pipeline into a unified, modular Python CLI application, st
 The HDFS-only API provides administrator-provisioned accounts, project isolation, auditable
 model registration/publication, and analysis-run validation. It stores metadata in the database
 configured by `DATABASE_URL` and
-references artifacts in a controlled workspace; it never accepts model bytes or deserializes a
-model artifact.
+references artifacts in a controlled workspace; it never accepts model bytes and the public API
+process never deserializes a model artifact.
 
 Copy `.env.example` to `.env` and set a unique `API_JWT_SECRET`. Configure
 `DATABASE_URL` (for example, `sqlite:///.api/analyzer.db` locally) and
-`API_TRUSTED_WORKSPACE_ROOT` to an ignored workspace containing pipeline outputs:
+`API_TRUSTED_WORKSPACE_ROOT` to an ignored workspace that already contains a pre-staged
+model package directory (and stored HDFS datasets):
 
 ```bash
 source .venv/bin/activate
@@ -354,16 +355,49 @@ Accounts and memberships are not deleted.
 Project membership actions appear in `GET /projects/{project_id}/audit-events`.
 Bootstrap, provisioning, sign-in, deactivation, and reactivation appear in
 `GET /admin/audit-events`. The selected-project Administration view in the React
-client exposes the same workflow. Publishers register a pipeline-produced HDFS run
-manifest at `POST /projects/{project_id}/models` and explicitly publish the eligible
-version. Operators submit a trusted stored HDFS log reference at
-`POST /projects/{project_id}/analysis-runs`.
+client exposes the same workflow.
+
+### Trusted HDFS model package
+
+Registration accepts only a workspace-relative **directory** `package_reference`. Direct ZIP
+registration is rejected. The reusable library can unpack a zip under hard caps (32 MiB
+compressed, 96 MiB uncompressed, 64 members; zip-slip and nested archives are rejected),
+but a later storage slice must materialize declared files into an immutable directory
+before this API will register them. Browser upload of package bytes is unavailable.
+
+A hand-built package directory looks like this:
+
+```text
+packages/hdfs/attribute-gae-v1/
+  manifest.json
+  model.pt
+  evidence.json
+```
+
+`manifest.json` is a closed schema. Required fields include `model_identifier`, `version`,
+`source_compatibility` (`hdfs` only), `format` (`attribute-aware-gae-v1`), `metrics` with a
+finite `best_threshold`, `architecture` (`node_dim`, `edge_dim`, `hidden_dim`, `latent_dim`,
+`gine_aggregation`, `node_transformation`, paired `edge_mean`/`edge_std`), `scoring`
+(`alpha`, `beta`, `gamma`), and `files` with relative POSIX `artifact` / `evidence` paths plus
+lowercase hex SHA-256 checksums of those files. Extra undeclared files are ignored for
+eligibility. `evidence.json` must be a non-empty JSON object; its contents are not scored.
+
+`model.pt` must be a tensor-only `attribute-aware-gae-v1` state dict. A dedicated
+package-validation process loads it with `torch.load(..., map_location="cpu", weights_only=True)`
+and checks keys, shapes, and dtypes against the declared architecture. The public API never
+imports PyTorch, never calls `torch.load`, and never uses `weights_only=False` on an admitted
+artifact. Install `requirements-model-validator.txt` only for that isolated process; keep
+`requirements-api.txt` Torch-free. Do not regenerate `requirements-macos-intel.lock.txt`
+from the validator file.
+
+Publishers register with `POST /projects/{project_id}/models` using `{ "package_reference": "..." }`
+and explicitly publish an eligible version. Operators submit a trusted stored HDFS log
+reference at `POST /projects/{project_id}/analysis-runs`.
 
 Analysis runs fully validate the referenced HDFS file and record a durable rejection for invalid
 data. Valid files currently end in the explicit `not_supported` terminal state:
-the existing `.pt`/PyG pipeline artifacts do not yet have the required non-executable,
-isolated inference contract. This safety boundary is deliberate; adding executable inference
-requires a separate artifact-format and isolated-worker change.
+`INFERENCE_CONTRACT_UNAVAILABLE`. Isolated inference is a later slice; this change only
+admits a check-only package contract.
 
 ## React interface
 
@@ -384,6 +418,6 @@ The Railway image builds `frontend/dist` and serves it through FastAPI. See the
 provisioning, validation, rollback, and deferred-inference boundaries.
 
 The current API intentionally has no browser endpoint for log files or trained-model artifacts.
-The UI therefore uses trusted workspace references for stored HDFS logs and pipeline manifests,
-and clearly presents the current `not_supported` analysis outcome until the isolated inference
-artifact contract exists.
+The UI therefore uses trusted workspace references for stored HDFS logs and pre-staged package
+directories, and clearly presents the current `not_supported` analysis outcome until the isolated
+inference contract exists.

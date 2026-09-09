@@ -628,26 +628,26 @@ empty database. Do not rewrite `001_initial_schema`.
 
 #### Automated
 
-- [x] 3.1 `python -m pytest tests/test_api.py tests/test_model_package.py` passes, including structured 422 and retained `not_supported` analysis
-- [x] 3.2 Generated OpenAPI exposes `package_reference` registration and no `pipeline_run_manifest` field
-- [x] 3.3 `ruff check src/api tests/test_api.py` and `mypy` pass
-- [x] 3.4 `cd frontend && npm run build` completes without TypeScript errors
+- [x] 3.1 `python -m pytest tests/test_api.py tests/test_model_package.py` passes, including structured 422 and retained `not_supported` analysis — ae085a4
+- [x] 3.2 Generated OpenAPI exposes `package_reference` registration and no `pipeline_run_manifest` field — ae085a4
+- [x] 3.3 `ruff check src/api tests/test_api.py` and `mypy` pass — ae085a4
+- [x] 3.4 `cd frontend && npm run build` completes without TypeScript errors — ae085a4
 
 #### Manual
 
-- [x] 3.5 As a Publisher, register a valid fixture package through `/docs` and the React dialog; confirm `eligible` then explicit publish
-- [x] 3.6 Submit an invalid package and confirm the UI lists issue reasons
-- [x] 3.7 Confirm an Operator cannot register, and a published model still yields `not_supported` analysis
+- [x] 3.5 As a Publisher, register a valid fixture package through `/docs` and the React dialog; confirm `eligible` then explicit publish — ae085a4
+- [x] 3.6 Submit an invalid package and confirm the UI lists issue reasons — ae085a4
+- [x] 3.7 Confirm an Operator cannot register, and a published model still yields `not_supported` analysis — ae085a4
 
 ### Phase 4: Verification and documentation
 
 #### Automated
 
-- [ ] 4.1 `python -m pytest tests/test_api.py tests/test_artifacts.py tests/test_model_package.py` passes outside the cases that only fail from native sandbox limits
-- [ ] 4.2 `ruff check src tests scripts run_ablation.py` and `mypy` pass
-- [ ] 4.3 `cd frontend && npm ci && npm run build` passes
+- [x] 4.1 `python -m pytest tests/test_api.py tests/test_artifacts.py tests/test_model_package.py` passes outside the cases that only fail from native sandbox limits
+- [x] 4.2 `ruff check src tests scripts run_ablation.py` and `mypy` pass
+- [x] 4.3 `cd frontend && npm ci && npm run build` passes
 
 #### Manual
 
-- [ ] 4.4 Follow README to register a hand-built HDFS package, publish it, and observe `not_supported` analysis with no `torch.load(..., weights_only=False)` on the uploaded artifact
-- [ ] 4.5 Review OpenAPI and the UI warning to confirm bytes are still not uploaded from the browser
+- [x] 4.4 Follow README to register a hand-built HDFS package, publish it, and observe `not_supported` analysis with no `torch.load(..., weights_only=False)` on the uploaded artifact
+- [x] 4.5 Review OpenAPI and the UI warning to confirm bytes are still not uploaded from the browser

@@ -177,6 +177,6 @@ Input data, model artifacts, analysis runs, and results are isolated by project.
 ## Open Questions
 
 1. **What languages, frameworks, storage, and infrastructure make up the current notebook system?** — Owner: user. Resolve before downstream stack assessment.
-2. **What exact model-package format and artifact contract can a Publisher upload?** — Owner: user. Resolve before model-intake implementation.
+2. **What exact model-package format and artifact contract can a Publisher upload?** — Resolved: pretrained PyTorch `.pt` state dict inside the package contract (format, architecture, input-normalization/scoring configuration, metrics with `best_threshold`, HDFS compatibility, evidence file). Current registration accepts a pre-staged trusted-workspace directory; browser upload of package bytes is deferred.
 3. **Which notebook and configuration form the agreed parity baseline?** — Owner: user. Resolve before parity acceptance testing.
 4. **What is the current user scale of the notebook system?** — Owner: user. Resolve before downstream stack assessment.
