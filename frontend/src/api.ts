@@ -1,6 +1,13 @@
 export type ModelStatus = "eligible" | "published";
-export type AnalysisRunStatus = "queued" | "rejected" | "not_supported";
+export type AnalysisRunStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "rejected"
+  | "not_supported";
 export type ProjectRole = "operator" | "publisher";
+export type StorageKind = "workspace" | "object";
 
 export interface User {
   id: string;
@@ -44,12 +51,16 @@ export interface ModelVersion {
   status: ModelStatus;
   pipeline_run_id: string;
   artifact_reference: string;
+  package_reference: string;
+  artifact_sha256: string;
   metrics: Record<string, unknown>;
   metadata: Record<string, unknown>;
   external_evaluation_evidence: string;
   created_at: string;
   published_at: string | null;
   published_by_user_id: string | null;
+  storage_kind: StorageKind;
+  checksum: string | null;
 }
 
 export interface AnalysisRun {
@@ -64,6 +75,19 @@ export interface AnalysisRun {
   error_code: string | null;
   created_at: string;
   completed_at: string | null;
+  dataset_id: string | null;
+  storage_kind: StorageKind | null;
+  checksum: string | null;
+}
+
+export interface Dataset {
+  id: string;
+  project_id: string;
+  storage_kind: StorageKind;
+  object_reference: string;
+  checksum: string | null;
+  source_compatibility: "hdfs";
+  created_at: string;
 }
 
 export interface ValidationReport {
@@ -103,11 +127,7 @@ export interface AuditEvent {
 }
 
 export interface ModelRegistration {
-  model_identifier: string;
-  version: string;
-  pipeline_run_manifest: string;
-  external_evaluation_evidence: string;
-  metadata: Record<string, unknown>;
+  package_reference: string;
 }
 
 interface TokenResponse {
@@ -162,7 +182,7 @@ export class ApiClient {
   registerModel(projectId: string, model: ModelRegistration): Promise<ModelVersion> {
     return this.request<ModelVersion>(`/projects/${projectId}/models`, {
       method: "POST",
-      body: { ...model, source_compatibility: "hdfs" },
+      body: model,
     });
   }
 
@@ -181,6 +201,14 @@ export class ApiClient {
       method: "POST",
       body: { model_version_id: modelVersionId, log_reference: logReference },
     });
+  }
+
+  listDatasets(projectId: string): Promise<Dataset[]> {
+    return this.request<Dataset[]>(`/projects/${projectId}/datasets`);
+  }
+
+  getDataset(projectId: string, datasetId: string): Promise<Dataset> {
+    return this.request<Dataset>(`/projects/${projectId}/datasets/${datasetId}`);
   }
 
   getAnalysisResults(projectId: string, analysisRunId: string): Promise<AnalysisResults> {
@@ -283,13 +311,29 @@ export class ApiClient {
 async function responseMessage(response: Response): Promise<string> {
   try {
     const payload: unknown = await response.json();
-    if (
-      typeof payload === "object" &&
-      payload !== null &&
-      "detail" in payload &&
-      typeof payload.detail === "string"
-    ) {
-      return payload.detail;
+    if (typeof payload === "object" && payload !== null && "detail" in payload) {
+      const detail = payload.detail;
+      if (typeof detail === "string") {
+        return detail;
+      }
+      if (
+        typeof detail === "object" &&
+        detail !== null &&
+        "issues" in detail &&
+        Array.isArray(detail.issues)
+      ) {
+        const reasons = detail.issues
+          .map((issue) => {
+            if (typeof issue === "object" && issue !== null && "reason" in issue) {
+              return String(issue.reason);
+            }
+            return "";
+          })
+          .filter((reason) => reason.length > 0);
+        if (reasons.length > 0) {
+          return reasons.join(" ");
+        }
+      }
     }
   } catch {
     // A non-JSON response is still a useful HTTP failure.

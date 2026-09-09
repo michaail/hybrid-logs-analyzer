@@ -1,0 +1,4 @@
+# Isolated model-package validator runtime. Keep this separate from
+# requirements-api.txt so the public control plane stays Torch-free.
+# Do not regenerate requirements-macos-intel.lock.txt from this file.
+torch==2.2.2

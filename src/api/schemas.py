@@ -37,8 +37,18 @@ class AnalysisRunStatus(str, Enum):
     """Statuses exposed by the safe analysis-run foundation."""
 
     QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
     REJECTED = "rejected"
     NOT_SUPPORTED = "not_supported"
+
+
+class StorageKind(str, Enum):
+    """Kinded pointer for a stored model or dataset object."""
+
+    WORKSPACE = "workspace"
+    OBJECT = "object"
 
 
 class ApiModel(BaseModel):
@@ -140,14 +150,9 @@ class ProjectAccountResponse(ApiModel):
 
 
 class ModelRegistrationRequest(ApiModel):
-    """Publisher request to register a trusted pipeline-produced model."""
+    """Publisher request to register a pre-staged trusted HDFS model package."""
 
-    model_identifier: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.-]+$")
-    version: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
-    source_compatibility: Literal["hdfs"] = "hdfs"
-    pipeline_run_manifest: str = Field(min_length=1)
-    external_evaluation_evidence: str = Field(min_length=1, max_length=2_048)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    package_reference: str = Field(min_length=1, max_length=2_048)
 
 
 class ModelVersionResponse(ApiModel):
@@ -161,12 +166,28 @@ class ModelVersionResponse(ApiModel):
     status: ModelStatus
     pipeline_run_id: str
     artifact_reference: str
+    package_reference: str
+    artifact_sha256: str
     metrics: dict[str, Any]
     metadata: dict[str, Any]
     external_evaluation_evidence: str
     created_at: str
     published_at: str | None
     published_by_user_id: UUID | None
+    storage_kind: StorageKind
+    checksum: str | None
+
+
+class DatasetResponse(ApiModel):
+    """A project-owned reusable HDFS source pointer."""
+
+    id: UUID
+    project_id: UUID
+    storage_kind: StorageKind
+    object_reference: str
+    checksum: str | None
+    source_compatibility: Literal["hdfs"]
+    created_at: str
 
 
 class AnalysisRunCreate(ApiModel):
@@ -190,6 +211,9 @@ class AnalysisRunResponse(ApiModel):
     error_code: str | None
     created_at: str
     completed_at: str | None
+    dataset_id: UUID | None
+    storage_kind: StorageKind | None
+    checksum: str | None
 
 
 class AnalysisResultsResponse(ApiModel):

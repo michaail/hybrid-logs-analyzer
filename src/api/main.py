@@ -24,6 +24,7 @@ from src.api.schemas import (
     AnalysisRunResponse,
     AnalysisRunStatus,
     AuditEventResponse,
+    DatasetResponse,
     LoginRequest,
     MembershipCreate,
     MembershipResponse,
@@ -42,7 +43,14 @@ from src.api.schemas import (
 from src.api.security import create_access_token, decode_access_token, hash_password, verify_password
 from src.api.settings import ApiSettings
 from src.api.storage import ApiDatabase, DatabaseIntegrityError, utc_now
-from src.api.validation import ValidationError, validate_hdfs_log, validate_pipeline_model
+from src.api.validation import (
+    ValidationError,
+    ValidatorUnavailableError,
+    admit_validated_package,
+    run_private_package_validator,
+    trusted_package_directory,
+    validate_hdfs_log,
+)
 
 
 @dataclass(frozen=True)
@@ -376,49 +384,61 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         request: ModelRegistrationRequest,
         user: CurrentUser = Depends(get_current_user),
     ) -> ModelVersionResponse:
-        """Register complete provenance for a trusted HDFS pipeline model."""
+        """Register a pre-staged trusted HDFS model package. Never loads the artifact."""
         require_project_role(project_id, user, {ProjectRole.PUBLISHER})
         try:
-            validated_model = validate_pipeline_model(
-                request.pipeline_run_manifest,
+            package_root = trusted_package_directory(
+                request.package_reference,
                 resolved_settings.trusted_workspace_root,
             )
+            report = run_private_package_validator(package_root, resolved_settings)
+        except ValidatorUnavailableError as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(error),
+            ) from None
         except ValidationError as error:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from None
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"valid": False, "issues": [{"path": "package_reference", "reason": str(error)}]},
+            ) from None
+        if not report.valid:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=report.model_dump(),
+            )
+        try:
+            admitted = admit_validated_package(package_root, resolved_settings.trusted_workspace_root)
+        except ValidatorUnavailableError as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(error),
+            ) from None
+        except ValidationError as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"valid": False, "issues": [{"path": "package_reference", "reason": str(error)}]},
+            ) from None
         try:
             model = database.create_model_version(
                 project_id=project_id,
-                model_identifier=request.model_identifier,
-                version=request.version,
-                pipeline_run_id=validated_model.run_id,
-                artifact_reference=validated_model.artifact_reference,
-                metrics_json=json.dumps(validated_model.metrics, sort_keys=True),
-                metadata_json=json.dumps(request.metadata, sort_keys=True),
-                external_evaluation_evidence=request.external_evaluation_evidence,
+                model_identifier=admitted.model_identifier,
+                version=admitted.version,
+                pipeline_run_id=admitted.pipeline_run_id,
+                artifact_reference=admitted.artifact_reference,
+                package_reference=admitted.package_reference,
+                artifact_sha256=admitted.artifact_sha256,
+                metrics_json=json.dumps(admitted.metrics, sort_keys=True),
+                metadata_json=json.dumps(admitted.metadata, sort_keys=True),
+                external_evaluation_evidence=admitted.external_evaluation_evidence,
+                actor_user_id=user.id,
             )
         except DatabaseIntegrityError:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This model identifier and version already exists in the project.",
             ) from None
-        response = _model_response(model)
-        database.add_audit_event(
-            actor_user_id=user.id,
-            project_id=project_id,
-            action="model.registered",
-            resource_type="model_version",
-            resource_id=response.id,
-            details_json=json.dumps(
-                {
-                    "artifact_reference": response.artifact_reference,
-                    "model_identifier": response.model_identifier,
-                    "pipeline_run_id": response.pipeline_run_id,
-                    "version": response.version,
-                },
-                sort_keys=True,
-            ),
-        )
-        return response
+        return _model_response(model)
 
     @app.get(
         "/projects/{project_id}/models/{model_version_id}",
@@ -457,20 +477,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Only eligible model versions can be published.",
             )
-        published_model = database.publish_model_version(model_version_id, user.id)
-        response = _model_response(published_model)
-        database.add_audit_event(
+        published_model = database.publish_model_version(
+            model_version_id,
+            user.id,
             actor_user_id=user.id,
-            project_id=project_id,
-            action="model.published",
-            resource_type="model_version",
-            resource_id=model_version_id,
-            details_json=json.dumps(
-                {"model_identifier": response.model_identifier, "version": response.version},
-                sort_keys=True,
-            ),
         )
-        return response
+        return _model_response(published_model)
 
     @app.get(
         "/projects/{project_id}/analysis-runs",
@@ -483,7 +495,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     ) -> list[AnalysisRunResponse]:
         """List analysis runs scoped to an authorized project."""
         require_project_role(project_id, user, {ProjectRole.OPERATOR})
-        return [_analysis_run_response(item) for item in database.list_analysis_runs(project_id)]
+        return [_analysis_run_from_store(item) for item in database.list_analysis_runs(project_id)]
 
     @app.post(
         "/projects/{project_id}/analysis-runs",
@@ -528,10 +540,13 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 validation_report_json=json.dumps(validation_report, sort_keys=True),
                 error_code="INVALID_HDFS_DATASET",
                 completed_at=utc_now(),
+                actor_user_id=user.id,
+                results_summary_json=_stored_results_summary(
+                    AnalysisRunStatus.REJECTED,
+                    validation_report,
+                ),
             )
-            response = _analysis_run_response(run)
-            _record_analysis_audit(database, user.id, project_id, response)
-            return response
+            return _analysis_run_from_store(run)
 
         if not validation_report["valid"]:
             run = database.create_analysis_run(
@@ -543,10 +558,13 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 validation_report_json=json.dumps(validation_report, sort_keys=True),
                 error_code="INVALID_HDFS_DATASET",
                 completed_at=utc_now(),
+                actor_user_id=user.id,
+                results_summary_json=_stored_results_summary(
+                    AnalysisRunStatus.REJECTED,
+                    validation_report,
+                ),
             )
-            response = _analysis_run_response(run)
-            _record_analysis_audit(database, user.id, project_id, response)
-            return response
+            return _analysis_run_from_store(run)
 
         validation_report["execution"] = (
             "Not started: a non-executable HDFS inference artifact contract is not available."
@@ -560,10 +578,13 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             validation_report_json=json.dumps(validation_report, sort_keys=True),
             error_code="INFERENCE_CONTRACT_UNAVAILABLE",
             completed_at=utc_now(),
+            actor_user_id=user.id,
+            results_summary_json=_stored_results_summary(
+                AnalysisRunStatus.NOT_SUPPORTED,
+                validation_report,
+            ),
         )
-        response = _analysis_run_response(run)
-        _record_analysis_audit(database, user.id, project_id, response)
-        return response
+        return _analysis_run_from_store(run)
 
     @app.get(
         "/projects/{project_id}/analysis-runs/{analysis_run_id}",
@@ -580,7 +601,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         run = database.get_analysis_run(analysis_run_id)
         if run is None or run["project_id"] != str(project_id):
             raise _not_found("Analysis run")
-        return _analysis_run_response(run)
+        return _analysis_run_from_store(run)
 
     @app.get(
         "/projects/{project_id}/analysis-runs/{analysis_run_id}/results",
@@ -597,20 +618,49 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         run = database.get_analysis_run(analysis_run_id)
         if run is None or run["project_id"] != str(project_id):
             raise _not_found("Analysis run")
-        response = _analysis_run_response(run)
+        response = _analysis_run_from_store(run)
         anomalies = [_anomaly_response(item) for item in database.list_anomaly_results(analysis_run_id)]
-        report = response.validation_report or {}
-        invalid_records = int(report.get("invalid_records", 0))
+        if run["results_summary_json"]:
+            summary = json.loads(str(run["results_summary_json"]))
+        else:
+            summary = json.loads(
+                _stored_results_summary(response.status, response.validation_report or {}, len(anomalies))
+            )
         return AnalysisResultsResponse(
             run=response,
-            summary={
-                "anomaly_count": len(anomalies),
-                "normal_count": 0,
-                "rejected_records": invalid_records if response.status is AnalysisRunStatus.REJECTED else 0,
-                "invalid_records": invalid_records,
-            },
+            summary=summary,
             anomalies=anomalies,
         )
+
+    @app.get(
+        "/projects/{project_id}/datasets",
+        response_model=list[DatasetResponse],
+        tags=["datasets"],
+    )
+    def list_datasets(
+        project_id: UUID,
+        user: CurrentUser = Depends(get_current_user),
+    ) -> list[DatasetResponse]:
+        """List reusable HDFS sources owned by an authorized project."""
+        require_project_role(project_id, user, {ProjectRole.OPERATOR})
+        return [_dataset_response(item) for item in database.list_datasets(project_id)]
+
+    @app.get(
+        "/projects/{project_id}/datasets/{dataset_id}",
+        response_model=DatasetResponse,
+        tags=["datasets"],
+    )
+    def get_dataset(
+        project_id: UUID,
+        dataset_id: UUID,
+        user: CurrentUser = Depends(get_current_user),
+    ) -> DatasetResponse:
+        """Get a single project-owned dataset pointer."""
+        require_project_role(project_id, user, {ProjectRole.OPERATOR})
+        dataset = database.get_dataset(dataset_id)
+        if dataset is None or dataset["project_id"] != str(project_id):
+            raise _not_found("Dataset")
+        return _dataset_response(dataset)
 
     @app.get(
         "/projects/{project_id}/audit-events",
@@ -629,6 +679,23 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
     _mount_frontend(app)
     return app
+
+
+def _stored_results_summary(
+    status: AnalysisRunStatus,
+    validation_report: dict[str, Any],
+    anomaly_count: int = 0,
+) -> str:
+    invalid_records = int(validation_report.get("invalid_records", 0))
+    return json.dumps(
+        {
+            "anomaly_count": anomaly_count,
+            "normal_count": 0,
+            "rejected_records": invalid_records if status is AnalysisRunStatus.REJECTED else 0,
+            "invalid_records": invalid_records,
+        },
+        sort_keys=True,
+    )
 
 
 def _mount_frontend(app: FastAPI) -> None:
@@ -677,26 +744,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-def _record_analysis_audit(
-    database: ApiDatabase,
-    actor_user_id: UUID,
-    project_id: UUID,
-    run: AnalysisRunResponse,
-) -> None:
-    action = "analysis.rejected" if run.status is AnalysisRunStatus.REJECTED else "analysis.not_supported"
-    database.add_audit_event(
-        actor_user_id=actor_user_id,
-        project_id=project_id,
-        action=action,
-        resource_type="analysis_run",
-        resource_id=run.id,
-        details_json=json.dumps(
-            {"error_code": run.error_code, "status": run.status.value},
-            sort_keys=True,
-        ),
-    )
-
-
 def _user_response(row: Any) -> UserResponse:
     return UserResponse(
         id=UUID(str(row["id"])),
@@ -739,6 +786,8 @@ def _model_response(row: Any) -> ModelVersionResponse:
         status=ModelStatus(str(row["status"])),
         pipeline_run_id=str(row["pipeline_run_id"]),
         artifact_reference=str(row["artifact_reference"]),
+        package_reference=str(row["package_reference"]),
+        artifact_sha256=str(row["artifact_sha256"]),
         metrics=json.loads(str(row["metrics_json"])),
         metadata=json.loads(str(row["metadata_json"])),
         external_evaluation_evidence=str(row["external_evaluation_evidence"]),
@@ -747,10 +796,22 @@ def _model_response(row: Any) -> ModelVersionResponse:
         published_by_user_id=(
             UUID(str(row["published_by_user_id"])) if row["published_by_user_id"] else None
         ),
+        storage_kind=row["storage_kind"],
+        checksum=str(row["checksum"]) if row["checksum"] else None,
     )
 
 
-def _analysis_run_response(row: Any) -> AnalysisRunResponse:
+def _analysis_run_from_store(row: Any) -> AnalysisRunResponse:
+    dataset = None
+    if row["dataset_storage_kind"] is not None:
+        dataset = {
+            "storage_kind": row["dataset_storage_kind"],
+            "checksum": row["dataset_checksum"],
+        }
+    return _analysis_run_response(row, dataset)
+
+
+def _analysis_run_response(row: Any, dataset: Any | None = None) -> AnalysisRunResponse:
     validation_report = row["validation_report_json"]
     return AnalysisRunResponse(
         id=UUID(str(row["id"])),
@@ -764,6 +825,21 @@ def _analysis_run_response(row: Any) -> AnalysisRunResponse:
         error_code=str(row["error_code"]) if row["error_code"] else None,
         created_at=str(row["created_at"]),
         completed_at=str(row["completed_at"]) if row["completed_at"] else None,
+        dataset_id=UUID(str(row["dataset_id"])) if row["dataset_id"] else None,
+        storage_kind=str(dataset["storage_kind"]) if dataset is not None else None,
+        checksum=str(dataset["checksum"]) if dataset is not None and dataset["checksum"] else None,
+    )
+
+
+def _dataset_response(row: Any) -> DatasetResponse:
+    return DatasetResponse(
+        id=UUID(str(row["id"])),
+        project_id=UUID(str(row["project_id"])),
+        storage_kind=str(row["storage_kind"]),
+        object_reference=str(row["object_reference"]),
+        checksum=str(row["checksum"]) if row["checksum"] else None,
+        source_compatibility="hdfs",
+        created_at=str(row["created_at"]),
     )
 
 

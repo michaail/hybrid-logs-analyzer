@@ -19,7 +19,8 @@ analysis-run state, and audit records.
 It is deliberately not an end-to-end anomaly-detection release:
 
 - The API continues to return `not_supported` for a valid analysis request because it never
-  loads a model.
+  loads a model. Dataset rows may use `storage_kind=object` in tests only; this release does
+  not store production objects in a Bucket.
 - Do not provision an inference service, a model loader, a polling worker, or bucket credentials
   for this release.
 - Railway Bucket integration, direct browser uploads, the non-executable model-artifact contract,

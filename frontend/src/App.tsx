@@ -7,6 +7,7 @@ import {
   ApiClient,
   ApiError,
   AuditEvent,
+  Dataset,
   Membership,
   ModelRegistration,
   ModelVersion,
@@ -26,6 +27,7 @@ export default function App() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [models, setModels] = useState<ModelVersion[]>([]);
   const [runs, setRuns] = useState<AnalysisRun[]>([]);
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [memberships, setMemberships] = useState<Membership[]>([]);
@@ -68,6 +70,7 @@ export default function App() {
     if (!selectedProjectId || !user) {
       setModels([]);
       setRuns([]);
+      setDatasets([]);
       setAuditEvents([]);
       setAccounts([]);
       setMemberships([]);
@@ -79,7 +82,7 @@ export default function App() {
   }, [selectedProjectId, user?.id]);
 
   useEffect(() => {
-    if (!selectedProjectId || !runs.some((run) => run.status === "queued")) {
+    if (!selectedProjectId || !runs.some((run) => run.status === "queued" || run.status === "running")) {
       return;
     }
 
@@ -116,12 +119,14 @@ export default function App() {
     setIsLoadingProject(true);
     setPageError(null);
     try {
-      const [projectModels, projectRuns] = await Promise.all([
+      const [projectModels, projectRuns, projectDatasets] = await Promise.all([
         api.listModels(projectId),
         api.listAnalysisRuns(projectId),
+        api.listDatasets(projectId),
       ]);
       setModels(projectModels);
       setRuns(projectRuns);
+      setDatasets(projectDatasets);
       setSelectedModelId((current) => {
         if (current && projectModels.some((model) => model.id === current && model.status === "published")) {
           return current;
@@ -183,6 +188,7 @@ export default function App() {
     setSelectedProjectId(null);
     setModels([]);
     setRuns([]);
+    setDatasets([]);
     setAuditEvents([]);
     setAccounts([]);
     setMemberships([]);
@@ -219,9 +225,9 @@ export default function App() {
     if (!selectedProject) {
       return;
     }
-    await api.registerModel(selectedProject.id, registration);
+    const created = await api.registerModel(selectedProject.id, registration);
     await refreshProjectData(selectedProject.id);
-    setNotice(`${registration.model_identifier} ${registration.version} was registered as eligible.`);
+    setNotice(`${created.model_identifier} ${created.version} was registered as eligible.`);
   }
 
   async function startAnalysis(logReference: string): Promise<void> {
@@ -363,6 +369,7 @@ export default function App() {
               <RunsView
                 models={models}
                 runs={runs}
+                datasets={datasets}
                 selectedModel={selectedModel}
                 onOpenAnalysis={() => setShowAnalysisDialog(true)}
                 onShowResults={showResults}
@@ -553,7 +560,7 @@ function ModelsView({
       {models.length === 0 ? (
         <EmptyState
           title="No model versions yet"
-          description="A Publisher can register a complete HDFS pipeline manifest for this project."
+          description="A Publisher can register a pre-staged HDFS model package directory for this project."
         />
       ) : (
         <div className="model-grid">
@@ -611,8 +618,8 @@ function ModelsView({
       <div className="info-strip">
         <strong>Trusted artifact boundary</strong>
         <span>
-          This client registers a trusted pipeline manifest. It does not transmit model bytes,
-          and the API never deserializes uploaded artifacts.
+          This client registers a pre-staged HDFS model package directory. It does not transmit
+          model bytes, and the API never deserializes uploaded artifacts.
         </span>
       </div>
     </section>
@@ -622,12 +629,14 @@ function ModelsView({
 function RunsView({
   models,
   runs,
+  datasets,
   selectedModel,
   onOpenAnalysis,
   onShowResults,
 }: {
   models: ModelVersion[];
   runs: AnalysisRun[];
+  datasets: Dataset[];
   selectedModel: ModelVersion | null;
   onOpenAnalysis: () => void;
   onShowResults: (run: AnalysisRun) => Promise<void>;
@@ -661,6 +670,38 @@ function RunsView({
         </div>
       )}
 
+      <div className="dataset-panel">
+        <h3 className="dataset-heading">Project datasets</h3>
+        <p className="muted">
+          Reusable HDFS sources for this project. Rejected inputs never appear here, and there is
+          no upload control in this view.
+        </p>
+        {datasets.length === 0 ? (
+          <p className="muted">No reusable datasets are registered yet.</p>
+        ) : (
+          <div className="dataset-list">
+            {datasets.map((dataset) => (
+              <article className="dataset-card" key={dataset.id}>
+                <div>
+                  <span className="summary-label">Dataset {shortId(dataset.id)}</span>
+                  <strong>{dataset.object_reference}</strong>
+                </div>
+                <dl className="metadata-list compact-metadata">
+                  <div>
+                    <dt>Storage</dt>
+                    <dd>{dataset.storage_kind}</dd>
+                  </div>
+                  <div>
+                    <dt>Checksum</dt>
+                    <dd className="truncate">{dataset.checksum ?? "none"}</dd>
+                  </div>
+                </dl>
+              </article>
+            ))}
+          </div>
+        )}
+      </div>
+
       {runs.length === 0 ? (
         <EmptyState
           title="No analysis runs yet"
@@ -678,6 +719,9 @@ function RunsView({
                     <span className="run-id">Run {shortId(run.id)}</span>
                   </div>
                   <strong>{run.log_reference}</strong>
+                  {run.dataset_id && (
+                    <span className="muted">Dataset {shortId(run.dataset_id)}</span>
+                  )}
                   <span className="muted">
                     {model ? `${model.model_identifier} ${model.version}` : "Model version unavailable"} ·{" "}
                     {formatDate(run.created_at)}
@@ -695,8 +739,8 @@ function RunsView({
         </div>
       )}
 
-      {runs.some((run) => run.status === "queued") && (
-        <p className="auto-refresh-note">Queued runs refresh automatically every five seconds.</p>
+      {(runs.some((run) => run.status === "queued") || runs.some((run) => run.status === "running")) && (
+        <p className="auto-refresh-note">In-progress runs refresh automatically every five seconds.</p>
       )}
     </section>
   );
@@ -1185,39 +1229,16 @@ function ModelRegistrationDialog({
   onClose: () => void;
   onRegister: (registration: ModelRegistration) => Promise<void>;
 }): JSX.Element {
-  const [modelIdentifier, setModelIdentifier] = useState("");
-  const [version, setVersion] = useState("");
-  const [manifest, setManifest] = useState("");
-  const [evidence, setEvidence] = useState("");
-  const [metadata, setMetadata] = useState('{\n  "architecture": "AttributeAwareGAE"\n}');
+  const [packageReference, setPackageReference] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setError(null);
-
-    let parsedMetadata: Record<string, unknown>;
-    try {
-      const parsed: unknown = JSON.parse(metadata);
-      if (!isRecord(parsed)) {
-        throw new Error("Metadata must be a JSON object.");
-      }
-      parsedMetadata = parsed;
-    } catch (metadataError) {
-      setError(messageFor(metadataError));
-      return;
-    }
-
     setIsSubmitting(true);
     try {
-      await onRegister({
-        model_identifier: modelIdentifier,
-        version,
-        pipeline_run_manifest: manifest,
-        external_evaluation_evidence: evidence,
-        metadata: parsedMetadata,
-      });
+      await onRegister({ package_reference: packageReference });
       onClose();
     } catch (submissionError) {
       setError(messageFor(submissionError));
@@ -1230,66 +1251,21 @@ function ModelRegistrationDialog({
     <Dialog title="Register trained model" onClose={onClose}>
       <form className="dialog-form" onSubmit={(event) => void submit(event)}>
         <p className="muted">
-          Register a complete HDFS pipeline run for <strong>{projectName}</strong>. The API validates
-          the manifest and canonical artifact inside its controlled workspace.
+          Register a pre-staged HDFS model package for <strong>{projectName}</strong>. Identity,
+          metrics, and evidence come from the package manifest.
         </p>
         <div className="warning-strip">
           Browser artifact uploads are intentionally unavailable. This API only accepts a trusted
-          pipeline manifest reference and never receives model bytes.
+          workspace directory path and never receives model bytes.
         </div>
         {error && <Banner tone="error" message={error} />}
-        <div className="form-grid">
-          <label>
-            Model identifier
-            <input
-              maxLength={128}
-              onChange={(event) => setModelIdentifier(event.target.value)}
-              pattern="^[A-Za-z0-9_.-]+$"
-              placeholder="attribute-gae"
-              required
-              value={modelIdentifier}
-            />
-          </label>
-          <label>
-            Version
-            <input
-              maxLength={64}
-              onChange={(event) => setVersion(event.target.value)}
-              pattern="^[A-Za-z0-9_.-]+$"
-              placeholder="2026.09"
-              required
-              value={version}
-            />
-          </label>
-        </div>
         <label>
-          Pipeline run manifest reference
+          Package directory reference
           <input
-            onChange={(event) => setManifest(event.target.value)}
-            placeholder="artifacts/runs/baseline.json"
+            onChange={(event) => setPackageReference(event.target.value)}
+            placeholder="packages/hdfs/package"
             required
-            value={manifest}
-          />
-        </label>
-        <label>
-          External evaluation evidence
-          <textarea
-            maxLength={2048}
-            onChange={(event) => setEvidence(event.target.value)}
-            placeholder="URL or traceable external evaluation reference"
-            required
-            rows={3}
-            value={evidence}
-          />
-        </label>
-        <label>
-          Metadata (JSON object)
-          <textarea
-            onChange={(event) => setMetadata(event.target.value)}
-            required
-            rows={5}
-            spellCheck={false}
-            value={metadata}
+            value={packageReference}
           />
         </label>
         <div className="dialog-actions">
@@ -1394,6 +1370,7 @@ function ResultsDialog({
           <div>
             <span className="summary-label">Run {shortId(run.id)}</span>
             <h3>{run.log_reference}</h3>
+            {run.dataset_id && <p className="muted">Dataset {run.dataset_id}</p>}
           </div>
           <StatusBadge status={run.status} />
         </div>
@@ -1504,7 +1481,11 @@ function EmptyState({ description, title }: { description: string; title: string
 }
 
 function StatusBadge({ status }: { status: string }): JSX.Element {
-  return <span className={`status-badge status-${status.replace("_", "-")}`}>{status.replace("_", " ")}</span>;
+  return (
+    <span className={`status-badge status-${status.split("_").join("-")}`}>
+      {status.split("_").join(" ")}
+    </span>
+  );
 }
 
 function MetricList({ metrics }: { metrics: Record<string, unknown> }): JSX.Element | null {
@@ -1532,10 +1513,6 @@ function SummaryMetric({ label, value }: { label: string; value: number }): JSX.
       <span>{label}</span>
     </div>
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function messageFor(error: unknown): string {
