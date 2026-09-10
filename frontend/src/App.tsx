@@ -119,6 +119,17 @@ export default function App() {
     setIsLoadingProject(true);
     setPageError(null);
     try {
+      await Promise.all([
+        loadProjectResources(projectId),
+        loadProjectAdministration(projectId),
+      ]);
+    } finally {
+      setIsLoadingProject(false);
+    }
+  }
+
+  async function loadProjectResources(projectId: string): Promise<void> {
+    try {
       const [projectModels, projectRuns, projectDatasets] = await Promise.all([
         api.listModels(projectId),
         api.listAnalysisRuns(projectId),
@@ -133,28 +144,32 @@ export default function App() {
         }
         return projectModels.find((model) => model.status === "published")?.id ?? null;
       });
-
-      if (user?.is_administrator) {
-        const [projectAudit, projectMembers, allAccounts, systemAudit] = await Promise.all([
-          api.listAuditEvents(projectId),
-          api.listProjectMembers(projectId),
-          api.listUsers(),
-          api.listSystemAuditEvents(),
-        ]);
-        setAuditEvents(projectAudit);
-        setMemberships(projectMembers);
-        setAccounts(allAccounts);
-        setSystemAuditEvents(systemAudit);
-      } else {
-        setAuditEvents([]);
-        setAccounts([]);
-        setMemberships([]);
-        setSystemAuditEvents([]);
-      }
     } catch (error) {
       handleRequestError(error);
-    } finally {
-      setIsLoadingProject(false);
+    }
+  }
+
+  async function loadProjectAdministration(projectId: string): Promise<void> {
+    if (!user?.is_administrator) {
+      setAuditEvents([]);
+      setAccounts([]);
+      setMemberships([]);
+      setSystemAuditEvents([]);
+      return;
+    }
+    try {
+      const [projectAudit, projectMembers, allAccounts, systemAudit] = await Promise.all([
+        api.listAuditEvents(projectId),
+        api.listProjectMembers(projectId),
+        api.listUsers(),
+        api.listSystemAuditEvents(),
+      ]);
+      setAuditEvents(projectAudit);
+      setMemberships(projectMembers);
+      setAccounts(allAccounts);
+      setSystemAuditEvents(systemAudit);
+    } catch (error) {
+      handleRequestError(error);
     }
   }
 
