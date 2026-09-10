@@ -1,7 +1,7 @@
 ---
 change_id: testing-critical-path-api-isolation
 title: Critical-path API isolation tests
-status: implemented
+status: impl_reviewed
 created: 2026-09-10
 updated: 2026-09-10
 archived_at: null
