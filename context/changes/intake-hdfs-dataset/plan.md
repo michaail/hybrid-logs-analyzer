@@ -396,23 +396,23 @@ for this slice.
 
 #### Automated
 
-- [x] 1.1 python -m pytest tests/test_object_store.py plus the admit-helper tests pass for accept, 32 MiB+1, empty, one bad line, and UTF-8 failure; object root is empty on every failure
-- [x] 1.2 ruff check src/api/object_store.py src/api/validation.py and mypy pass on those modules
+- [x] 1.1 python -m pytest tests/test_object_store.py plus the admit-helper tests pass for accept, 32 MiB+1, empty, one bad line, and UTF-8 failure; object root is empty on every failure — eac04fc
+- [x] 1.2 ruff check src/api/object_store.py src/api/validation.py and mypy pass on those modules — eac04fc
 
 #### Manual
 
-- [x] 1.3 Inspect one successful filesystem prefix: a single log object, no extras
+- [x] 1.3 Inspect one successful filesystem prefix: a single log object, no extras — eac04fc
 
 ### Phase 2: Operator HTTP
 
 #### Automated
 
-- [ ] 2.1 python -m pytest tests/test_api.py tests/test_shared_state_repository.py passes, including 201 persist, 422-without-row, analyze-by-dataset_id, isolation, and rejected-run CHECK
-- [ ] 2.2 ruff check src/api/main.py src/api/schemas.py src/api/storage.py tests/test_api.py and mypy pass on those paths
+- [x] 2.1 python -m pytest tests/test_api.py tests/test_shared_state_repository.py passes, including 201 persist, 422-without-row, analyze-by-dataset_id, isolation, and rejected-run CHECK
+- [x] 2.2 ruff check src/api/main.py src/api/schemas.py src/api/storage.py tests/test_api.py and mypy pass on those paths
 
 #### Manual
 
-- [ ] 2.3 GET /openapi.json shows POST datasets and analyze dataset_id; no public log_reference on create
+- [x] 2.3 GET /openapi.json shows POST datasets and analyze dataset_id; no public log_reference on create
 
 ### Phase 3: Operator UI and S-04 Drain3 handoff docs
 

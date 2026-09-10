@@ -39,15 +39,16 @@ from src.api.schemas import (
     TokenResponse,
     UserResponse,
 )
-from src.api.object_store import build_object_store
+from src.api.object_store import build_object_store, dataset_object_prefix
 from src.api.security import create_access_token, decode_access_token, hash_password, verify_password
 from src.api.settings import ApiSettings
 from src.api.storage import ApiDatabase, DatabaseIntegrityError, utc_now
 from src.api.validation import (
+    MAX_HDFS_UPLOAD_BYTES,
     ValidationError,
     ValidatorUnavailableError,
+    admit_uploaded_hdfs_log,
     admit_uploaded_zip_package,
-    validate_hdfs_log,
 )
 from src.modules.model_package import MAX_ZIP_COMPRESSED_BYTES
 
@@ -513,7 +514,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         request: AnalysisRunCreate,
         user: CurrentUser = Depends(get_current_user),
     ) -> AnalysisRunResponse:
-        """Validate a stored HDFS dataset and persist its safe terminal lifecycle state."""
+        """Start analysis of an admitted same-project dataset without re-scanning the log."""
         require_project_role(project_id, user, {ProjectRole.OPERATOR})
         model = database.get_model_version(request.model_version_id)
         if model is None or model["project_id"] != str(project_id):
@@ -523,62 +524,20 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Only published model versions can start analysis.",
             )
+        dataset = database.get_dataset(request.dataset_id)
+        if dataset is None or dataset["project_id"] != str(project_id):
+            raise _not_found("Dataset")
 
-        try:
-            log_reference, validation_report = validate_hdfs_log(
-                request.log_reference,
-                resolved_settings.trusted_workspace_root,
+        validation_report = {
+            "execution": (
+                "Not started: a non-executable HDFS inference artifact contract is not available."
             )
-        except ValidationError as error:
-            validation_report = {
-                "valid": False,
-                "total_records": 0,
-                "invalid_records": 0,
-                "examples": [{"line_number": 0, "reason": str(error)}],
-            }
-            run = database.create_analysis_run(
-                project_id=project_id,
-                model_version_id=request.model_version_id,
-                requested_by_user_id=user.id,
-                log_reference="<invalid-reference>",
-                status=AnalysisRunStatus.REJECTED.value,
-                validation_report_json=json.dumps(validation_report, sort_keys=True),
-                error_code="INVALID_HDFS_DATASET",
-                completed_at=utc_now(),
-                actor_user_id=user.id,
-                results_summary_json=_stored_results_summary(
-                    AnalysisRunStatus.REJECTED,
-                    validation_report,
-                ),
-            )
-            return _analysis_run_from_store(run)
-
-        if not validation_report["valid"]:
-            run = database.create_analysis_run(
-                project_id=project_id,
-                model_version_id=request.model_version_id,
-                requested_by_user_id=user.id,
-                log_reference=log_reference,
-                status=AnalysisRunStatus.REJECTED.value,
-                validation_report_json=json.dumps(validation_report, sort_keys=True),
-                error_code="INVALID_HDFS_DATASET",
-                completed_at=utc_now(),
-                actor_user_id=user.id,
-                results_summary_json=_stored_results_summary(
-                    AnalysisRunStatus.REJECTED,
-                    validation_report,
-                ),
-            )
-            return _analysis_run_from_store(run)
-
-        validation_report["execution"] = (
-            "Not started: a non-executable HDFS inference artifact contract is not available."
-        )
+        }
         run = database.create_analysis_run(
             project_id=project_id,
             model_version_id=request.model_version_id,
             requested_by_user_id=user.id,
-            log_reference=log_reference,
+            log_reference=str(dataset["object_reference"]),
             status=AnalysisRunStatus.NOT_SUPPORTED.value,
             validation_report_json=json.dumps(validation_report, sort_keys=True),
             error_code="INFERENCE_CONTRACT_UNAVAILABLE",
@@ -588,6 +547,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 AnalysisRunStatus.NOT_SUPPORTED,
                 validation_report,
             ),
+            dataset_id=request.dataset_id,
         )
         return _analysis_run_from_store(run)
 
@@ -649,6 +609,48 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         """List reusable HDFS sources owned by an authorized project."""
         require_project_role(project_id, user, {ProjectRole.OPERATOR})
         return [_dataset_response(item) for item in database.list_datasets(project_id)]
+
+    @app.post(
+        "/projects/{project_id}/datasets",
+        response_model=DatasetResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["datasets"],
+    )
+    def upload_dataset(
+        project_id: UUID,
+        user: CurrentUser = Depends(get_current_user),
+        log: UploadFile = File(..., description="UTF-8 HDFS log dataset"),
+    ) -> DatasetResponse:
+        """Admit an Operator HDFS log upload. Persist an object only when the whole file is valid."""
+        require_project_role(project_id, user, {ProjectRole.OPERATOR})
+        payload = log.file.read(MAX_HDFS_UPLOAD_BYTES + 1)
+        report, admitted = admit_uploaded_hdfs_log(
+            payload,
+            object_store=object_store,
+            project_id=project_id,
+            original_filename=log.filename or "",
+        )
+        if not report["valid"] or admitted is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=report,
+            )
+        try:
+            dataset = database.create_dataset(
+                project_id=project_id,
+                storage_kind=admitted.storage_kind,
+                object_reference=admitted.object_reference,
+                checksum=admitted.checksum,
+                actor_user_id=user.id,
+                dataset_id=admitted.dataset_id,
+            )
+        except DatabaseIntegrityError:
+            object_store.delete_prefix(dataset_object_prefix(project_id, admitted.dataset_id))
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This dataset object already exists in the project.",
+            ) from None
+        return _dataset_response(dataset)
 
     @app.get(
         "/projects/{project_id}/datasets/{dataset_id}",

@@ -14,7 +14,6 @@ from src.api.storage import (
     DatabaseIntegrityError,
     DatasetPointerError,
     RunStatusConflict,
-    _DatabaseConnection,
     utc_now,
 )
 
@@ -44,7 +43,24 @@ def _seed_model(database: ApiDatabase) -> tuple[UUID, UUID, UUID]:
     return UUID(str(project["id"])), UUID(str(user["id"])), UUID(str(model["id"]))
 
 
+def _workspace_dataset(
+    database: ApiDatabase,
+    project_id: UUID,
+    user_id: UUID,
+    object_reference: str = "data/stored-hdfs.log",
+) -> UUID:
+    dataset = database.upsert_dataset(
+        project_id=project_id,
+        storage_kind="workspace",
+        object_reference=object_reference,
+        checksum=None,
+        actor_user_id=user_id,
+    )
+    return UUID(str(dataset["id"]))
+
+
 def _queued_run(database: ApiDatabase, project_id: UUID, user_id: UUID, model_id: UUID) -> UUID:
+    dataset_id = _workspace_dataset(database, project_id, user_id)
     run = database.create_analysis_run(
         project_id=project_id,
         model_version_id=model_id,
@@ -55,6 +71,7 @@ def _queued_run(database: ApiDatabase, project_id: UUID, user_id: UUID, model_id
         error_code=None,
         completed_at=None,
         actor_user_id=user_id,
+        dataset_id=dataset_id,
     )
     return UUID(str(run["id"]))
 
@@ -84,7 +101,7 @@ def test_dataset_upsert_reuses_identity_and_allows_workspace_null_checksum(tmp_p
     assert actions.count("dataset.registered") == 1
 
 
-def test_dataset_insert_conflict_reuses_row_and_keeps_analysis_run(tmp_path: Path) -> None:
+def test_non_rejected_run_attaches_existing_dataset(tmp_path: Path) -> None:
     database = _database(tmp_path)
     project_id, user_id, model_id = _seed_model(database)
     first = database.upsert_dataset(
@@ -94,39 +111,21 @@ def test_dataset_insert_conflict_reuses_row_and_keeps_analysis_run(tmp_path: Pat
         checksum=None,
         actor_user_id=user_id,
     )
-    skip_lookup = {"once": True}
-    original = _DatabaseConnection.execute
-
-    def execute(
-        self: _DatabaseConnection,
-        query: str,
-        parameters: tuple[object, ...] = (),
-    ) -> object:
-        compact = " ".join(query.split())
-        if skip_lookup["once"] and compact.startswith("SELECT id FROM datasets"):
-            skip_lookup["once"] = False
-
-            class _Empty:
-                def fetchone(self) -> None:
-                    return None
-
-            return _Empty()
-        return original(self, query, parameters)
-
-    with patch.object(_DatabaseConnection, "execute", execute):
-        run = database.create_analysis_run(
-            project_id=project_id,
-            model_version_id=model_id,
-            requested_by_user_id=user_id,
-            log_reference="data/stored-hdfs.log",
-            status="not_supported",
-            validation_report_json="{}",
-            error_code="INFERENCE_CONTRACT_UNAVAILABLE",
-            completed_at=utc_now(),
-            actor_user_id=user_id,
-        )
+    run = database.create_analysis_run(
+        project_id=project_id,
+        model_version_id=model_id,
+        requested_by_user_id=user_id,
+        log_reference="ignored-path",
+        status="not_supported",
+        validation_report_json="{}",
+        error_code="INFERENCE_CONTRACT_UNAVAILABLE",
+        completed_at=utc_now(),
+        actor_user_id=user_id,
+        dataset_id=UUID(str(first["id"])),
+    )
 
     assert run["dataset_id"] == first["id"]
+    assert run["log_reference"] == "data/stored-hdfs.log"
     assert database.get_analysis_run(UUID(str(run["id"]))) is not None
     assert [row["id"] for row in database.list_datasets(project_id)] == [first["id"]]
     actions = [event["action"] for event in database.list_audit_events(project_id)]
@@ -183,6 +182,11 @@ def test_audit_failure_rolls_back_model_dataset_run_and_results(tmp_path: Path) 
                 object_reference="data/other.log",
                 actor_user_id=user_id,
             )
+        dataset = database.upsert_dataset(
+            project_id=project_id,
+            storage_kind="workspace",
+            object_reference="data/stored-hdfs.log",
+        )
         with pytest.raises(RuntimeError, match="audit boom"):
             database.create_analysis_run(
                 project_id=project_id,
@@ -194,12 +198,13 @@ def test_audit_failure_rolls_back_model_dataset_run_and_results(tmp_path: Path) 
                 error_code="INFERENCE_CONTRACT_UNAVAILABLE",
                 completed_at=utc_now(),
                 actor_user_id=user_id,
+                dataset_id=UUID(str(dataset["id"])),
             )
 
     assert [
         row["model_identifier"] for row in database.list_model_versions(project_id)
     ] == ["attribute-gae"]
-    assert database.list_datasets(project_id) == []
+    assert [row["id"] for row in database.list_datasets(project_id)] == [dataset["id"]]
     assert database.list_analysis_runs(project_id) == []
 
     run_id = _queued_run(database, project_id, user_id, model_id)
