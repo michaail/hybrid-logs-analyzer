@@ -332,20 +332,20 @@ Not applicable. No schema or API contract change.
 
 #### Automated
 
-- [x] 2.1 `python -m pytest tests/test_api.py -m "not ml"` passes, including Operator register 403 + empty list and Operator publish 403 + still eligible
-- [x] 2.2 `ruff check tests/test_api.py` and `mypy` pass
+- [x] 2.1 `python -m pytest tests/test_api.py -m "not ml"` passes, including Operator register 403 + empty list and Operator publish 403 + still eligible — de57db9
+- [x] 2.2 `ruff check tests/test_api.py` and `mypy` pass — de57db9
 
 #### Manual
 
-- [x] 2.3 Confirm no frontend test or UI hide was added; API 403 remains the control
+- [x] 2.3 Confirm no frontend test or UI hide was added; API 403 remains the control — de57db9
 
 ### Phase 3: Cookbook patterns for isolation tests
 
 #### Automated
 
-- [ ] 3.1 `context/foundation/test-plan.md` §6.1, §6.2, and §6.4 no longer read “TBD — see §3 Phase 1”
-- [ ] 3.2 `python -m pytest tests/test_api.py -m "not ml"` still passes
+- [x] 3.1 `context/foundation/test-plan.md` §6.1, §6.2, and §6.4 no longer read “TBD — see §3 Phase 1”
+- [x] 3.2 `python -m pytest tests/test_api.py -m "not ml"` still passes
 
 #### Manual
 
-- [ ] 3.3 Read §6: no `file:line` failure anchors; 401/403/404 distinction is explicit; risk #3 tests are cited as already present, not re-specified
+- [x] 3.3 Read §6: no `file:line` failure anchors; 401/403/404 distinction is explicit; risk #3 tests are cited as already present, not re-specified

@@ -123,11 +123,65 @@ the relevant rollout phase ships; before that, the sub-section reads
 
 ### 6.1 Adding a unit test
 
-TBD — see §3 Phase 1 for isolation/role helper patterns that do not reimplement production membership logic.
+Do not prove project isolation with unit tests of membership helpers or
+storage SQL. Those tests copy production branching and miss HTTP status
+semantics (401 vs 403 vs 404). Isolation, role, and lifecycle oracles live
+in HTTP integration tests — follow §6.2.
+
+New tests go under `tests/` as pytest. For this control-plane surface, run:
+
+`python -m pytest tests/test_api.py -m "not ml"`
 
 ### 6.2 Adding an integration test
 
-TBD — see §3 Phase 1 for two-project HTTP deny, Operator 403 with no row, and ineligible/unpublished analysis gates.
+Use the existing FastAPI `api` fixture and helpers in `tests/test_api.py`
+(`_login`, `_create_project`, `_provision_project_account`, `_register`,
+`_zip_staged`). Seed resources in project A with a Publisher; call as a
+member of project B (or as a same-project Operator for role denies).
+
+Oracle is HTTP status plus absence of foreign ids. Never assert membership
+helper internals or storage SQL from tests.
+
+Keep **401 / 403 / 404** distinct:
+
+- **401** — no (or inactive) bearer. One unauthenticated
+  `POST /projects/{id}/models` covers the shared bearer dependency for
+  other verbs.
+- **404** — not a member of the path project, or the resource id belongs to
+  another project (IDOR). Non-members must not learn that the project exists.
+- **403** — member of this project, wrong role (same-project Operator
+  register/publish). Do not treat Admin 200/201 as an isolation failure.
+
+Matrix for member routes (models, analysis-runs, results):
+
+1. Foreign path: `GET/POST /projects/{A}/...` as a user of B → **404**.
+2. IDOR: `GET/POST /projects/{B}/.../{id owned by A}` → **404**.
+3. Own empty list: `GET /projects/{B}/...` while data exists only on A →
+   **200** and `[]` (the list must not contain A's ids).
+4. Analyze on B with A's `model_version_id` → **404** and B's run list
+   stays `[]`.
+
+Reference implementations in `tests/test_api.py` (function names, not
+production logic):
+
+- `test_cross_project_member_routes_return_404` — 404 / IDOR / empty-list /
+  foreign-model analyze / unauthenticated POST 401.
+- `test_authentication_roles_and_project_isolation` — foreign list 404;
+  Operator ZIP register **403** then `GET .../models == []`.
+- `test_model_publication_and_safe_analysis_run_lifecycle` — Operator
+  publish **403** then GET still `eligible` (`published_at` absent).
+
+Risk #3 oracles already exist; cite them, do not rewrite them:
+
+- `test_registration_rejects_ineligible_zip_without_inserting` — ineligible
+  ZIP **422** `{valid, issues[]}` and empty model list.
+- `test_unpublished_eligible_model_cannot_start_analysis` — eligible
+  unpublished analyze **409** and empty run list.
+
+Do not duplicate dataset IDOR
+(`test_dataset_reads_are_isolated_and_omit_rejected_inputs`). Do not hit
+`/projects/{id}/audit-events` for member isolation (admin-only, different
+403).
 
 ### 6.3 Adding a frontend component test
 
@@ -135,7 +189,21 @@ TBD — see §3 Phase 3 for denied Register/Publish/Select remaining denied, wit
 
 ### 6.4 Adding a test for a new API endpoint
 
-TBD — see §3 Phase 1 for the same-project vs other-project matrix (404 vs empty other-project payload) before any happy-path 200.
+Before any happy-path 200/201/202 on a new project-scoped route:
+
+1. Unauthenticated request → **401** (enough once if the route shares the
+   bearer dependency).
+2. Other-project member, foreign path → **404**.
+3. Other-project member, own path + foreign resource id → **404**.
+4. Other-project member, own collection while the only rows live on the
+   other project → **200** + empty payload (or no foreign ids).
+5. Same-project wrong role → **403**; other-project same action → **404**.
+   Do not collapse these.
+6. If the action creates or mutates a row, follow the GET-empty /
+   status-unchanged oracle from §6.2 (Operator 403 must not insert
+   `eligible` or flip `published`).
+
+Then add the allowed-role happy path.
 
 ### 6.5 Adding a test for package admission
 
@@ -143,8 +211,10 @@ TBD — see §3 Phase 2 for control-plane-without-Torch, env-scrub, and leftover
 
 ### 6.6 Per-rollout-phase notes
 
-(Optional. After each phase lands, `/10x-implement` appends a 2-3 line note
-here capturing anything surprising the rollout phase taught.)
+**Critical-path API isolation (2026-09-10):** Operator **403** is not
+enough — assert `GET .../models == []` after register and still-`eligible`
+after publish. HTTP **201** means `eligible` only; analysis still requires
+`published` (existing `test_unpublished_eligible_model_cannot_start_analysis`).
 
 ## 7. What We Deliberately Don't Test
 
