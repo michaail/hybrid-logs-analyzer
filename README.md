@@ -316,14 +316,16 @@ We will refactor the pipeline into a unified, modular Python CLI application, st
 
 The HDFS-only API provides administrator-provisioned accounts, project isolation, auditable
 model registration/publication, and analysis-run validation. It stores metadata in the database
-configured by `DATABASE_URL` and
-references artifacts in a controlled workspace; it never accepts model bytes and the public API
-process never deserializes a model artifact.
+configured by `DATABASE_URL`. Publishers upload a complete HDFS model package ZIP; only
+declared package files are persisted in object storage (a local filesystem root by default, or
+a Railway Bucket when credentials are configured). The public API process never deserializes a
+model artifact.
 
 Copy `.env.example` to `.env` and set a unique `API_JWT_SECRET`. Configure
-`DATABASE_URL` (for example, `sqlite:///.api/analyzer.db` locally) and
-`API_TRUSTED_WORKSPACE_ROOT` to an ignored workspace that already contains a pre-staged
-model package directory (and stored HDFS datasets):
+`DATABASE_URL` (for example, `sqlite:///.api/analyzer.db` locally).
+`API_TRUSTED_WORKSPACE_ROOT` still points at the ignored workspace used for stored HDFS
+log references until dataset intake exists. Optional `API_OBJECT_STORE_ROOT` defaults to a
+sibling `.api/objects` directory for local object-kind model packages:
 
 ```bash
 source .venv/bin/activate
@@ -359,16 +361,24 @@ client exposes the same workflow.
 
 ### Trusted HDFS model package
 
-Registration accepts only a workspace-relative **directory** `package_reference`. Direct ZIP
-registration is rejected. The reusable library can unpack a zip under hard caps (32 MiB
-compressed, 96 MiB uncompressed, 64 members; zip-slip and nested archives are rejected),
-but a later storage slice must materialize declared files into an immutable directory
-before this API will register them. Browser upload of package bytes is unavailable.
+Registration is a same-origin multipart ZIP upload (`POST /projects/{project_id}/models`,
+file field `package`). Directory `package_reference` JSON is not a public admission path.
+Invalid packages return a structured 422 `{ valid, issues[] }` and insert no row. A valid
+package becomes `eligible` with `storage_kind=object` and `checksum` set to the artifact
+SHA-256. Explicit `POST .../publish` remains a second Publisher action; the API does not
+auto-publish. Operators receive 403 on register and publish.
 
-A hand-built package directory looks like this:
+The reusable library unpacks a zip under hard caps (32 MiB compressed, 96 MiB uncompressed,
+64 members; zip-slip and nested archives are rejected). After the isolated directory
+validator accepts the extract, only `manifest.json` and the two declared files are copied
+into object storage. Extra undeclared ZIP members are ignored for eligibility and are not
+persisted. `manifest.json` must sit at the ZIP root; a single wrapping folder is not
+unwrapped.
+
+A hand-built package ZIP looks like this:
 
 ```text
-packages/hdfs/attribute-gae-v1/
+hdfs-attribute-gae-v1.zip
   manifest.json
   model.pt
   evidence.json
@@ -390,8 +400,8 @@ artifact. Install `requirements-model-validator.txt` only for that isolated proc
 `requirements-api.txt` Torch-free. Do not regenerate `requirements-macos-intel.lock.txt`
 from the validator file.
 
-Publishers register with `POST /projects/{project_id}/models` using `{ "package_reference": "..." }`
-and explicitly publish an eligible version. Operators submit a trusted stored HDFS log
+Publishers register with `POST /projects/{project_id}/models` as multipart ZIP and explicitly
+publish an eligible version. Operators submit a trusted stored HDFS log
 reference at `POST /projects/{project_id}/analysis-runs`. A valid log is upserted as a
 project-owned workspace dataset (`storage_kind=workspace`, checksum null until a later intake
 slice). Rejected or unreadable inputs keep a validation run with `dataset_id = null` and do
@@ -430,7 +440,7 @@ The Railway image builds `frontend/dist` and serves it through FastAPI. See the
 [Railway staging deployment guide](context/deployment/deploy-plan.md) for the manual
 provisioning, validation, rollback, and deferred-inference boundaries.
 
-The current API intentionally has no browser endpoint for log files or trained-model artifacts.
-The UI therefore uses trusted workspace references for stored HDFS logs and pre-staged package
-directories, lists project-owned datasets as read-only state, and clearly presents the current
-`not_supported` analysis outcome until the isolated inference contract exists.
+The current API accepts a Publisher ZIP for model registration and still uses trusted
+workspace references for stored HDFS logs. The UI lists project-owned datasets as read-only
+state and clearly presents the current `not_supported` analysis outcome until the isolated
+inference contract exists.

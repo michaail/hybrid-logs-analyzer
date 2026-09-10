@@ -1,5 +1,6 @@
 # Public FastAPI control-plane runtime. Keep ML/inference dependencies in a separate
 # Linux-only contract once the non-executable artifact format is implemented.
+boto3==1.43.91
 fastapi==0.115.12
 pydantic==2.10.6
 psycopg[binary]==3.3.5

@@ -1,19 +1,55 @@
-"""Filesystem object-store tests. Non-ML tests never import Torch."""
+"""Object-store adapter tests. Non-ML tests never import Torch or a live Bucket."""
 
 from __future__ import annotations
 
 import ast
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import pytest
 
 from src.api.object_store import (
+    BucketObjectStore,
     FilesystemObjectStore,
+    build_object_store,
     model_package_object_key,
     model_package_object_prefix,
 )
 from src.api.settings import ApiSettings
+
+
+class FakeS3Client:
+    """In-memory S3 stub. CI must not require MinIO or network access."""
+
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+
+    def put_object(self, *, Bucket: str, Key: str, Body: bytes) -> object:
+        payload = Body if isinstance(Body, bytes) else bytes(Body)
+        self.objects[(Bucket, Key)] = payload
+        return {}
+
+    def list_objects_v2(
+        self,
+        *,
+        Bucket: str,
+        Prefix: str,
+        ContinuationToken: str | None = None,
+    ) -> Mapping[str, Any]:
+        del ContinuationToken
+        contents = [
+            {"Key": key}
+            for bucket_name, key in sorted(self.objects)
+            if bucket_name == Bucket and key.startswith(Prefix)
+        ]
+        return {"Contents": contents, "IsTruncated": False}
+
+    def delete_objects(self, *, Bucket: str, Delete: Mapping[str, Any]) -> object:
+        for item in Delete.get("Objects", []):
+            self.objects.pop((Bucket, item["Key"]), None)
+        return {}
 
 
 def test_object_store_source_does_not_import_torch() -> None:
@@ -88,6 +124,17 @@ def test_filesystem_rejects_path_escape(tmp_path: Path) -> None:
     assert not (tmp_path / "escape.bin").exists()
 
 
+def _clear_bucket_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "API_OBJECT_STORE_ENDPOINT",
+        "API_OBJECT_STORE_BUCKET",
+        "API_OBJECT_STORE_ACCESS_KEY_ID",
+        "API_OBJECT_STORE_SECRET_ACCESS_KEY",
+        "API_OBJECT_STORE_REGION",
+    ):
+        monkeypatch.setenv(name, "")
+
+
 def test_object_store_root_defaults_and_env_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -98,6 +145,7 @@ def test_object_store_root_defaults_and_env_override(
     )
     assert settings.object_store_root == Path(".api/objects")
 
+    _clear_bucket_env(monkeypatch)
     monkeypatch.setenv("API_JWT_SECRET", "test-secret-not-for-production")
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'env.db'}")
     monkeypatch.setenv("API_TRUSTED_WORKSPACE_ROOT", str(tmp_path / "workspace"))
@@ -109,3 +157,96 @@ def test_object_store_root_defaults_and_env_override(
     monkeypatch.setenv("API_OBJECT_STORE_ROOT", str(override))
     overridden = ApiSettings.from_environment()
     assert overridden.object_store_root == override.resolve()
+    assert overridden.uses_bucket_object_store is False
+
+
+def test_build_object_store_defaults_to_filesystem(tmp_path: Path) -> None:
+    settings = ApiSettings(
+        database_url=f"sqlite:///{tmp_path / 'api.db'}",
+        jwt_secret="test-secret-not-for-production",
+        trusted_workspace_root=tmp_path / "workspace",
+        object_store_root=tmp_path / "objects",
+    )
+    store = build_object_store(settings)
+    assert isinstance(store, FilesystemObjectStore)
+
+
+def test_incomplete_bucket_settings_are_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_bucket_env(monkeypatch)
+    monkeypatch.setenv("API_JWT_SECRET", "test-secret-not-for-production")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'env.db'}")
+    monkeypatch.setenv("API_TRUSTED_WORKSPACE_ROOT", str(tmp_path / "workspace"))
+    monkeypatch.setenv("API_OBJECT_STORE_ENDPOINT", "https://storage.example.test")
+    with pytest.raises(RuntimeError, match="must be set together"):
+        ApiSettings.from_environment()
+
+
+def test_bucket_settings_select_bucket_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_bucket_env(monkeypatch)
+    monkeypatch.setenv("API_JWT_SECRET", "test-secret-not-for-production")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'env.db'}")
+    monkeypatch.setenv("API_TRUSTED_WORKSPACE_ROOT", str(tmp_path / "workspace"))
+    monkeypatch.setenv("API_OBJECT_STORE_ENDPOINT", "https://storage.example.test")
+    monkeypatch.setenv("API_OBJECT_STORE_BUCKET", "models-test")
+    monkeypatch.setenv("API_OBJECT_STORE_ACCESS_KEY_ID", "key-id")
+    monkeypatch.setenv("API_OBJECT_STORE_SECRET_ACCESS_KEY", "secret-key")
+    monkeypatch.setenv("API_OBJECT_STORE_REGION", "ams")
+    loaded = ApiSettings.from_environment()
+    assert loaded.uses_bucket_object_store is True
+    assert loaded.object_store_bucket == "models-test"
+    assert loaded.object_store_region == "ams"
+    fake = FakeS3Client()
+    store = build_object_store(loaded, s3_client=fake)
+    assert isinstance(store, BucketObjectStore)
+
+
+def test_bucket_put_and_delete_prefix() -> None:
+    fake = FakeS3Client()
+    store = BucketObjectStore(fake, "models-test")
+    project_id = "proj-a"
+    model_id = "model-a"
+    prefix = model_package_object_prefix(project_id, model_id, "v1")
+    store.put(model_package_object_key(project_id, model_id, "v1", "manifest.json"), b"{}")
+    store.put(model_package_object_key(project_id, model_id, "v1", "model.pt"), b"weights")
+    store.put(
+        model_package_object_key(project_id, model_id, "v1", "evidence.json"),
+        b'{"status":"ok"}',
+    )
+    sibling = model_package_object_key(project_id, "model-b", "v1", "manifest.json")
+    store.put(sibling, b'{"keep":true}')
+    overlapping = model_package_object_key(project_id, model_id, "v1-extra", "manifest.json")
+    store.put(overlapping, b'{"overlap":true}')
+
+    stored = {
+        key
+        for bucket_name, key in fake.objects
+        if bucket_name == "models-test" and (key == prefix or key.startswith(f"{prefix}/"))
+    }
+    assert stored == {
+        f"{prefix}/manifest.json",
+        f"{prefix}/model.pt",
+        f"{prefix}/evidence.json",
+    }
+
+    store.delete_prefix(prefix)
+    remaining = {key for _bucket, key in fake.objects}
+    assert f"{prefix}/manifest.json" not in remaining
+    assert sibling in remaining
+    assert overlapping in remaining
+    assert fake.objects[("models-test", sibling)] == b'{"keep":true}'
+
+
+def test_bucket_rejects_path_escape() -> None:
+    fake = FakeS3Client()
+    store = BucketObjectStore(fake, "models-test")
+    with pytest.raises(ValueError, match="relative POSIX"):
+        store.put("/etc/passwd", b"secret")
+    with pytest.raises(ValueError, match=r"\.\."):
+        store.put("../escape.bin", b"secret")
+    with pytest.raises(ValueError, match=r"\.\."):
+        store.delete_prefix("projects/../outside")
+    assert fake.objects == {}

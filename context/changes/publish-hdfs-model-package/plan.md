@@ -517,25 +517,25 @@ object storage.
 
 #### Automated
 
-- [x] 3.1 `cd frontend && npm run build` completes without TypeScript or production build errors
+- [x] 3.1 `cd frontend && npm run build` completes without TypeScript or production build errors — 568e532
 
 #### Manual
 
-- [x] 3.2 As Publisher: upload a valid ZIP → eligible notice; Publish version still works; Select stays disabled until published
-- [x] 3.3 As Publisher: upload an invalid ZIP → Banner lists issue reasons; model list unchanged
-- [x] 3.4 As Operator: register still fails with the API 403 surfaced in the page error (controls may remain visible)
-- [x] 3.5 Confirm no “pipeline manifest” or “pre-staged directory” product copy on the Models view
+- [x] 3.2 As Publisher: upload a valid ZIP → eligible notice; Publish version still works; Select stays disabled until published — 568e532
+- [x] 3.3 As Publisher: upload an invalid ZIP → Banner lists issue reasons; model list unchanged — 568e532
+- [x] 3.4 As Operator: register still fails with the API 403 surfaced in the page error (controls may remain visible) — 568e532
+- [x] 3.5 Confirm no “pipeline manifest” or “pre-staged directory” product copy on the Models view — 568e532
 
 ### Phase 4: Bucket backend, Railway IaC, and docs
 
 #### Automated
 
-- [ ] 4.1 `python -m pytest tests/test_api.py tests/test_model_package.py tests/test_artifacts.py` and adapter tests pass outside cases that only fail from native sandbox limits
-- [ ] 4.2 `ruff check src tests scripts run_ablation.py` and `mypy` pass
-- [ ] 4.3 `cd frontend && npm run build` still passes
-- [ ] 4.4 `git diff -- requirements-macos-intel.lock.txt` is empty
+- [x] 4.1 `python -m pytest tests/test_api.py tests/test_model_package.py tests/test_artifacts.py` and adapter tests pass outside cases that only fail from native sandbox limits
+- [x] 4.2 `ruff check src tests scripts run_ablation.py` and `mypy` pass
+- [x] 4.3 `cd frontend && npm run build` still passes
+- [x] 4.4 `git diff -- requirements-macos-intel.lock.txt` is empty
 
 #### Manual
 
-- [ ] 4.5 Read README + `/docs` and confirm ZIP upload, 422, eligible, and explicit publish are described consistently
-- [ ] 4.6 If staging credentials are available, upload one ZIP and confirm the three declared objects exist under `projects/<project-id>/models/<id>/<version>/` and the DB row is `storage_kind=object` with checksum set. Skip live Bucket if the environment is not provisioned; filesystem staging of the adapter is then the recorded result
+- [x] 4.5 Read README + `/docs` and confirm ZIP upload, 422, eligible, and explicit publish are described consistently
+- [x] 4.6 If staging credentials are available, upload one ZIP and confirm the three declared objects exist under `projects/<project-id>/models/<id>/<version>/` and the DB row is `storage_kind=object` with checksum set. Skip live Bucket if the environment is not provisioned; filesystem staging of the adapter is then the recorded result

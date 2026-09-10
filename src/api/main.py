@@ -39,7 +39,7 @@ from src.api.schemas import (
     TokenResponse,
     UserResponse,
 )
-from src.api.object_store import FilesystemObjectStore
+from src.api.object_store import build_object_store
 from src.api.security import create_access_token, decode_access_token, hash_password, verify_password
 from src.api.settings import ApiSettings
 from src.api.storage import ApiDatabase, DatabaseIntegrityError, utc_now
@@ -65,7 +65,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     """Create a configured FastAPI app without importing legacy ML loaders."""
     resolved_settings = settings or ApiSettings.from_environment()
     database = ApiDatabase(resolved_settings.database_url)
-    object_store = FilesystemObjectStore(resolved_settings.object_store_root)
+    object_store = build_object_store(resolved_settings)
     bearer = HTTPBearer(auto_error=False)
 
     def get_current_user(
