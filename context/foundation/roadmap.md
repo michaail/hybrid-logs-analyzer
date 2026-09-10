@@ -55,7 +55,7 @@ controlled model lifecycle that every later analysis run requires.
 | --- | --- | --- | --- | --- | --- |
 | F-01 | shared-durable-runtime-state | (foundation) Model, run, and result records have a minimal shared, durable ownership and version boundary for the deployed workflow. | — | FR-006, FR-008 | done |
 | F-02 | trusted-model-package-contract | (foundation) A declared, non-executable model-package contract is checked before a model can enter the workflow; it does not run the model itself. | — | FR-002, FR-003, FR-004, FR-008 | done |
-| S-01 | provision-project-accounts | An administrator can provision a project-authorized Operator or Publisher account without public sign-up. | — | FR-001, FR-008 | in-progress |
+| S-01 | provision-project-accounts | An administrator can provision a project-authorized Operator or Publisher account without public sign-up. | — | FR-001, FR-008 | done |
 | S-02 | publish-hdfs-model-package | A Publisher can upload a complete HDFS-compatible model package, receive a clear rejection when ineligible, and explicitly publish the eligible version. | F-01, F-02, S-01 | US-01, FR-002, FR-003, FR-004, FR-008 | proposed |
 | S-03 | intake-hdfs-dataset | An Operator can upload or select an HDFS dataset and receive a clear whole-dataset acceptance or rejection result. | F-01, S-01 | US-02, FR-005, FR-008 | proposed |
 | S-04 | run-parity-hdfs-analysis | An Operator can start asynchronous analysis of an HDFS dataset with a compatible, published same-project model and see a terminal run status. | F-01, F-02, S-02, S-03 | US-02, FR-006, FR-010, FR-011 | blocked |
@@ -135,7 +135,7 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 - **Unknowns:** —
 - **Risk:** Provisioning must stay on the existing administrator-created account
   boundary and must not weaken project role isolation.
-- **Status:** in-progress
+- **Status:** done
 
 ### S-02: Publish an HDFS model package
 
@@ -241,3 +241,4 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 
 - **F-01: (foundation) Model, run, and result records have a minimal shared, durable ownership and version boundary for the deployed workflow.** — Archived 2026-09-09 → `context/archive/2026-09-09-shared-durable-runtime-state/`. Lesson: —.
 - **F-02: (foundation) A declared, non-executable model-package contract is checked before a model can enter the workflow; it does not run the model itself.** — Archived 2026-09-09 → `context/archive/2026-09-09-trusted-model-package-contract/`. Lesson: —.
+- **S-01: An administrator can provision a project-authorized Operator or Publisher account without public sign-up.** — Archived 2026-09-10 → `context/archive/2026-09-09-provision-project-accounts/`. Lesson: —.
