@@ -321,12 +321,12 @@ Not applicable. No schema or API contract change.
 
 #### Automated
 
-- [x] 1.1 `python -m pytest tests/test_api.py -m "not ml"` passes, including the new cross-project matrix and unauthenticated POST 401
-- [x] 1.2 `ruff check tests/test_api.py` and `mypy` pass
+- [x] 1.1 `python -m pytest tests/test_api.py -m "not ml"` passes, including the new cross-project matrix and unauthenticated POST 401 — ea2b22c
+- [x] 1.2 `ruff check tests/test_api.py` and `mypy` pass — ea2b22c
 
 #### Manual
 
-- [x] 1.3 Scan the new tests: 403 never used where the contract says 404; no Admin 403 case; no `get_membership` / SQL assertions
+- [x] 1.3 Scan the new tests: 403 never used where the contract says 404; no Admin 403 case; no `get_membership` / SQL assertions — ea2b22c
 
 ### Phase 2: Operator 403 creates no version row
 
