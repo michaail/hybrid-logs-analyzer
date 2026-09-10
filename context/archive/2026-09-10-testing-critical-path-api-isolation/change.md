@@ -1,10 +1,10 @@
 ---
 change_id: testing-critical-path-api-isolation
 title: Critical-path API isolation tests
-status: impl_reviewed
+status: archived
 created: 2026-09-10
 updated: 2026-09-10
-archived_at: null
+archived_at: 2026-09-10T18:51:57Z
 ---
 
 ## Notes
