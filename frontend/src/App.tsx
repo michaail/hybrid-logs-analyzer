@@ -9,7 +9,6 @@ import {
   AuditEvent,
   Dataset,
   Membership,
-  ModelRegistration,
   ModelVersion,
   Project,
   ProjectRole,
@@ -236,11 +235,11 @@ export default function App() {
     }
   }
 
-  async function registerModel(registration: ModelRegistration): Promise<void> {
+  async function registerModel(packageFile: File): Promise<void> {
     if (!selectedProject) {
       return;
     }
-    const created = await api.registerModel(selectedProject.id, registration);
+    const created = await api.registerModel(selectedProject.id, packageFile);
     await refreshProjectData(selectedProject.id);
     setNotice(`${created.model_identifier} ${created.version} was registered as eligible.`);
   }
@@ -575,7 +574,7 @@ function ModelsView({
       {models.length === 0 ? (
         <EmptyState
           title="No model versions yet"
-          description="A Publisher can register a pre-staged HDFS model package directory for this project."
+          description="A Publisher can upload a complete HDFS model package ZIP for this project."
         />
       ) : (
         <div className="model-grid">
@@ -633,8 +632,8 @@ function ModelsView({
       <div className="info-strip">
         <strong>Trusted artifact boundary</strong>
         <span>
-          This client registers a pre-staged HDFS model package directory. It does not transmit
-          model bytes, and the API never deserializes uploaded artifacts.
+          This client uploads a complete HDFS model package ZIP. The API never deserializes
+          artifacts in this process.
         </span>
       </div>
     </section>
@@ -1242,18 +1241,22 @@ function ModelRegistrationDialog({
 }: {
   projectName: string;
   onClose: () => void;
-  onRegister: (registration: ModelRegistration) => Promise<void>;
+  onRegister: (packageFile: File) => Promise<void>;
 }): JSX.Element {
-  const [packageReference, setPackageReference] = useState("");
+  const [packageFile, setPackageFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
+    if (!packageFile) {
+      setError("Choose a complete HDFS model package ZIP.");
+      return;
+    }
     setError(null);
     setIsSubmitting(true);
     try {
-      await onRegister({ package_reference: packageReference });
+      await onRegister(packageFile);
       onClose();
     } catch (submissionError) {
       setError(messageFor(submissionError));
@@ -1266,28 +1269,31 @@ function ModelRegistrationDialog({
     <Dialog title="Register trained model" onClose={onClose}>
       <form className="dialog-form" onSubmit={(event) => void submit(event)}>
         <p className="muted">
-          Register a pre-staged HDFS model package for <strong>{projectName}</strong>. Identity,
-          metrics, and evidence come from the package manifest.
+          Upload a complete HDFS model package ZIP for <strong>{projectName}</strong>. Identity,
+          metrics, and evidence come from the package manifest at the ZIP root.
         </p>
         <div className="warning-strip">
-          Browser artifact uploads are intentionally unavailable. This API only accepts a trusted
-          workspace directory path and never receives model bytes.
+          The API never deserializes uploaded artifacts in this process. Invalid packages are
+          rejected with structured issues and are not registered.
         </div>
         {error && <Banner tone="error" message={error} />}
-        <label>
-          Package directory reference
+        <label className="file-field">
+          HDFS model package ZIP
           <input
-            onChange={(event) => setPackageReference(event.target.value)}
-            placeholder="packages/hdfs/package"
+            accept=".zip,application/zip,application/x-zip-compressed"
+            onChange={(event) => setPackageFile(event.target.files?.[0] ?? null)}
             required
-            value={packageReference}
+            type="file"
           />
+          <span className="file-field-name">
+            {packageFile ? packageFile.name : "No ZIP selected"}
+          </span>
         </label>
         <div className="dialog-actions">
           <button className="secondary-button" type="button" onClick={onClose}>
             Cancel
           </button>
-          <button className="primary-button" disabled={isSubmitting} type="submit">
+          <button className="primary-button" disabled={isSubmitting || !packageFile} type="submit">
             {isSubmitting ? "Registering…" : "Register model"}
           </button>
         </div>

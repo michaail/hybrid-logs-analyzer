@@ -505,26 +505,26 @@ object storage.
 
 #### Automated
 
-- [x] 2.1 `python -m pytest tests/test_api.py tests/test_model_package.py` passes, including ZIP 201 eligible, ineligible ZIP 422 with empty model list, Operator 403, duplicate 409, unpublished analysis 409, and retained `not_supported` after publish
-- [x] 2.2 `ruff check src/api tests/test_api.py` and `mypy` pass
+- [x] 2.1 `python -m pytest tests/test_api.py tests/test_model_package.py` passes, including ZIP 201 eligible, ineligible ZIP 422 with empty model list, Operator 403, duplicate 409, unpublished analysis 409, and retained `not_supported` after publish — 057ae3a
+- [x] 2.2 `ruff check src/api tests/test_api.py` and `mypy` pass — 057ae3a
 
 #### Manual
 
-- [x] 2.3 In `/docs`, as a Publisher, upload a valid hand-built ZIP and see 201 `eligible`; upload a truncated ZIP and see 422 issues with no new row
-- [x] 2.4 Confirm OpenAPI no longer documents JSON `package_reference` registration
+- [x] 2.3 In `/docs`, as a Publisher, upload a valid hand-built ZIP and see 201 `eligible`; upload a truncated ZIP and see 422 issues with no new row — 057ae3a
+- [x] 2.4 Confirm OpenAPI no longer documents JSON `package_reference` registration — 057ae3a
 
 ### Phase 3: Publisher ZIP dialog
 
 #### Automated
 
-- [ ] 3.1 `cd frontend && npm run build` completes without TypeScript or production build errors
+- [x] 3.1 `cd frontend && npm run build` completes without TypeScript or production build errors
 
 #### Manual
 
-- [ ] 3.2 As Publisher: upload a valid ZIP → eligible notice; Publish version still works; Select stays disabled until published
-- [ ] 3.3 As Publisher: upload an invalid ZIP → Banner lists issue reasons; model list unchanged
-- [ ] 3.4 As Operator: register still fails with the API 403 surfaced in the page error (controls may remain visible)
-- [ ] 3.5 Confirm no “pipeline manifest” or “pre-staged directory” product copy on the Models view
+- [x] 3.2 As Publisher: upload a valid ZIP → eligible notice; Publish version still works; Select stays disabled until published
+- [x] 3.3 As Publisher: upload an invalid ZIP → Banner lists issue reasons; model list unchanged
+- [x] 3.4 As Operator: register still fails with the API 403 surfaced in the page error (controls may remain visible)
+- [x] 3.5 Confirm no “pipeline manifest” or “pre-staged directory” product copy on the Models view
 
 ### Phase 4: Bucket backend, Railway IaC, and docs
 

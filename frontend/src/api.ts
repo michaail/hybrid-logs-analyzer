@@ -126,10 +126,6 @@ export interface AuditEvent {
   created_at: string;
 }
 
-export interface ModelRegistration {
-  package_reference: string;
-}
-
 interface TokenResponse {
   access_token: string;
   token_type: "bearer";
@@ -179,10 +175,12 @@ export class ApiClient {
     return this.request<ModelVersion[]>(`/projects/${projectId}/models`);
   }
 
-  registerModel(projectId: string, model: ModelRegistration): Promise<ModelVersion> {
+  registerModel(projectId: string, packageFile: File): Promise<ModelVersion> {
+    const body = new FormData();
+    body.append("package", packageFile, packageFile.name);
     return this.request<ModelVersion>(`/projects/${projectId}/models`, {
       method: "POST",
-      body: model,
+      body,
     });
   }
 
@@ -278,8 +276,9 @@ export class ApiClient {
   ): Promise<T> {
     const headers = new Headers();
     const includeToken = options.includeToken ?? true;
+    const formData = options.body instanceof FormData ? options.body : null;
 
-    if (options.body !== undefined) {
+    if (options.body !== undefined && formData === null) {
       headers.set("Content-Type", "application/json");
     }
     if (includeToken && this.token) {
@@ -289,7 +288,9 @@ export class ApiClient {
     const response = await fetch(`${apiBaseUrl}${path}`, {
       method: options.method ?? "GET",
       headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body:
+        formData ??
+        (options.body === undefined ? undefined : JSON.stringify(options.body)),
     });
 
     if (!response.ok) {
