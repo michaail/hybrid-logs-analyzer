@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 import re
@@ -381,6 +382,42 @@ def validate_model_package_source(
             if extract_issues:
                 return PackageValidationResult.from_issues(extract_issues)
             return validate_model_package(extract_root, load_state_dict=load_state_dict)
+
+
+def unpack_zip_bytes(archive_bytes: bytes, destination: Path) -> PackageValidationResult:
+    """Unpack a zip into destination using the existing member and size caps.
+
+    This is transport only: it does not run the directory contract or persist files.
+    """
+
+    if len(archive_bytes) > MAX_ZIP_COMPRESSED_BYTES:
+        return PackageValidationResult.from_issues(
+            [
+                PackageValidationIssue(
+                    path="package",
+                    reason="Zip archive exceeds the 32 MiB compressed size limit.",
+                )
+            ]
+        )
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(archive_bytes))
+    except zipfile.BadZipFile:
+        return PackageValidationResult.from_issues(
+            [
+                PackageValidationIssue(
+                    path="package",
+                    reason="Package source must be a readable zip archive.",
+                )
+            ]
+        )
+    with archive:
+        zip_issues = _zip_transport_issues(archive)
+        if zip_issues:
+            return PackageValidationResult.from_issues(zip_issues)
+        extract_issues = _extract_zip_archive(archive, destination)
+        if extract_issues:
+            return PackageValidationResult.from_issues(extract_issues)
+    return PackageValidationResult.from_issues([])
 
 
 def materialize_declared_package_files(package_root: Path, destination: Path) -> list[str]:

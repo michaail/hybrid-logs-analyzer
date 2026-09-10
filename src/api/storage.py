@@ -487,8 +487,9 @@ class ApiDatabase:
         storage_kind: str = "workspace",
         checksum: str | None = None,
         actor_user_id: UUID | None = None,
+        model_id: UUID | None = None,
     ) -> DatabaseRow:
-        model_id = str(uuid4())
+        resolved_model_id = str(model_id) if model_id is not None else str(uuid4())
         created_at = utc_now()
         pointer_checksum = _normalized_checksum(storage_kind, checksum)
         with self.session() as connection:
@@ -502,7 +503,7 @@ class ApiDatabase:
                 ) VALUES (?, ?, ?, ?, 'hdfs', 'eligible', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    model_id,
+                    resolved_model_id,
                     str(project_id),
                     model_identifier,
                     version,
@@ -525,7 +526,7 @@ class ApiDatabase:
                     project_id=project_id,
                     action="model.registered",
                     resource_type="model_version",
-                    resource_id=UUID(model_id),
+                    resource_id=UUID(resolved_model_id),
                     details_json=json.dumps(
                         {
                             "artifact_reference": artifact_reference,
@@ -538,7 +539,7 @@ class ApiDatabase:
                         sort_keys=True,
                     ),
                 )
-        return self.get_model_version(UUID(model_id)) or self._missing_record("model version")
+        return self.get_model_version(UUID(resolved_model_id)) or self._missing_record("model version")
 
     def get_model_version(self, model_id: UUID) -> DatabaseRow | None:
         return self._one("SELECT * FROM model_versions WHERE id = ?", (str(model_id),))

@@ -14,7 +14,13 @@ INITIAL_SCHEMA_VERSION = "001_initial_schema"
 SHARED_STATE_VERSION = "002_shared_durable_runtime_state"
 # F-02 originally numbered this 002; F-01 already occupied that slot.
 PACKAGE_ADMISSION_VERSION = "003_model_package_admission"
-_MIGRATION_ORDER = (INITIAL_SCHEMA_VERSION, SHARED_STATE_VERSION, PACKAGE_ADMISSION_VERSION)
+OBJECT_CHECKSUM_VERSION = "004_model_object_checksum"
+_MIGRATION_ORDER = (
+    INITIAL_SCHEMA_VERSION,
+    SHARED_STATE_VERSION,
+    PACKAGE_ADMISSION_VERSION,
+    OBJECT_CHECKSUM_VERSION,
+)
 
 _INITIAL_SCHEMA_STATEMENTS: tuple[str, ...] = (
     """
@@ -159,6 +165,41 @@ CREATE TABLE anomaly_results_002 (
 )
 """
 
+_MODEL_VERSIONS_OBJECT_CHECKSUM = """
+CREATE TABLE model_versions_004 (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id),
+    model_identifier TEXT NOT NULL,
+    version TEXT NOT NULL,
+    source_compatibility TEXT NOT NULL CHECK (source_compatibility = 'hdfs'),
+    status TEXT NOT NULL CHECK (status IN ('eligible', 'published')),
+    pipeline_run_id TEXT NOT NULL,
+    artifact_reference TEXT NOT NULL,
+    metrics_json TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    external_evaluation_evidence TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    published_at TEXT,
+    published_by_user_id TEXT REFERENCES users(id),
+    storage_kind TEXT NOT NULL CHECK (storage_kind IN ('workspace', 'object')),
+    checksum TEXT,
+    package_reference TEXT NOT NULL,
+    artifact_sha256 TEXT NOT NULL,
+    UNIQUE (project_id, model_identifier, version),
+    CHECK (
+        storage_kind <> 'object'
+        OR (checksum IS NOT NULL AND checksum <> '')
+    )
+)
+"""
+_MODEL_VERSIONS_COPY_COLUMNS = (
+    "id, project_id, model_identifier, version, source_compatibility, status, "
+    "pipeline_run_id, artifact_reference, metrics_json, metadata_json, "
+    "external_evaluation_evidence, created_at, published_at, published_by_user_id, "
+    "storage_kind, checksum, package_reference, artifact_sha256"
+)
+_POSTGRES_OBJECT_CHECKSUM_CONSTRAINT = "model_versions_object_kind_checksum_check"
+
 _PACKAGE_ADMISSION_STATEMENTS: tuple[str, ...] = (
     """
     ALTER TABLE model_versions
@@ -221,6 +262,13 @@ def apply_migrations(database: ApiDatabase, *, target: str | None = None) -> Non
                 and PACKAGE_ADMISSION_VERSION not in applied_versions
             ):
                 _apply_package_admission(database, connection)
+                applied_versions.add(PACKAGE_ADMISSION_VERSION)
+            if (
+                _should_apply(OBJECT_CHECKSUM_VERSION, target)
+                and OBJECT_CHECKSUM_VERSION not in applied_versions
+            ):
+                _apply_object_checksum_postgres(connection)
+                _record_migration(connection, OBJECT_CHECKSUM_VERSION)
             return
 
     if (
@@ -238,6 +286,13 @@ def apply_migrations(database: ApiDatabase, *, target: str | None = None) -> Non
         with database.session() as connection:
             _apply_package_admission(database, connection)
 
+    if (
+        not database.uses_postgresql
+        and _should_apply(OBJECT_CHECKSUM_VERSION, target)
+        and OBJECT_CHECKSUM_VERSION not in _current_applied_versions(database)
+    ):
+        _upgrade_model_object_checksum_sqlite(database)
+
 
 def main() -> None:
     """Run pending migrations using the configured runtime database URL."""
@@ -252,6 +307,68 @@ def _apply_package_admission(database: ApiDatabase, connection: Any) -> None:
         database, connection, PACKAGE_ADMISSION_VERSION, _PACKAGE_ADMISSION_STATEMENTS
     )
     _record_migration(connection, PACKAGE_ADMISSION_VERSION)
+
+
+def _apply_object_checksum_postgres(connection: _Executor) -> None:
+    existing = connection.execute(
+        """
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = ?
+        """,
+        (_POSTGRES_OBJECT_CHECKSUM_CONSTRAINT,),
+    ).fetchone()
+    if existing is not None:
+        return
+    connection.execute(
+        f"""
+        ALTER TABLE model_versions
+        ADD CONSTRAINT {_POSTGRES_OBJECT_CHECKSUM_CONSTRAINT}
+        CHECK (
+            storage_kind <> 'object'
+            OR (checksum IS NOT NULL AND checksum <> '')
+        )
+        """
+    )
+
+
+def _upgrade_model_object_checksum_sqlite(database: ApiDatabase) -> None:
+    """Rebuild SQLite model_versions so object kind requires a checksum."""
+    database_path = _sqlite_path_from_url(database.database_url)
+    connection = sqlite3.connect(str(database_path), isolation_level=None)
+    connection.row_factory = sqlite3.Row
+    try:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("BEGIN IMMEDIATE")
+        executor = _SqliteRebuildConnection(connection)
+        if OBJECT_CHECKSUM_VERSION in _read_applied_versions(executor):
+            connection.execute("ROLLBACK")
+            return
+        connection.execute(_MODEL_VERSIONS_OBJECT_CHECKSUM)
+        connection.execute(
+            f"""
+            INSERT INTO model_versions_004 ({_MODEL_VERSIONS_COPY_COLUMNS})
+            SELECT {_MODEL_VERSIONS_COPY_COLUMNS}
+            FROM model_versions
+            """
+        )
+        connection.execute("DROP TABLE model_versions")
+        connection.execute("ALTER TABLE model_versions_004 RENAME TO model_versions")
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_model_versions_project_id ON model_versions(project_id)"
+        )
+        _record_migration(executor, OBJECT_CHECKSUM_VERSION)
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(
+                f"Object-checksum migration left foreign-key violations: {violations}"
+            )
+        connection.execute("COMMIT")
+    except BaseException:
+        connection.execute("ROLLBACK")
+        raise
+    finally:
+        connection.close()
 
 
 def _apply_migration_statements(

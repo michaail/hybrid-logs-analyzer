@@ -494,24 +494,24 @@ object storage.
 
 #### Automated
 
-- [x] 1.1 `python -m pytest tests/test_model_package.py tests/test_object_store.py` (or the chosen adapter test path) passes, including declared-files-only copy and filesystem prefix delete
-- [x] 1.2 `ruff check src/modules/model_package.py src/api tests/test_model_package.py` and `mypy` pass
+- [x] 1.1 `python -m pytest tests/test_model_package.py tests/test_object_store.py` (or the chosen adapter test path) passes, including declared-files-only copy and filesystem prefix delete — 8a6d902
+- [x] 1.2 `ruff check src/modules/model_package.py src/api tests/test_model_package.py` and `mypy` pass — 8a6d902
 
 #### Manual
 
-- [x] 1.3 Inspect one materialized prefix on disk: only `manifest.json`, declared `.pt`, and declared evidence; leftover ZIP members are absent
+- [x] 1.3 Inspect one materialized prefix on disk: only `manifest.json`, declared `.pt`, and declared evidence; leftover ZIP members are absent — 8a6d902
 
 ### Phase 2: HTTP multipart ZIP admission
 
 #### Automated
 
-- [ ] 2.1 `python -m pytest tests/test_api.py tests/test_model_package.py` passes, including ZIP 201 eligible, ineligible ZIP 422 with empty model list, Operator 403, duplicate 409, unpublished analysis 409, and retained `not_supported` after publish
-- [ ] 2.2 `ruff check src/api tests/test_api.py` and `mypy` pass
+- [x] 2.1 `python -m pytest tests/test_api.py tests/test_model_package.py` passes, including ZIP 201 eligible, ineligible ZIP 422 with empty model list, Operator 403, duplicate 409, unpublished analysis 409, and retained `not_supported` after publish
+- [x] 2.2 `ruff check src/api tests/test_api.py` and `mypy` pass
 
 #### Manual
 
-- [ ] 2.3 In `/docs`, as a Publisher, upload a valid hand-built ZIP and see 201 `eligible`; upload a truncated ZIP and see 422 issues with no new row
-- [ ] 2.4 Confirm OpenAPI no longer documents JSON `package_reference` registration
+- [x] 2.3 In `/docs`, as a Publisher, upload a valid hand-built ZIP and see 201 `eligible`; upload a truncated ZIP and see 422 issues with no new row
+- [x] 2.4 Confirm OpenAPI no longer documents JSON `package_reference` registration
 
 ### Phase 3: Publisher ZIP dialog
 
