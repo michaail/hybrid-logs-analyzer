@@ -396,12 +396,12 @@ for this slice.
 
 #### Automated
 
-- [ ] 1.1 python -m pytest tests/test_object_store.py plus the admit-helper tests pass for accept, 32 MiB+1, empty, one bad line, and UTF-8 failure; object root is empty on every failure
-- [ ] 1.2 ruff check src/api/object_store.py src/api/validation.py and mypy pass on those modules
+- [x] 1.1 python -m pytest tests/test_object_store.py plus the admit-helper tests pass for accept, 32 MiB+1, empty, one bad line, and UTF-8 failure; object root is empty on every failure
+- [x] 1.2 ruff check src/api/object_store.py src/api/validation.py and mypy pass on those modules
 
 #### Manual
 
-- [ ] 1.3 Inspect one successful filesystem prefix: a single log object, no extras
+- [x] 1.3 Inspect one successful filesystem prefix: a single log object, no extras
 
 ### Phase 2: Operator HTTP
 

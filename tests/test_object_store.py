@@ -14,6 +14,8 @@ from src.api.object_store import (
     BucketObjectStore,
     FilesystemObjectStore,
     build_object_store,
+    dataset_object_key,
+    dataset_object_prefix,
     model_package_object_key,
     model_package_object_prefix,
 )
@@ -76,6 +78,28 @@ def test_model_package_object_key_is_posix_prefix() -> None:
         "projects/11111111-1111-4111-8111-111111111111/"
         "models/22222222-2222-4222-8222-222222222222/v1/manifest.json"
     )
+
+
+def test_dataset_object_key_is_posix_prefix() -> None:
+    project_id = UUID("11111111-1111-4111-8111-111111111111")
+    dataset_id = UUID("33333333-3333-4333-8333-333333333333")
+    assert dataset_object_prefix(project_id, dataset_id) == (
+        "projects/11111111-1111-4111-8111-111111111111/"
+        "datasets/33333333-3333-4333-8333-333333333333"
+    )
+    assert dataset_object_key(project_id, dataset_id, "hdfs.log") == (
+        "projects/11111111-1111-4111-8111-111111111111/"
+        "datasets/33333333-3333-4333-8333-333333333333/hdfs.log"
+    )
+
+
+def test_dataset_object_key_rejects_path_escape() -> None:
+    with pytest.raises(ValueError, match="relative POSIX"):
+        dataset_object_key("proj", "ds", "/etc/passwd")
+    with pytest.raises(ValueError, match=r"\.\."):
+        dataset_object_key("proj", "ds", "../escape.log")
+    with pytest.raises(ValueError, match=r"\.\."):
+        dataset_object_key("proj", "ds", "nested/../../etc/passwd")
 
 
 def test_filesystem_put_and_delete_prefix(tmp_path: Path) -> None:

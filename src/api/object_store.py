@@ -1,4 +1,4 @@
-"""Immutable object-store protocol for admitted HDFS model packages."""
+"""Immutable object-store protocol for admitted HDFS model packages and datasets."""
 
 from __future__ import annotations
 
@@ -58,6 +58,19 @@ def model_package_object_prefix(project_id: UUID | str, model_id: UUID | str, ve
     """Return the directory prefix for one model version's declared files."""
 
     return f"projects/{project_id}/models/{model_id}/{version}"
+
+
+def dataset_object_prefix(project_id: UUID | str, dataset_id: UUID | str) -> str:
+    """Return the directory prefix for one admitted HDFS dataset."""
+
+    return f"projects/{project_id}/datasets/{dataset_id}"
+
+
+def dataset_object_key(project_id: UUID | str, dataset_id: UUID | str, relative: str) -> str:
+    """Build ``projects/<project-id>/datasets/<dataset-id>/<relative>``."""
+
+    member = _require_relative_posix(relative)
+    return f"projects/{project_id}/datasets/{dataset_id}/{member}"
 
 
 def build_object_store(

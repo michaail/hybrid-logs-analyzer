@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,8 @@ from uuid import UUID, uuid4
 
 from src.api.object_store import (
     ObjectStore,
+    dataset_object_key,
+    dataset_object_prefix,
     model_package_object_key,
     model_package_object_prefix,
 )
@@ -35,6 +38,8 @@ _HDFS_LINE = re.compile(
     r"^\d{6}\s+\d{6}\s+\S+\s+(?:TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\s+\S+:\s+\S.+$"
 )
 _MAX_EXAMPLES = 20
+MAX_HDFS_UPLOAD_BYTES = 32 * 1024 * 1024
+_UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 class ValidationError(ValueError):
@@ -43,6 +48,16 @@ class ValidationError(ValueError):
 
 class ValidatorUnavailableError(RuntimeError):
     """The private package-validation process failed, timed out, or returned garbage."""
+
+
+@dataclass(frozen=True)
+class AdmittedHdfsDataset:
+    """Validated HDFS log identity persisted after whole-file acceptance."""
+
+    dataset_id: UUID
+    object_reference: str
+    checksum: str
+    storage_kind: str = "object"
 
 
 @dataclass(frozen=True)
@@ -236,41 +251,138 @@ def _admitted_identity_from_directory(package_root: Path) -> ModelPackageManifes
     return manifest
 
 
+def admit_uploaded_hdfs_log(
+    payload: bytes,
+    *,
+    object_store: ObjectStore,
+    project_id: UUID,
+    original_filename: str,
+) -> tuple[dict[str, Any], AdmittedHdfsDataset | None]:
+    """Validate uploaded HDFS bytes in process, then persist one object only if valid.
+
+    Oversize, empty, non-UTF-8, or any non-matching line returns a report and puts nothing.
+    """
+
+    if len(payload) > MAX_HDFS_UPLOAD_BYTES:
+        return (
+            _hdfs_admission_report(
+                valid=False,
+                total_records=0,
+                invalid_records=0,
+                examples=[],
+                issues=["HDFS log exceeds the 32 MiB size limit."],
+            ),
+            None,
+        )
+    try:
+        text = payload.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return (
+            _hdfs_admission_report(
+                valid=False,
+                total_records=0,
+                invalid_records=0,
+                examples=[],
+                issues=["HDFS log dataset must be a readable UTF-8 text file."],
+            ),
+            None,
+        )
+
+    report = _hdfs_scan_report(text.splitlines())
+    if not report["valid"]:
+        return report, None
+
+    dataset_id = uuid4()
+    filename = _dataset_log_filename(original_filename)
+    prefix = dataset_object_prefix(project_id, dataset_id)
+    object_reference = dataset_object_key(project_id, dataset_id, filename)
+    try:
+        object_store.put(object_reference, payload)
+    except Exception:
+        object_store.delete_prefix(prefix)
+        raise
+    admitted = AdmittedHdfsDataset(
+        dataset_id=dataset_id,
+        object_reference=object_reference,
+        checksum=hashlib.sha256(payload).hexdigest(),
+    )
+    return report, admitted
+
+
 def validate_hdfs_log(log_reference: str, workspace_root: Path) -> tuple[str, dict[str, Any]]:
     """Read every stored log record and return an HDFS validation report."""
     log_path = _trusted_file(log_reference, workspace_root, "HDFS log dataset")
+    try:
+        with log_path.open("r", encoding="utf-8", errors="strict") as log_file:
+            report = _hdfs_scan_report(line.rstrip("\r\n") for line in log_file)
+    except (OSError, UnicodeDecodeError) as error:
+        raise ValidationError("HDFS log dataset must be a readable UTF-8 text file.") from error
+    report.pop("issues", None)
+    return str(log_path.relative_to(workspace_root.resolve())), report
+
+
+def _hdfs_scan_report(lines: Iterable[str]) -> dict[str, Any]:
     total_records = 0
     invalid_examples: list[dict[str, Any]] = []
     invalid_records = 0
+    for line_number, raw_line in enumerate(lines, start=1):
+        line = raw_line.rstrip("\r\n")
+        if not line or not _HDFS_LINE.fullmatch(line):
+            invalid_records += 1
+            if len(invalid_examples) < _MAX_EXAMPLES:
+                invalid_examples.append(
+                    {
+                        "line_number": line_number,
+                        "reason": "Does not match the supported HDFS log format.",
+                    }
+                )
+        total_records += 1
+    if total_records == 0:
+        return _hdfs_admission_report(
+            valid=False,
+            total_records=0,
+            invalid_records=0,
+            examples=[{"line_number": 0, "reason": "Dataset contains no records."}],
+            issues=["Dataset contains no records."],
+        )
+    return _hdfs_admission_report(
+        valid=invalid_records == 0,
+        total_records=total_records,
+        invalid_records=invalid_records,
+        examples=invalid_examples,
+        issues=[str(example["reason"]) for example in invalid_examples],
+    )
 
-    try:
-        with log_path.open("r", encoding="utf-8", errors="strict") as log_file:
-            for line_number, raw_line in enumerate(log_file, start=1):
-                line = raw_line.rstrip("\r\n")
-                if not line or not _HDFS_LINE.fullmatch(line):
-                    invalid_records += 1
-                    if len(invalid_examples) < _MAX_EXAMPLES:
-                        invalid_examples.append(
-                            {
-                                "line_number": line_number,
-                                "reason": "Does not match the supported HDFS log format.",
-                            }
-                        )
-                total_records += 1
-    except (OSError, UnicodeDecodeError) as error:
-        raise ValidationError("HDFS log dataset must be a readable UTF-8 text file.") from error
 
-    report: dict[str, Any] = {
+def _hdfs_admission_report(
+    *,
+    valid: bool,
+    total_records: int,
+    invalid_records: int,
+    examples: list[dict[str, Any]],
+    issues: list[str],
+) -> dict[str, Any]:
+    unique_issues: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for reason in issues:
+        if reason and reason not in seen:
+            seen.add(reason)
+            unique_issues.append({"reason": reason})
+    return {
+        "valid": valid,
         "total_records": total_records,
         "invalid_records": invalid_records,
-        "examples": invalid_examples,
+        "examples": examples,
+        "issues": unique_issues,
     }
-    if total_records == 0:
-        report["valid"] = False
-        report["examples"] = [{"line_number": 0, "reason": "Dataset contains no records."}]
-    else:
-        report["valid"] = invalid_records == 0
-    return str(log_path.relative_to(workspace_root.resolve())), report
+
+
+def _dataset_log_filename(original_filename: str) -> str:
+    segment = Path(str(original_filename or "").replace("\\", "/")).name
+    candidate = _UNSAFE_FILENAME_CHARS.sub("_", segment).strip("_")
+    if not candidate or candidate in {".", ".."}:
+        return "hdfs.log"
+    return candidate
 
 
 def _trusted_file(reference: str, workspace_root: Path, resource_name: str) -> Path:
