@@ -332,12 +332,12 @@ Not applicable. No schema or API contract change.
 
 #### Automated
 
-- [ ] 2.1 `python -m pytest tests/test_api.py -m "not ml"` passes, including Operator register 403 + empty list and Operator publish 403 + still eligible
-- [ ] 2.2 `ruff check tests/test_api.py` and `mypy` pass
+- [x] 2.1 `python -m pytest tests/test_api.py -m "not ml"` passes, including Operator register 403 + empty list and Operator publish 403 + still eligible
+- [x] 2.2 `ruff check tests/test_api.py` and `mypy` pass
 
 #### Manual
 
-- [ ] 2.3 Confirm no frontend test or UI hide was added; API 403 remains the control
+- [x] 2.3 Confirm no frontend test or UI hide was added; API 403 remains the control
 
 ### Phase 3: Cookbook patterns for isolation tests
 

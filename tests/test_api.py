@@ -404,6 +404,7 @@ def test_authentication_roles_and_project_isolation(api: ApiFixture) -> None:
     del publisher, operator
 
     operator_headers = _login(client, "operator")
+    publisher_headers = _login(client, "publisher")
     other_operator_headers = _login(client, "other-operator")
     assert client.get(f"/projects/{first_project['id']}/models", headers=operator_headers).status_code == 200
     assert (
@@ -418,6 +419,16 @@ def test_authentication_roles_and_project_isolation(api: ApiFixture) -> None:
         ).status_code
         == 403
     )
+    listed_as_operator = client.get(
+        f"/projects/{first_project['id']}/models", headers=operator_headers
+    )
+    listed_as_publisher = client.get(
+        f"/projects/{first_project['id']}/models", headers=publisher_headers
+    )
+    assert listed_as_operator.status_code == 200
+    assert listed_as_operator.json() == []
+    assert listed_as_publisher.status_code == 200
+    assert listed_as_publisher.json() == []
 
 
 def test_cross_project_member_routes_return_404(api: ApiFixture) -> None:
@@ -618,6 +629,13 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
         ).status_code
         == 403
     )
+    unpublished = client.get(
+        f"/projects/{project['id']}/models/{model['id']}",
+        headers=publisher_headers,
+    )
+    assert unpublished.status_code == 200
+    assert unpublished.json()["status"] == "eligible"
+    assert unpublished.json()["published_at"] is None
     publication = client.post(
         f"/projects/{project['id']}/models/{model['id']}/publish",
         headers=publisher_headers,
