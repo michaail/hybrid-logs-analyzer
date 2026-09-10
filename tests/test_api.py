@@ -420,6 +420,162 @@ def test_authentication_roles_and_project_isolation(api: ApiFixture) -> None:
     )
 
 
+def test_cross_project_member_routes_return_404(api: ApiFixture) -> None:
+    client = api.client
+    administrator = _login(client, "admin")
+    project_a = _create_project(client, administrator, "incident-a")
+    project_b = _create_project(client, administrator, "incident-b")
+    _provision_project_account(
+        client, administrator, "publisher-a", str(project_a["id"]), "publisher"
+    )
+    _provision_project_account(
+        client, administrator, "operator-a", str(project_a["id"]), "operator"
+    )
+    _provision_project_account(
+        client, administrator, "publisher-b", str(project_b["id"]), "publisher"
+    )
+    _provision_project_account(
+        client, administrator, "operator-b", str(project_b["id"]), "operator"
+    )
+    publisher_a = _login(client, "publisher-a")
+    operator_a = _login(client, "operator-a")
+    publisher_b = _login(client, "publisher-b")
+    operator_b = _login(client, "operator-b")
+    archive = _zip_staged(api.workspace)
+
+    assert (
+        client.post(
+            f"/projects/{project_a['id']}/models",
+            files={"package": ("package.zip", archive, "application/zip")},
+        ).status_code
+        == 401
+    )
+
+    registration = _register(client, publisher_a, project_a["id"], archive)
+    assert registration.status_code == 201, registration.text
+    model = registration.json()
+    model_id = model["id"]
+    assert model["status"] == "eligible"
+
+    assert (
+        client.get(
+            f"/projects/{project_a['id']}/models/{model_id}",
+            headers=operator_b,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/projects/{project_b['id']}/models/{model_id}",
+            headers=operator_b,
+        ).status_code
+        == 404
+    )
+
+    foreign_register = _register(client, publisher_b, project_a["id"], archive)
+    assert foreign_register.status_code == 404
+    listed_a = client.get(f"/projects/{project_a['id']}/models", headers=publisher_a)
+    assert listed_a.status_code == 200
+    assert [item["id"] for item in listed_a.json()] == [model_id]
+
+    foreign_publish = client.post(
+        f"/projects/{project_a['id']}/models/{model_id}/publish",
+        headers=publisher_b,
+    )
+    assert foreign_publish.status_code == 404
+    still_eligible = client.get(
+        f"/projects/{project_a['id']}/models/{model_id}",
+        headers=publisher_a,
+    )
+    assert still_eligible.status_code == 200
+    assert still_eligible.json()["status"] == "eligible"
+
+    publication = client.post(
+        f"/projects/{project_a['id']}/models/{model_id}/publish",
+        headers=publisher_a,
+    )
+    assert publication.status_code == 200, publication.text
+
+    valid_log = api.workspace / "data" / "stored-hdfs.log"
+    valid_log.parent.mkdir()
+    valid_log.write_text(
+        "081109 203615 148 INFO dfs.DataNode$DataXceiver: "
+        "Receiving block blk_1 src: /10.0.0.1:50010 dest: /10.0.0.2:50010\n"
+    )
+    analysis = client.post(
+        f"/projects/{project_a['id']}/analysis-runs",
+        headers=operator_a,
+        json={"model_version_id": model_id, "log_reference": "data/stored-hdfs.log"},
+    )
+    assert analysis.status_code == 202, analysis.text
+    run_id = analysis.json()["id"]
+
+    assert (
+        client.get(
+            f"/projects/{project_a['id']}/analysis-runs",
+            headers=operator_b,
+        ).status_code
+        == 404
+    )
+    own_runs = client.get(
+        f"/projects/{project_b['id']}/analysis-runs",
+        headers=operator_b,
+    )
+    assert own_runs.status_code == 200
+    assert own_runs.json() == []
+
+    assert (
+        client.post(
+            f"/projects/{project_a['id']}/analysis-runs",
+            headers=operator_b,
+            json={"model_version_id": model_id, "log_reference": "data/stored-hdfs.log"},
+        ).status_code
+        == 404
+    )
+    foreign_model = client.post(
+        f"/projects/{project_b['id']}/analysis-runs",
+        headers=operator_b,
+        json={"model_version_id": model_id, "log_reference": "data/stored-hdfs.log"},
+    )
+    assert foreign_model.status_code == 404
+    assert (
+        client.get(
+            f"/projects/{project_b['id']}/analysis-runs",
+            headers=operator_b,
+        ).json()
+        == []
+    )
+
+    assert (
+        client.get(
+            f"/projects/{project_a['id']}/analysis-runs/{run_id}",
+            headers=operator_b,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/projects/{project_a['id']}/analysis-runs/{run_id}/results",
+            headers=operator_b,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/projects/{project_b['id']}/analysis-runs/{run_id}",
+            headers=operator_b,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/projects/{project_b['id']}/analysis-runs/{run_id}/results",
+            headers=operator_b,
+        ).status_code
+        == 404
+    )
+
+
 def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> None:
     client = api.client
     administrator = _login(client, "admin")
