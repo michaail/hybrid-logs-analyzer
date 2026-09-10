@@ -40,6 +40,7 @@ _HDFS_LINE = re.compile(
 _MAX_EXAMPLES = 20
 MAX_HDFS_UPLOAD_BYTES = 32 * 1024 * 1024
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+_MAX_DATASET_FILENAME_CHARS = 128
 
 
 class ValidationError(ValueError):
@@ -309,18 +310,6 @@ def admit_uploaded_hdfs_log(
     return report, admitted
 
 
-def validate_hdfs_log(log_reference: str, workspace_root: Path) -> tuple[str, dict[str, Any]]:
-    """Read every stored log record and return an HDFS validation report."""
-    log_path = _trusted_file(log_reference, workspace_root, "HDFS log dataset")
-    try:
-        with log_path.open("r", encoding="utf-8", errors="strict") as log_file:
-            report = _hdfs_scan_report(line.rstrip("\r\n") for line in log_file)
-    except (OSError, UnicodeDecodeError) as error:
-        raise ValidationError("HDFS log dataset must be a readable UTF-8 text file.") from error
-    report.pop("issues", None)
-    return str(log_path.relative_to(workspace_root.resolve())), report
-
-
 def _hdfs_scan_report(lines: Iterable[str]) -> dict[str, Any]:
     total_records = 0
     invalid_examples: list[dict[str, Any]] = []
@@ -382,24 +371,4 @@ def _dataset_log_filename(original_filename: str) -> str:
     candidate = _UNSAFE_FILENAME_CHARS.sub("_", segment).strip("_")
     if not candidate or candidate in {".", ".."}:
         return "hdfs.log"
-    return candidate
-
-
-def _trusted_file(reference: str, workspace_root: Path, resource_name: str) -> Path:
-    resolved = _resolved_inside_workspace(reference, workspace_root, resource_name)
-    if not resolved.is_file():
-        raise ValidationError(f"{resource_name.capitalize()} does not exist or is not a regular file.")
-    return resolved
-
-
-def _resolved_inside_workspace(reference: str, workspace_root: Path, resource_name: str) -> Path:
-    root = workspace_root.resolve()
-    candidate = Path(reference)
-    if not candidate.is_absolute():
-        candidate = root / candidate
-    resolved = candidate.resolve()
-    try:
-        resolved.relative_to(root)
-    except ValueError as error:
-        raise ValidationError(f"{resource_name.capitalize()} must be inside the trusted workspace.") from error
-    return resolved
+    return candidate[:_MAX_DATASET_FILENAME_CHARS]

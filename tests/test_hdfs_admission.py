@@ -78,6 +78,21 @@ def test_admit_uploaded_hdfs_log_sanitizes_original_filename(tmp_path: Path) -> 
     assert _object_files(object_root) == {admitted.object_reference}
 
 
+def test_admit_uploaded_hdfs_log_caps_sanitized_filename(tmp_path: Path) -> None:
+    object_root = tmp_path / "objects"
+    store = FilesystemObjectStore(object_root)
+    original_filename = f"{'a' * 200}.log"
+    _report, admitted = admit_uploaded_hdfs_log(
+        _VALID_PAYLOAD,
+        object_store=store,
+        project_id=_PROJECT_ID,
+        original_filename=original_filename,
+    )
+    assert admitted is not None
+    assert admitted.object_reference.endswith(f"/{'a' * 128}")
+    assert _object_files(object_root) == {admitted.object_reference}
+
+
 def test_admit_uploaded_hdfs_log_rejects_oversize_without_put(tmp_path: Path) -> None:
     object_root = tmp_path / "objects"
     store = FilesystemObjectStore(object_root)
