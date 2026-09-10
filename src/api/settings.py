@@ -19,6 +19,7 @@ class ApiSettings:
     jwt_ttl_minutes: int = 30
     code_root: Path = Path(".")
     model_validator_command: tuple[str, ...] | None = None
+    object_store_root: Path = Path(".api/objects")
 
     @classmethod
     def from_environment(cls) -> "ApiSettings":
@@ -40,6 +41,11 @@ class ApiSettings:
         workspace_root = Path(
             os.environ.get("API_TRUSTED_WORKSPACE_ROOT", "workspace")
         ).resolve()
+        object_raw = os.environ.get("API_OBJECT_STORE_ROOT")
+        if object_raw:
+            object_store_root = Path(object_raw).resolve()
+        else:
+            object_store_root = (workspace_root.parent / ".api" / "objects").resolve()
         ttl_raw = os.environ.get("API_JWT_TTL_MINUTES", "30")
         try:
             jwt_ttl_minutes = int(ttl_raw)
@@ -54,4 +60,5 @@ class ApiSettings:
             trusted_workspace_root=workspace_root,
             jwt_ttl_minutes=jwt_ttl_minutes,
             code_root=Path(os.environ.get("API_CODE_ROOT", ".")).resolve(),
+            object_store_root=object_store_root,
         )

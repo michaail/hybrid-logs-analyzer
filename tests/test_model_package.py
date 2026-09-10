@@ -17,6 +17,7 @@ from src.modules.model_package import (
     MAX_ZIP_UNCOMPRESSED_BYTES,
     PackageArchitecture,
     expected_state_dict_spec,
+    materialize_declared_package_files,
     validate_model_package,
     validate_model_package_source,
     validate_state_dict,
@@ -442,3 +443,79 @@ def test_zip_member_count_limit_is_rejected(tmp_path: Path) -> None:
     result = validate_model_package_source(archive)
     assert not result.valid
     _assert_has_issue(result, "64-member")
+
+
+def test_materialize_copies_declared_files_only(tmp_path: Path) -> None:
+    package = _write_package(tmp_path, extra_files={"leftover.bin": b"ignore-me"})
+    destination = tmp_path / "materialized"
+    copied = materialize_declared_package_files(package, destination)
+    assert set(copied) == {MANIFEST_NAME, "model.pt", "evidence.json"}
+    names = {
+        path.relative_to(destination).as_posix()
+        for path in destination.rglob("*")
+        if path.is_file()
+    }
+    assert names == {MANIFEST_NAME, "model.pt", "evidence.json"}
+    assert (package / "leftover.bin").is_file()
+    assert not (destination / "leftover.bin").exists()
+    assert (destination / "model.pt").read_bytes() == (package / "model.pt").read_bytes()
+    assert (destination / "evidence.json").read_bytes() == (
+        package / "evidence.json"
+    ).read_bytes()
+
+
+def test_materialize_preserves_nested_declared_layout(tmp_path: Path) -> None:
+    payload = _manifest_payload()
+    payload["files"] = {**payload["files"], "artifact": "weights/model.pt"}
+    package = _write_package(
+        tmp_path,
+        manifest=payload,
+        extra_files={"weights/model.pt": b"nested-artifact", "notes.txt": b"skip"},
+    )
+    (package / "model.pt").unlink()
+    destination = tmp_path / "materialized"
+    copied = materialize_declared_package_files(package, destination)
+    assert set(copied) == {MANIFEST_NAME, "weights/model.pt", "evidence.json"}
+    names = {
+        path.relative_to(destination).as_posix()
+        for path in destination.rglob("*")
+        if path.is_file()
+    }
+    assert names == {MANIFEST_NAME, "weights/model.pt", "evidence.json"}
+    assert (destination / "weights" / "model.pt").read_bytes() == b"nested-artifact"
+    assert not (destination / "notes.txt").exists()
+    assert not (destination / "model.pt").exists()
+
+
+def test_materialize_refuses_symlink_artifact(tmp_path: Path) -> None:
+    package = _write_package(tmp_path)
+    secret = tmp_path / "outside.pt"
+    secret.write_bytes(b"secret-weights")
+    artifact = package / "model.pt"
+    artifact.unlink()
+    artifact.symlink_to(secret)
+    destination = tmp_path / "materialized"
+    with pytest.raises(ValueError, match="regular file"):
+        materialize_declared_package_files(package, destination)
+    leftover = [path for path in destination.rglob("*") if path.is_file()]
+    assert leftover == []
+
+
+def test_materialize_refuses_path_escape_in_declared_name(tmp_path: Path) -> None:
+    payload = _manifest_payload()
+    payload["files"] = {**payload["files"], "artifact": "../escape.pt"}
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "evidence.json").write_text('{"status": "ok"}', encoding="utf-8")
+    (tmp_path / "escape.pt").write_bytes(b"escaped")
+    checksums = {
+        "../escape.pt": _sha256(b"escaped"),
+        "evidence.json": _sha256(b'{"status": "ok"}'),
+    }
+    payload["files"]["checksums"] = checksums
+    (package / MANIFEST_NAME).write_text(json.dumps(payload), encoding="utf-8")
+    destination = tmp_path / "materialized"
+    with pytest.raises(ValueError, match=r"\.\."):
+        materialize_declared_package_files(package, destination)
+    leftover = [path for path in destination.rglob("*") if path.is_file()]
+    assert leftover == []

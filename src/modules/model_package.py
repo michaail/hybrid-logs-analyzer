@@ -383,6 +383,46 @@ def validate_model_package_source(
             return validate_model_package(extract_root, load_state_dict=load_state_dict)
 
 
+def materialize_declared_package_files(package_root: Path, destination: Path) -> list[str]:
+    """Copy manifest.json and declared artifact/evidence into destination.
+
+    Extra undeclared files are not copied. Symlinks and path escape are refused.
+    This helper does not unpack zips or import PyTorch.
+    """
+
+    source_root = package_root.expanduser().resolve()
+    destination_root = destination.expanduser().resolve()
+    destination_root.mkdir(parents=True, exist_ok=True)
+
+    manifest, manifest_issues = _load_manifest(source_root)
+    if manifest is None:
+        reason = manifest_issues[0].reason if manifest_issues else "manifest.json is missing."
+        raise ValueError(reason)
+
+    planned: list[tuple[str, Path]] = []
+    for relative in (MANIFEST_NAME, manifest.files.artifact, manifest.files.evidence):
+        located, path_issues = _resolve_declared_file(source_root, relative)
+        if located is None:
+            reason = path_issues[0].reason if path_issues else "Declared path is missing."
+            raise ValueError(f"{relative}: {reason}")
+        target = (destination_root / relative).resolve()
+        try:
+            target.relative_to(destination_root)
+        except ValueError as error:
+            raise ValueError(
+                f"{relative}: destination path must stay inside the prefix."
+            ) from error
+        planned.append((relative, located))
+
+    copied: list[str] = []
+    for relative, located in planned:
+        target = destination_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(located.read_bytes())
+        copied.append(relative)
+    return copied
+
+
 def _load_manifest(
     package_root: Path,
 ) -> tuple[ModelPackageManifest | None, list[PackageValidationIssue]]:
