@@ -418,11 +418,11 @@ for this slice.
 
 #### Automated
 
-- [x] 3.1 npx tsc --noEmit in frontend/ passes
+- [x] 3.1 npx tsc --noEmit in frontend/ passes — 9b04905
 
 #### Manual
 
-- [x] 3.2 Upload a valid sample: list shows a new object-kind row
-- [x] 3.3 Upload an invalid sample: Banner from issues, list unchanged
-- [x] 3.4 Start analysis by selecting the accepted dataset: run is not_supported
-- [x] 3.5 Datasets panel and analyze dialog remain usable at a desktop width and a narrow viewport
+- [x] 3.2 Upload a valid sample: list shows a new object-kind row — 9b04905
+- [x] 3.3 Upload an invalid sample: Banner from issues, list unchanged — 9b04905
+- [x] 3.4 Start analysis by selecting the accepted dataset: run is not_supported — 9b04905
+- [x] 3.5 Datasets panel and analyze dialog remain usable at a desktop width and a narrow viewport — 9b04905
