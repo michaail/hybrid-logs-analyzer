@@ -1,10 +1,10 @@
 ---
 change_id: publish-hdfs-model-package
 title: Publish hdfs model package
-status: impl_reviewed
+status: archived
 created: 2026-09-10
 updated: 2026-09-10
-archived_at: null
+archived_at: 2026-09-10T15:56:16Z
 ---
 
 ## Notes
