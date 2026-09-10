@@ -171,6 +171,18 @@ def test_build_object_store_defaults_to_filesystem(tmp_path: Path) -> None:
     assert isinstance(store, FilesystemObjectStore)
 
 
+def test_partial_bucket_dataclass_stays_on_filesystem(tmp_path: Path) -> None:
+    settings = ApiSettings(
+        database_url=f"sqlite:///{tmp_path / 'api.db'}",
+        jwt_secret="test-secret-not-for-production",
+        trusted_workspace_root=tmp_path / "workspace",
+        object_store_root=tmp_path / "objects",
+        object_store_endpoint="https://storage.example.test",
+    )
+    assert settings.uses_bucket_object_store is False
+    assert isinstance(build_object_store(settings), FilesystemObjectStore)
+
+
 def test_incomplete_bucket_settings_are_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

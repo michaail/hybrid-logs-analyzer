@@ -62,17 +62,6 @@ class AdmittedModelPackage:
     storage_kind: str = "workspace"
 
 
-def trusted_package_directory(reference: str, workspace_root: Path) -> Path:
-    """Resolve a pre-staged package directory inside the trusted workspace."""
-
-    resolved = _resolved_inside_workspace(reference, workspace_root, "package reference")
-    if resolved.is_file():
-        raise ValidationError("Package reference must be a directory, not a file or zip archive.")
-    if not resolved.is_dir():
-        raise ValidationError("Package reference does not exist or is not a directory.")
-    return resolved
-
-
 def run_private_package_validator(
     package_root: Path,
     settings: ApiSettings,

@@ -443,6 +443,16 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
 
     duplicate = _register(client, publisher_headers, project["id"], archive)
     assert duplicate.status_code == 409
+    stored_object_files = {
+        path.relative_to(api.settings.object_store_root).as_posix()
+        for path in api.settings.object_store_root.rglob("*")
+        if path.is_file()
+    }
+    assert stored_object_files == {
+        f"{model['package_reference']}/manifest.json",
+        f"{model['package_reference']}/model.pt",
+        f"{model['package_reference']}/evidence.json",
+    }
 
     operator_headers = _login(client, "operator")
     assert (

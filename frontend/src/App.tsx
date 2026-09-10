@@ -49,10 +49,6 @@ export default function App() {
     () => models.find((model) => model.id === selectedModelId) ?? null,
     [models, selectedModelId],
   );
-  const publishedModels = useMemo(
-    () => models.filter((model) => model.status === "published"),
-    [models],
-  );
 
   useEffect(() => {
     const token = sessionStorage.getItem(tokenStorageKey);

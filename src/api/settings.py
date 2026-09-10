@@ -28,9 +28,14 @@ class ApiSettings:
 
     @property
     def uses_bucket_object_store(self) -> bool:
-        """True when Railway Bucket (or other S3-compatible) credentials are complete."""
+        """True when endpoint, bucket name, and both access keys are present."""
 
-        return self.object_store_endpoint is not None
+        return bool(
+            self.object_store_endpoint
+            and self.object_store_bucket
+            and self.object_store_access_key_id
+            and self.object_store_secret_access_key
+        )
 
     @classmethod
     def from_environment(cls) -> "ApiSettings":
