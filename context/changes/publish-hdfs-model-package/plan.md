@@ -530,12 +530,12 @@ object storage.
 
 #### Automated
 
-- [x] 4.1 `python -m pytest tests/test_api.py tests/test_model_package.py tests/test_artifacts.py` and adapter tests pass outside cases that only fail from native sandbox limits
-- [x] 4.2 `ruff check src tests scripts run_ablation.py` and `mypy` pass
-- [x] 4.3 `cd frontend && npm run build` still passes
-- [x] 4.4 `git diff -- requirements-macos-intel.lock.txt` is empty
+- [x] 4.1 `python -m pytest tests/test_api.py tests/test_model_package.py tests/test_artifacts.py` and adapter tests pass outside cases that only fail from native sandbox limits — 6370900
+- [x] 4.2 `ruff check src tests scripts run_ablation.py` and `mypy` pass — 6370900
+- [x] 4.3 `cd frontend && npm run build` still passes — 6370900
+- [x] 4.4 `git diff -- requirements-macos-intel.lock.txt` is empty — 6370900
 
 #### Manual
 
-- [x] 4.5 Read README + `/docs` and confirm ZIP upload, 422, eligible, and explicit publish are described consistently
-- [x] 4.6 If staging credentials are available, upload one ZIP and confirm the three declared objects exist under `projects/<project-id>/models/<id>/<version>/` and the DB row is `storage_kind=object` with checksum set. Skip live Bucket if the environment is not provisioned; filesystem staging of the adapter is then the recorded result
+- [x] 4.5 Read README + `/docs` and confirm ZIP upload, 422, eligible, and explicit publish are described consistently — 6370900
+- [x] 4.6 If staging credentials are available, upload one ZIP and confirm the three declared objects exist under `projects/<project-id>/models/<id>/<version>/` and the DB row is `storage_kind=object` with checksum set. Skip live Bucket if the environment is not provisioned; filesystem staging of the adapter is then the recorded result — 6370900
