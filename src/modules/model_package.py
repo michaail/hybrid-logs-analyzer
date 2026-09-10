@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 import re
@@ -381,6 +382,82 @@ def validate_model_package_source(
             if extract_issues:
                 return PackageValidationResult.from_issues(extract_issues)
             return validate_model_package(extract_root, load_state_dict=load_state_dict)
+
+
+def unpack_zip_bytes(archive_bytes: bytes, destination: Path) -> PackageValidationResult:
+    """Unpack a zip into destination using the existing member and size caps.
+
+    This is transport only: it does not run the directory contract or persist files.
+    """
+
+    if len(archive_bytes) > MAX_ZIP_COMPRESSED_BYTES:
+        return PackageValidationResult.from_issues(
+            [
+                PackageValidationIssue(
+                    path="package",
+                    reason="Zip archive exceeds the 32 MiB compressed size limit.",
+                )
+            ]
+        )
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(archive_bytes))
+    except zipfile.BadZipFile:
+        return PackageValidationResult.from_issues(
+            [
+                PackageValidationIssue(
+                    path="package",
+                    reason="Package source must be a readable zip archive.",
+                )
+            ]
+        )
+    with archive:
+        zip_issues = _zip_transport_issues(archive)
+        if zip_issues:
+            return PackageValidationResult.from_issues(zip_issues)
+        extract_issues = _extract_zip_archive(archive, destination)
+        if extract_issues:
+            return PackageValidationResult.from_issues(extract_issues)
+    return PackageValidationResult.from_issues([])
+
+
+def materialize_declared_package_files(package_root: Path, destination: Path) -> list[str]:
+    """Copy manifest.json and declared artifact/evidence into destination.
+
+    Extra undeclared files are not copied. Symlinks and path escape are refused.
+    This helper does not unpack zips or import PyTorch.
+    """
+
+    source_root = package_root.expanduser().resolve()
+    destination_root = destination.expanduser().resolve()
+    destination_root.mkdir(parents=True, exist_ok=True)
+
+    manifest, manifest_issues = _load_manifest(source_root)
+    if manifest is None:
+        reason = manifest_issues[0].reason if manifest_issues else "manifest.json is missing."
+        raise ValueError(reason)
+
+    planned: list[tuple[str, Path]] = []
+    for relative in (MANIFEST_NAME, manifest.files.artifact, manifest.files.evidence):
+        located, path_issues = _resolve_declared_file(source_root, relative)
+        if located is None:
+            reason = path_issues[0].reason if path_issues else "Declared path is missing."
+            raise ValueError(f"{relative}: {reason}")
+        target = (destination_root / relative).resolve()
+        try:
+            target.relative_to(destination_root)
+        except ValueError as error:
+            raise ValueError(
+                f"{relative}: destination path must stay inside the prefix."
+            ) from error
+        planned.append((relative, located))
+
+    copied: list[str] = []
+    for relative, located in planned:
+        target = destination_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(located.read_bytes())
+        copied.append(relative)
+    return copied
 
 
 def _load_manifest(

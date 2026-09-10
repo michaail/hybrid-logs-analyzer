@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
@@ -29,7 +29,6 @@ from src.api.schemas import (
     MembershipCreate,
     MembershipResponse,
     MembershipRoleUpdate,
-    ModelRegistrationRequest,
     ModelStatus,
     ModelVersionResponse,
     ProjectAccountCreate,
@@ -40,17 +39,17 @@ from src.api.schemas import (
     TokenResponse,
     UserResponse,
 )
+from src.api.object_store import build_object_store
 from src.api.security import create_access_token, decode_access_token, hash_password, verify_password
 from src.api.settings import ApiSettings
 from src.api.storage import ApiDatabase, DatabaseIntegrityError, utc_now
 from src.api.validation import (
     ValidationError,
     ValidatorUnavailableError,
-    admit_validated_package,
-    run_private_package_validator,
-    trusted_package_directory,
+    admit_uploaded_zip_package,
     validate_hdfs_log,
 )
+from src.modules.model_package import MAX_ZIP_COMPRESSED_BYTES
 
 
 @dataclass(frozen=True)
@@ -66,6 +65,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     """Create a configured FastAPI app without importing legacy ML loaders."""
     resolved_settings = settings or ApiSettings.from_environment()
     database = ApiDatabase(resolved_settings.database_url)
+    object_store = build_object_store(resolved_settings)
     bearer = HTTPBearer(auto_error=False)
 
     def get_current_user(
@@ -381,17 +381,19 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     )
     def register_model_version(
         project_id: UUID,
-        request: ModelRegistrationRequest,
         user: CurrentUser = Depends(get_current_user),
+        package: UploadFile = File(..., description="Complete HDFS model package ZIP"),
     ) -> ModelVersionResponse:
-        """Register a pre-staged trusted HDFS model package. Never loads the artifact."""
+        """Admit a Publisher ZIP upload. Never loads the artifact in this process."""
         require_project_role(project_id, user, {ProjectRole.PUBLISHER})
+        archive_bytes = package.file.read(MAX_ZIP_COMPRESSED_BYTES + 1)
         try:
-            package_root = trusted_package_directory(
-                request.package_reference,
-                resolved_settings.trusted_workspace_root,
+            report, admitted = admit_uploaded_zip_package(
+                archive_bytes,
+                settings=resolved_settings,
+                object_store=object_store,
+                project_id=project_id,
             )
-            report = run_private_package_validator(package_root, resolved_settings)
         except ValidatorUnavailableError as error:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -400,25 +402,18 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         except ValidationError as error:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={"valid": False, "issues": [{"path": "package_reference", "reason": str(error)}]},
+                detail={"valid": False, "issues": [{"path": "package", "reason": str(error)}]},
             ) from None
         if not report.valid:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=report.model_dump(),
             )
-        try:
-            admitted = admit_validated_package(package_root, resolved_settings.trusted_workspace_root)
-        except ValidatorUnavailableError as error:
+        if admitted is None or admitted.model_id is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=str(error),
-            ) from None
-        except ValidationError as error:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={"valid": False, "issues": [{"path": "package_reference", "reason": str(error)}]},
-            ) from None
+                detail="Model package validator is unavailable.",
+            )
         try:
             model = database.create_model_version(
                 project_id=project_id,
@@ -431,9 +426,13 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 metrics_json=json.dumps(admitted.metrics, sort_keys=True),
                 metadata_json=json.dumps(admitted.metadata, sort_keys=True),
                 external_evaluation_evidence=admitted.external_evaluation_evidence,
+                storage_kind=admitted.storage_kind,
+                checksum=admitted.artifact_sha256,
                 actor_user_id=user.id,
+                model_id=admitted.model_id,
             )
         except DatabaseIntegrityError:
+            object_store.delete_prefix(admitted.package_reference)
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This model identifier and version already exists in the project.",
@@ -477,11 +476,17 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Only eligible model versions can be published.",
             )
-        published_model = database.publish_model_version(
-            model_version_id,
-            user.id,
-            actor_user_id=user.id,
-        )
+        try:
+            published_model = database.publish_model_version(
+                model_version_id,
+                user.id,
+                actor_user_id=user.id,
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Only eligible model versions can be published.",
+            ) from None
         return _model_response(published_model)
 
     @app.get(

@@ -57,12 +57,19 @@ def test_scrub_environment_removes_application_secrets() -> None:
         "DATABASE_URL": "sqlite:///tmp.db",
         "AZURE_OPENAI_API_KEY": "azure",
         "AWS_SECRET_ACCESS_KEY": "aws",
+        "AWS_ACCESS_KEY_ID": "aws-id",
+        "API_OBJECT_STORE_SECRET_ACCESS_KEY": "bucket-secret",
+        "API_OBJECT_STORE_ACCESS_KEY_ID": "bucket-id",
         "PATH": "/usr/bin",
         "SAFE_FLAG": "drop-me",
     }
     removed = scrub_environment(environ)
     assert "API_JWT_SECRET" in removed
     assert "AZURE_OPENAI_API_KEY" in removed
+    assert "AWS_SECRET_ACCESS_KEY" in removed
+    assert "AWS_ACCESS_KEY_ID" in removed
+    assert "API_OBJECT_STORE_SECRET_ACCESS_KEY" in removed
+    assert "API_OBJECT_STORE_ACCESS_KEY_ID" in removed
     assert "DATABASE_URL" not in environ
     assert "SAFE_FLAG" not in environ
     assert environ["PATH"] == "/usr/bin"

@@ -934,6 +934,22 @@ textarea::placeholder {
   color: #9aa5b4;
 }
 
+.file-field {
+  display: grid;
+  gap: 0.38rem;
+}
+
+.file-field input[type="file"] {
+  padding: 0.45rem;
+  cursor: pointer;
+}
+
+.file-field-name {
+  color: #5b6b80;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

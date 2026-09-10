@@ -9,6 +9,7 @@ import pytest
 
 from src.api.migrations import (
     INITIAL_SCHEMA_VERSION,
+    OBJECT_CHECKSUM_VERSION,
     PACKAGE_ADMISSION_VERSION,
     SHARED_STATE_VERSION,
     apply_migrations,
@@ -57,6 +58,7 @@ def _assert_shared_state_schema(database: ApiDatabase) -> None:
         INITIAL_SCHEMA_VERSION,
         SHARED_STATE_VERSION,
         PACKAGE_ADMISSION_VERSION,
+        OBJECT_CHECKSUM_VERSION,
     } <= _applied_versions(database)
 
 
@@ -212,6 +214,30 @@ def test_seeded_initial_schema_preserves_ids_across_shared_state_upgrade(tmp_pat
     with database.session() as connection:
         dataset_count = connection.execute("SELECT COUNT(*) AS n FROM datasets").fetchone()
         assert int(dict(dataset_count)["n"]) == 1
+
+
+def test_sqlite_rejects_object_kind_model_without_checksum(tmp_path: Path) -> None:
+    database = ApiDatabase(f"sqlite:///{tmp_path / 'api.db'}")
+    database.apply_migrations()
+    project = database.create_project("incident-a")
+    created_at = utc_now()
+    with pytest.raises(DatabaseIntegrityError):
+        with database.session() as connection:
+            connection.execute(
+                """
+                INSERT INTO model_versions (
+                    id, project_id, model_identifier, version, source_compatibility, status,
+                    pipeline_run_id, artifact_reference, metrics_json, metadata_json,
+                    external_evaluation_evidence, created_at, storage_kind, checksum,
+                    package_reference, artifact_sha256
+                ) VALUES (
+                    'model-id', ?, 'attribute-gae', 'v1', 'hdfs', 'eligible', 'run',
+                    'artifact', '{}', '{}', 'evidence.json', ?, 'object', NULL, 'prefix', ?
+                )
+                """,
+                (str(project["id"]), created_at, "0" * 64),
+            )
+    assert database.list_model_versions(UUID(str(project["id"]))) == []
 
 
 @pytest.mark.postgres

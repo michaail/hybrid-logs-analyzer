@@ -149,12 +149,6 @@ class ProjectAccountResponse(ApiModel):
     membership: MembershipResponse
 
 
-class ModelRegistrationRequest(ApiModel):
-    """Publisher request to register a pre-staged trusted HDFS model package."""
-
-    package_reference: str = Field(min_length=1, max_length=2_048)
-
-
 class ModelVersionResponse(ApiModel):
     """Traceable model version metadata; never exposes artifact contents."""
 
