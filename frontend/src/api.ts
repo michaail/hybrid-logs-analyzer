@@ -194,15 +194,24 @@ export class ApiClient {
     return this.request<AnalysisRun[]>(`/projects/${projectId}/analysis-runs`);
   }
 
-  startAnalysis(projectId: string, modelVersionId: string, logReference: string): Promise<AnalysisRun> {
+  startAnalysis(projectId: string, modelVersionId: string, datasetId: string): Promise<AnalysisRun> {
     return this.request<AnalysisRun>(`/projects/${projectId}/analysis-runs`, {
       method: "POST",
-      body: { model_version_id: modelVersionId, log_reference: logReference },
+      body: { model_version_id: modelVersionId, dataset_id: datasetId },
     });
   }
 
   listDatasets(projectId: string): Promise<Dataset[]> {
     return this.request<Dataset[]>(`/projects/${projectId}/datasets`);
+  }
+
+  uploadDataset(projectId: string, logFile: File): Promise<Dataset> {
+    const body = new FormData();
+    body.append("log", logFile, logFile.name);
+    return this.request<Dataset>(`/projects/${projectId}/datasets`, {
+      method: "POST",
+      body,
+    });
   }
 
   getDataset(projectId: string, datasetId: string): Promise<Dataset> {

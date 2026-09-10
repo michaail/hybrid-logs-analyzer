@@ -407,22 +407,22 @@ for this slice.
 
 #### Automated
 
-- [x] 2.1 python -m pytest tests/test_api.py tests/test_shared_state_repository.py passes, including 201 persist, 422-without-row, analyze-by-dataset_id, isolation, and rejected-run CHECK
-- [x] 2.2 ruff check src/api/main.py src/api/schemas.py src/api/storage.py tests/test_api.py and mypy pass on those paths
+- [x] 2.1 python -m pytest tests/test_api.py tests/test_shared_state_repository.py passes, including 201 persist, 422-without-row, analyze-by-dataset_id, isolation, and rejected-run CHECK — aba3e9d
+- [x] 2.2 ruff check src/api/main.py src/api/schemas.py src/api/storage.py tests/test_api.py and mypy pass on those paths — aba3e9d
 
 #### Manual
 
-- [x] 2.3 GET /openapi.json shows POST datasets and analyze dataset_id; no public log_reference on create
+- [x] 2.3 GET /openapi.json shows POST datasets and analyze dataset_id; no public log_reference on create — aba3e9d
 
 ### Phase 3: Operator UI and S-04 Drain3 handoff docs
 
 #### Automated
 
-- [ ] 3.1 npx tsc --noEmit in frontend/ passes
+- [x] 3.1 npx tsc --noEmit in frontend/ passes
 
 #### Manual
 
-- [ ] 3.2 Upload a valid sample: list shows a new object-kind row
-- [ ] 3.3 Upload an invalid sample: Banner from issues, list unchanged
-- [ ] 3.4 Start analysis by selecting the accepted dataset: run is not_supported
-- [ ] 3.5 Datasets panel and analyze dialog remain usable at a desktop width and a narrow viewport
+- [x] 3.2 Upload a valid sample: list shows a new object-kind row
+- [x] 3.3 Upload an invalid sample: Banner from issues, list unchanged
+- [x] 3.4 Start analysis by selecting the accepted dataset: run is not_supported
+- [x] 3.5 Datasets panel and analyze dialog remain usable at a desktop width and a narrow viewport

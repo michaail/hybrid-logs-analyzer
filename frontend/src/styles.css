@@ -562,6 +562,7 @@ code {
 }
 
 .dataset-panel {
+  min-width: 0;
   margin: 0 0 1.35rem;
 }
 
@@ -571,6 +572,13 @@ code {
   font-size: 1rem;
 }
 
+.dataset-upload {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  margin-top: 0.85rem;
+}
+
 .dataset-list {
   display: grid;
   gap: 0.75rem;
@@ -578,7 +586,19 @@ code {
 }
 
 .dataset-card {
+  min-width: 0;
   padding: 1rem 1.1rem;
+}
+
+.dataset-card > div {
+  min-width: 0;
+}
+
+.dataset-card strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .compact-metadata {
@@ -1262,6 +1282,10 @@ textarea::placeholder {
 
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .dataset-upload .secondary-button {
+    width: 100%;
   }
 
   .outcome-summary {
