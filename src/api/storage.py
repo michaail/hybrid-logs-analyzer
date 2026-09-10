@@ -611,22 +611,31 @@ class ApiDatabase:
         completed_at: str | None,
         actor_user_id: UUID | None = None,
         results_summary_json: str | None = None,
+        dataset_id: UUID | None = None,
     ) -> DatabaseRow:
         if status not in _INITIAL_RUN_STATUSES:
             raise ValueError(f"Analysis runs cannot be created with status {status!r}.")
+        if status == "rejected" and dataset_id is not None:
+            raise ValueError("Rejected analysis runs cannot attach a dataset.")
+        if status != "rejected" and dataset_id is None:
+            raise ValueError("Non-rejected analysis runs require a dataset_id.")
         run_id = str(uuid4())
         created_at = utc_now()
         with self.session() as connection:
-            dataset_id = None
+            stored_dataset_id = None
+            stored_log_reference = log_reference
             if status != "rejected":
-                dataset_id = self._upsert_dataset(
-                    connection,
-                    project_id=project_id,
-                    storage_kind="workspace",
-                    object_reference=log_reference,
-                    checksum=None,
-                    actor_user_id=actor_user_id,
-                )
+                dataset_row = connection.execute(
+                    "SELECT project_id, object_reference FROM datasets WHERE id = ?",
+                    (str(dataset_id),),
+                ).fetchone()
+                if dataset_row is None:
+                    raise ValueError("Dataset was not found.")
+                dataset = dict(dataset_row)
+                if str(dataset["project_id"]) != str(project_id):
+                    raise ValueError("Dataset was not found.")
+                stored_dataset_id = str(dataset_id)
+                stored_log_reference = str(dataset["object_reference"])
             connection.execute(
                 """
                 INSERT INTO analysis_runs (
@@ -640,13 +649,13 @@ class ApiDatabase:
                     str(project_id),
                     str(model_version_id),
                     str(requested_by_user_id),
-                    log_reference,
+                    stored_log_reference,
                     status,
                     validation_report_json,
                     error_code,
                     created_at,
                     completed_at,
-                    dataset_id,
+                    stored_dataset_id,
                     results_summary_json,
                 ),
             )
@@ -685,6 +694,56 @@ class ApiDatabase:
                 actor_user_id=actor_user_id,
             )
         return self.get_dataset(UUID(dataset_id)) or self._missing_record("dataset")
+
+    def create_dataset(
+        self,
+        *,
+        project_id: UUID,
+        storage_kind: str,
+        object_reference: str,
+        checksum: str | None,
+        actor_user_id: UUID | None = None,
+        dataset_id: UUID | None = None,
+    ) -> DatabaseRow:
+        """Insert one project-owned dataset pointer. Unique conflicts propagate."""
+
+        resolved_id = str(dataset_id) if dataset_id is not None else str(uuid4())
+        pointer_checksum = _normalized_checksum(storage_kind, checksum)
+        created_at = utc_now()
+        with self.session() as connection:
+            connection.execute(
+                """
+                INSERT INTO datasets (
+                    id, project_id, storage_kind, object_reference, checksum,
+                    source_compatibility, created_at
+                ) VALUES (?, ?, ?, ?, ?, 'hdfs', ?)
+                """,
+                (
+                    resolved_id,
+                    str(project_id),
+                    storage_kind,
+                    object_reference,
+                    pointer_checksum,
+                    created_at,
+                ),
+            )
+            if actor_user_id is not None:
+                self._insert_audit_event(
+                    connection,
+                    actor_user_id=actor_user_id,
+                    project_id=project_id,
+                    action="dataset.registered",
+                    resource_type="dataset",
+                    resource_id=UUID(resolved_id),
+                    details_json=json.dumps(
+                        {
+                            "object_reference": object_reference,
+                            "storage_kind": storage_kind,
+                        },
+                        sort_keys=True,
+                    ),
+                )
+        return self.get_dataset(UUID(resolved_id)) or self._missing_record("dataset")
 
     def get_dataset(self, dataset_id: UUID) -> DatabaseRow | None:
         return self._one("SELECT * FROM datasets WHERE id = ?", (str(dataset_id),))

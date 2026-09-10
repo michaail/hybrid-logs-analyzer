@@ -140,6 +140,34 @@ def _register(client: TestClient, headers: dict[str, str], project_id: object, a
     )
 
 
+VALID_HDFS_LOG = (
+    "081109 203615 148 INFO dfs.DataNode$DataXceiver: "
+    "Receiving block blk_1 src: /10.0.0.1:50010 dest: /10.0.0.2:50010\n"
+).encode("utf-8")
+
+
+def _upload_log(
+    client: TestClient,
+    headers: dict[str, str],
+    project_id: object,
+    content: bytes = VALID_HDFS_LOG,
+    filename: str = "hdfs.log",
+):
+    return client.post(
+        f"/projects/{project_id}/datasets",
+        headers=headers,
+        files={"log": (filename, content, "text/plain")},
+    )
+
+
+def _object_files(api: ApiFixture) -> set[str]:
+    return {
+        path.relative_to(api.settings.object_store_root).as_posix()
+        for path in api.settings.object_store_root.rglob("*")
+        if path.is_file()
+    }
+
+
 def test_admit_validated_package_rejects_artifact_symlink(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -507,16 +535,20 @@ def test_cross_project_member_routes_return_404(api: ApiFixture) -> None:
     )
     assert publication.status_code == 200, publication.text
 
-    valid_log = api.workspace / "data" / "stored-hdfs.log"
-    valid_log.parent.mkdir()
-    valid_log.write_text(
-        "081109 203615 148 INFO dfs.DataNode$DataXceiver: "
-        "Receiving block blk_1 src: /10.0.0.1:50010 dest: /10.0.0.2:50010\n"
+    assert (
+        client.post(
+            f"/projects/{project_a['id']}/datasets",
+            files={"log": ("hdfs.log", VALID_HDFS_LOG, "text/plain")},
+        ).status_code
+        == 401
     )
+    uploaded = _upload_log(client, operator_a, project_a["id"])
+    assert uploaded.status_code == 201, uploaded.text
+    dataset_id = uploaded.json()["id"]
     analysis = client.post(
         f"/projects/{project_a['id']}/analysis-runs",
         headers=operator_a,
-        json={"model_version_id": model_id, "log_reference": "data/stored-hdfs.log"},
+        json={"model_version_id": model_id, "dataset_id": dataset_id},
     )
     assert analysis.status_code == 202, analysis.text
     run_id = analysis.json()["id"]
@@ -539,16 +571,30 @@ def test_cross_project_member_routes_return_404(api: ApiFixture) -> None:
         client.post(
             f"/projects/{project_a['id']}/analysis-runs",
             headers=operator_b,
-            json={"model_version_id": model_id, "log_reference": "data/stored-hdfs.log"},
+            json={"model_version_id": model_id, "dataset_id": dataset_id},
         ).status_code
         == 404
     )
     foreign_model = client.post(
         f"/projects/{project_b['id']}/analysis-runs",
         headers=operator_b,
-        json={"model_version_id": model_id, "log_reference": "data/stored-hdfs.log"},
+        json={"model_version_id": model_id, "dataset_id": dataset_id},
     )
     assert foreign_model.status_code == 404
+    uploaded_b = _upload_log(client, operator_b, project_b["id"])
+    assert uploaded_b.status_code == 201, uploaded_b.text
+    foreign_dataset = client.post(
+        f"/projects/{project_a['id']}/analysis-runs",
+        headers=operator_a,
+        json={"model_version_id": model_id, "dataset_id": uploaded_b.json()["id"]},
+    )
+    assert foreign_dataset.status_code == 404
+    missing_dataset = client.post(
+        f"/projects/{project_a['id']}/analysis-runs",
+        headers=operator_a,
+        json={"model_version_id": model_id, "dataset_id": str(UUID("44444444-4444-4444-8444-444444444444"))},
+    )
+    assert missing_dataset.status_code == 404
     assert (
         client.get(
             f"/projects/{project_b['id']}/analysis-runs",
@@ -643,51 +689,66 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
     assert publication.status_code == 200, publication.text
     assert publication.json()["status"] == "published"
 
-    valid_log = api.workspace / "data" / "stored-hdfs.log"
-    valid_log.parent.mkdir()
-    valid_log.write_text(
-        "081109 203615 148 INFO dfs.DataNode$DataXceiver: "
-        "Receiving block blk_1 src: /10.0.0.1:50010 dest: /10.0.0.2:50010\n"
-    )
+    publisher_upload = _upload_log(client, publisher_headers, project["id"])
+    assert publisher_upload.status_code == 201, publisher_upload.text
+    uploaded = _upload_log(client, operator_headers, project["id"], filename="HDFS_2k.log")
+    assert uploaded.status_code == 201, uploaded.text
+    dataset = uploaded.json()
+    assert dataset["storage_kind"] == "object"
+    assert dataset["checksum"]
+    assert dataset["object_reference"].endswith("/HDFS_2k.log")
+    duplicate_bytes = _upload_log(client, operator_headers, project["id"], filename="HDFS_2k.log")
+    assert duplicate_bytes.status_code == 201, duplicate_bytes.text
+    assert duplicate_bytes.json()["id"] != dataset["id"]
+    assert duplicate_bytes.json()["checksum"] == dataset["checksum"]
+
     analysis = client.post(
         f"/projects/{project['id']}/analysis-runs",
         headers=operator_headers,
-        json={"model_version_id": model["id"], "log_reference": "data/stored-hdfs.log"},
+        json={"model_version_id": model["id"], "dataset_id": dataset["id"]},
     )
     assert analysis.status_code == 202, analysis.text
     assert analysis.json()["status"] == "not_supported"
     assert analysis.json()["error_code"] == "INFERENCE_CONTRACT_UNAVAILABLE"
-    assert analysis.json()["dataset_id"]
-    assert analysis.json()["storage_kind"] == "workspace"
+    assert analysis.json()["dataset_id"] == dataset["id"]
+    assert analysis.json()["storage_kind"] == "object"
+    assert analysis.json()["checksum"] == dataset["checksum"]
 
     repeat = client.post(
         f"/projects/{project['id']}/analysis-runs",
         headers=operator_headers,
-        json={"model_version_id": model["id"], "log_reference": "data/stored-hdfs.log"},
+        json={"model_version_id": model["id"], "dataset_id": dataset["id"]},
     )
     assert repeat.status_code == 202, repeat.text
-    assert repeat.json()["dataset_id"] == analysis.json()["dataset_id"]
+    assert repeat.json()["id"] != analysis.json()["id"]
+    assert repeat.json()["dataset_id"] == dataset["id"]
 
-    invalid_log = api.workspace / "data" / "invalid.log"
-    invalid_log.write_text("not an HDFS record\n")
-    rejected = client.post(
-        f"/projects/{project['id']}/analysis-runs",
-        headers=operator_headers,
-        json={"model_version_id": model["id"], "log_reference": "data/invalid.log"},
-    )
-    assert rejected.status_code == 202, rejected.text
-    assert rejected.json()["status"] == "rejected"
-    assert rejected.json()["dataset_id"] is None
-
+    objects_before_invalid = _object_files(api)
+    rejected = _upload_log(client, operator_headers, project["id"], b"not an HDFS record\n")
+    assert rejected.status_code == 422, rejected.text
+    detail = rejected.json()["detail"]
+    assert detail["valid"] is False
+    assert any(issue["reason"] for issue in detail["issues"])
     datasets = client.get(f"/projects/{project['id']}/datasets", headers=operator_headers)
     assert datasets.status_code == 200, datasets.text
-    assert [item["object_reference"] for item in datasets.json()] == ["data/stored-hdfs.log"]
-    dataset = client.get(
-        f"/projects/{project['id']}/datasets/{analysis.json()['dataset_id']}",
+    assert {item["id"] for item in datasets.json()} == {
+        publisher_upload.json()["id"],
+        dataset["id"],
+        duplicate_bytes.json()["id"],
+    }
+    assert _object_files(api) == objects_before_invalid
+    listed_runs = client.get(f"/projects/{project['id']}/analysis-runs", headers=operator_headers)
+    assert {item["id"] for item in listed_runs.json()} == {
+        analysis.json()["id"],
+        repeat.json()["id"],
+    }
+
+    fetched = client.get(
+        f"/projects/{project['id']}/datasets/{dataset['id']}",
         headers=operator_headers,
     )
-    assert dataset.status_code == 200, dataset.text
-    assert dataset.json()["storage_kind"] == "workspace"
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["storage_kind"] == "object"
 
     supported_results = client.get(
         f"/projects/{project['id']}/analysis-runs/{analysis.json()['id']}/results",
@@ -701,20 +762,13 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
         "invalid_records": 0,
     }
 
-    results = client.get(
-        f"/projects/{project['id']}/analysis-runs/{rejected.json()['id']}/results",
-        headers=operator_headers,
-    )
-    assert results.status_code == 200, results.text
-    assert results.json()["summary"]["rejected_records"] == 1
-
     audit_events = client.get(f"/projects/{project['id']}/audit-events", headers=administrator)
     assert audit_events.status_code == 200
     assert {event["action"] for event in audit_events.json()} >= {
         "model.registered",
         "model.published",
+        "dataset.registered",
         "analysis.not_supported",
-        "analysis.rejected",
     }
 
 
@@ -723,39 +777,14 @@ def test_dataset_reads_are_isolated_and_omit_rejected_inputs(api: ApiFixture) ->
     administrator = _login(client, "admin")
     first_project = _create_project(client, administrator, "incident-a")
     second_project = _create_project(client, administrator, "incident-b")
-    _provision_project_account(client, administrator, "publisher", str(first_project["id"]), "publisher")
     _provision_project_account(client, administrator, "operator", str(first_project["id"]), "operator")
     _provision_project_account(
         client, administrator, "other-operator", str(second_project["id"]), "operator"
     )
-    archive = _zip_staged(api.workspace)
-    publisher_headers = _login(client, "publisher")
-    registration = _register(client, publisher_headers, first_project["id"], archive)
-    assert registration.status_code == 201, registration.text
-    assert (
-        client.post(
-            f"/projects/{first_project['id']}/models/{registration.json()['id']}/publish",
-            headers=publisher_headers,
-        ).status_code
-        == 200
-    )
-    valid_log = api.workspace / "data" / "stored-hdfs.log"
-    valid_log.parent.mkdir()
-    valid_log.write_text(
-        "081109 203615 148 INFO dfs.DataNode$DataXceiver: "
-        "Receiving block blk_1 src: /10.0.0.1:50010 dest: /10.0.0.2:50010\n"
-    )
     operator_headers = _login(client, "operator")
-    analysis = client.post(
-        f"/projects/{first_project['id']}/analysis-runs",
-        headers=operator_headers,
-        json={
-            "model_version_id": registration.json()["id"],
-            "log_reference": "data/stored-hdfs.log",
-        },
-    )
-    assert analysis.status_code == 202, analysis.text
-    dataset_id = analysis.json()["dataset_id"]
+    uploaded = _upload_log(client, operator_headers, first_project["id"])
+    assert uploaded.status_code == 201, uploaded.text
+    dataset_id = uploaded.json()["id"]
     other_headers = _login(client, "other-operator")
     assert (
         client.get(f"/projects/{second_project['id']}/datasets", headers=other_headers).json()
@@ -769,6 +798,22 @@ def test_dataset_reads_are_isolated_and_omit_rejected_inputs(api: ApiFixture) ->
         == 404
     )
     assert client.get(f"/projects/{first_project['id']}/datasets", headers=other_headers).status_code == 404
+
+
+def test_invalid_log_upload_persists_nothing(api: ApiFixture) -> None:
+    client = api.client
+    administrator = _login(client, "admin")
+    project = _create_project(client, administrator, "incident-a")
+    _provision_project_account(client, administrator, "operator", str(project["id"]), "operator")
+    operator_headers = _login(client, "operator")
+    rejected = _upload_log(client, operator_headers, project["id"], b"not an HDFS record\n")
+    assert rejected.status_code == 422, rejected.text
+    detail = rejected.json()["detail"]
+    assert detail["valid"] is False
+    assert detail["issues"][0]["reason"]
+    assert client.get(f"/projects/{project['id']}/datasets", headers=operator_headers).json() == []
+    assert _object_files(api) == set()
+    assert client.get(f"/projects/{project['id']}/analysis-runs", headers=operator_headers).json() == []
 
 
 def test_registration_rejects_non_hdfs_or_outside_workspace_artifacts(api: ApiFixture) -> None:
@@ -1031,7 +1076,12 @@ def test_openapi_exposes_administration_lifecycle_without_legacy_user_create(
     dataset_list = "/projects/{project_id}/datasets"
     dataset_item = "/projects/{project_id}/datasets/{dataset_id}"
     assert "get" in paths[dataset_list]
-    assert "post" not in paths[dataset_list]
+    assert "post" in paths[dataset_list]
+    dataset_post = paths[dataset_list]["post"]
+    assert "multipart/form-data" in dataset_post["requestBody"]["content"]
+    create_schema = schema["components"]["schemas"]["AnalysisRunCreate"]
+    assert "dataset_id" in create_schema["properties"]
+    assert "log_reference" not in create_schema["properties"]
     assert "get" in paths[dataset_item]
     assert "patch" not in paths.get(dataset_item, {})
     results_path = "/projects/{project_id}/analysis-runs/{analysis_run_id}/results"
@@ -1250,17 +1300,16 @@ def test_unpublished_eligible_model_cannot_start_analysis(api: ApiFixture) -> No
     registration = _register(client, publisher_headers, project["id"], _zip_staged(api.workspace))
     assert registration.status_code == 201, registration.text
     assert registration.json()["status"] == "eligible"
-    valid_log = api.workspace / "data" / "stored-hdfs.log"
-    valid_log.parent.mkdir()
-    valid_log.write_text(
-        "081109 203615 148 INFO dfs.DataNode$DataXceiver: "
-        "Receiving block blk_1 src: /10.0.0.1:50010 dest: /10.0.0.2:50010\n"
-    )
     operator_headers = _login(client, "operator")
+    uploaded = _upload_log(client, operator_headers, project["id"])
+    assert uploaded.status_code == 201, uploaded.text
     analysis = client.post(
         f"/projects/{project['id']}/analysis-runs",
         headers=operator_headers,
-        json={"model_version_id": registration.json()["id"], "log_reference": "data/stored-hdfs.log"},
+        json={
+            "model_version_id": registration.json()["id"],
+            "dataset_id": uploaded.json()["id"],
+        },
     )
     assert analysis.status_code == 409
     assert analysis.json()["detail"] == "Only published model versions can start analysis."

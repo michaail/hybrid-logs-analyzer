@@ -185,10 +185,10 @@ class DatasetResponse(ApiModel):
 
 
 class AnalysisRunCreate(ApiModel):
-    """Operator request to validate and submit a stored HDFS log dataset."""
+    """Operator request to start analysis of an admitted same-project dataset."""
 
     model_version_id: UUID
-    log_reference: str = Field(min_length=1)
+    dataset_id: UUID
 
 
 class AnalysisRunResponse(ApiModel):

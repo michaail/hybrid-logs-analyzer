@@ -20,8 +20,8 @@ It is deliberately not an end-to-end anomaly-detection release:
 
 - The API continues to return `not_supported` for a valid analysis request because it never
   loads a model. Isolated inference, a model loader, and a polling worker remain later gates.
-- Admitted HDFS model packages persist as `storage_kind=object` through the Bucket adapter
-  when credentials are attached to `web`. Dataset object-kind production storage remains S-03.
+- Admitted HDFS model packages and Operator dataset uploads persist as `storage_kind=object`
+  through the Bucket adapter when credentials are attached to `web`.
 - Linux PyTorch/PyG dependencies and HDFS notebook-parity verification are later release gates.
 - BGL is notebook-only research and is excluded from the deployed MVP.
 
@@ -59,9 +59,8 @@ Create these resources in one Railway project and one `staging` environment:
    in the IaC file. Do not copy Bucket secrets into this repository or the React build.
 4. A Hobby-plan spend limit and usage alert before the first deployment.
 
-The initial release intentionally has no Railway Volume. Model packages are admitted as ZIP
-uploads and stored as object-kind rows. Operator HDFS log references still use the trusted
-workspace until S-03 replaces that path.
+The initial release intentionally has no Railway Volume. Model packages and Operator HDFS
+logs are admitted as uploads and stored as object-kind rows.
 
 ## Service variable contract
 
@@ -70,8 +69,9 @@ Set these variables on `web` before deployment:
 - `DATABASE_URL`: a Railway variable reference to the PostgreSQL service's `DATABASE_URL`.
 - `API_JWT_SECRET`: a new, high-entropy secret generated outside the repository.
 - `API_JWT_TTL_MINUTES`: `30` unless a deliberate security decision changes it.
-- `API_TRUSTED_WORKSPACE_ROOT`: leave at the default `workspace` for Operator HDFS log
-  references until dataset intake (S-03). Model registration no longer uses a host path.
+- `API_TRUSTED_WORKSPACE_ROOT`: leave at the default `workspace`. It is no longer the
+  Operator log intake path; Operators upload object-kind datasets instead. Model
+  registration also no longer uses a host path.
 - `API_OBJECT_STORE_ENDPOINT`, `API_OBJECT_STORE_BUCKET`, `API_OBJECT_STORE_ACCESS_KEY_ID`,
   `API_OBJECT_STORE_SECRET_ACCESS_KEY`, and `API_OBJECT_STORE_REGION`: Railway variable
   references to the `models` Bucket. These are declared in `.railway/railway.ts` and must
@@ -156,6 +156,8 @@ Then sign in through the same-origin UI and confirm all of these conditions:
   another project's records.
 - A Publisher can upload a complete HDFS package ZIP, receive `eligible` or a structured 422,
   and explicitly publish an eligible version. Operators cannot register or publish.
+- An Operator can upload a UTF-8 HDFS log, receive an accepted object-kind dataset or a
+  structured 422, and start analysis by selecting that `dataset_id`.
 - The health endpoint reports success only while PostgreSQL is reachable.
 - No secret appears in the rendered client, build output, deployment log, or API response.
 - The public API becomes idle after testing; no polling worker, permanent database pool,
@@ -163,7 +165,10 @@ Then sign in through the same-origin UI and confirm all of these conditions:
 
 Do not claim an HDFS inference demonstration from this release. A valid HDFS request still
 finishes `not_supported` / `INFERENCE_CONTRACT_UNAVAILABLE` until the isolated inference
-contract exists. Dataset upload remains S-03.
+contract exists. S-04 will load a frozen Drain3 FilePersistence snapshot with
+`configs/drain.ini` via `DrainParser.load`, then `annotate_file` only: do not fit, do not
+re-enrich, and do not put parser files in the GAE package. Unmatched-line handling is an
+S-04 decision.
 
 ## Failure, rollback, and cleanup
 

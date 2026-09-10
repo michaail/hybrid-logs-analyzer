@@ -323,9 +323,9 @@ model artifact.
 
 Copy `.env.example` to `.env` and set a unique `API_JWT_SECRET`. Configure
 `DATABASE_URL` (for example, `sqlite:///.api/analyzer.db` locally).
-`API_TRUSTED_WORKSPACE_ROOT` still points at the ignored workspace used for stored HDFS
-log references until dataset intake exists. Optional `API_OBJECT_STORE_ROOT` defaults to a
-sibling `.api/objects` directory for local object-kind model packages:
+`API_TRUSTED_WORKSPACE_ROOT` is no longer the Operator log intake path; Operators
+upload object-kind HDFS datasets instead. Optional `API_OBJECT_STORE_ROOT` defaults to a
+sibling `.api/objects` directory for local object-kind model packages and admitted datasets:
 
 ```bash
 source .venv/bin/activate
@@ -401,19 +401,26 @@ artifact. Install `requirements-model-validator.txt` only for that isolated proc
 from the validator file.
 
 Publishers register with `POST /projects/{project_id}/models` as multipart ZIP and explicitly
-publish an eligible version. Operators submit a trusted stored HDFS log
-reference at `POST /projects/{project_id}/analysis-runs`. A valid log is upserted as a
-project-owned workspace dataset (`storage_kind=workspace`, checksum null until a later intake
-slice). Rejected or unreadable inputs keep a validation run with `dataset_id = null` and do
-not appear in `GET /projects/{project_id}/datasets`. Model and run responses add `storage_kind`
-and nullable `checksum`; runs also return `dataset_id`. GET results returns the stored
-`results_summary_json`, not a computed empty summary. There is no public POST/PATCH for
-datasets, anomaly rows, or run status.
+publish an eligible version. Operators admit a UTF-8 HDFS log with
+`POST /projects/{project_id}/datasets` (multipart field `log`, 32 MiB cap). A valid file
+becomes a new `storage_kind=object` dataset with a SHA-256 checksum. Invalid, empty,
+oversize, or non-UTF-8 payloads return 422 with a validation report, persist no object, and
+insert no row. Analysis starts with `POST /projects/{project_id}/analysis-runs` using
+`{ model_version_id, dataset_id }` only. Missing or foreign datasets return 404. The API
+copies the dataset object key into `log_reference`; it does not re-scan the log at analyze
+time. Model and run responses add `storage_kind` and nullable `checksum`; runs also return
+`dataset_id`. GET results returns the stored `results_summary_json`, not a computed empty
+summary. There is no public PATCH for datasets, and no public POST/PATCH for anomaly rows
+or run status.
 
-Analysis runs fully validate the referenced HDFS file and record a durable rejection for invalid
-data. Valid files currently end in the explicit `not_supported` terminal state:
-`INFERENCE_CONTRACT_UNAVAILABLE`. Isolated inference is a later slice; this change only
-admits a check-only package contract. Do not SHA-256 Operator HDFS logs at analyze time.
+Invalid uploads never become analysis runs. Valid datasets currently end in the explicit
+`not_supported` terminal state: `INFERENCE_CONTRACT_UNAVAILABLE`. Isolated inference is a
+later slice. Do not SHA-256 Operator HDFS logs at analyze time.
+
+S-04 analysis will load a frozen Drain3 FilePersistence snapshot with `configs/drain.ini`
+via `DrainParser.load`, then call `annotate_file` only. Do not fit Drain, do not re-enrich
+templates, and do not put parser files in the GAE package. Unmatched-line handling is an
+S-04 decision.
 
 Optional PostgreSQL dialect tests use a local Compose database and stay out of default CI:
 
@@ -440,7 +447,7 @@ The Railway image builds `frontend/dist` and serves it through FastAPI. See the
 [Railway staging deployment guide](context/deployment/deploy-plan.md) for the manual
 provisioning, validation, rollback, and deferred-inference boundaries.
 
-The current API accepts a Publisher ZIP for model registration and still uses trusted
-workspace references for stored HDFS logs. The UI lists project-owned datasets as read-only
-state and clearly presents the current `not_supported` analysis outcome until the isolated
-inference contract exists.
+The current API accepts a Publisher ZIP for model registration and an Operator HDFS log
+upload. The datasets panel admits a file; the analyze dialog selects an accepted
+`dataset_id`. Valid analysis currently ends `not_supported` until the isolated inference
+contract exists.

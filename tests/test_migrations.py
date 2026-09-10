@@ -102,6 +102,13 @@ def test_fresh_schema_accepts_expanded_run_statuses(tmp_path: Path) -> None:
     database = ApiDatabase(f"sqlite:///{tmp_path / 'api.db'}")
     database.apply_migrations()
     project_id, user_id, model_id = _seed_model(database)
+    dataset = database.upsert_dataset(
+        project_id=project_id,
+        storage_kind="workspace",
+        object_reference="data/stored-hdfs.log",
+        checksum=None,
+        actor_user_id=user_id,
+    )
 
     accepted = database.create_analysis_run(
         project_id=project_id,
@@ -112,6 +119,7 @@ def test_fresh_schema_accepts_expanded_run_statuses(tmp_path: Path) -> None:
         validation_report_json="{}",
         error_code="INFERENCE_CONTRACT_UNAVAILABLE",
         completed_at=utc_now(),
+        dataset_id=UUID(str(dataset["id"])),
     )
     rejected = database.create_analysis_run(
         project_id=project_id,

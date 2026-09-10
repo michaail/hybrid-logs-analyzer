@@ -240,11 +240,20 @@ export default function App() {
     setNotice(`${created.model_identifier} ${created.version} was registered as eligible.`);
   }
 
-  async function startAnalysis(logReference: string): Promise<void> {
+  async function uploadDataset(logFile: File): Promise<void> {
+    if (!selectedProject) {
+      return;
+    }
+    const created = await api.uploadDataset(selectedProject.id, logFile);
+    await refreshProjectData(selectedProject.id);
+    setNotice(`HDFS dataset ${shortId(created.id)} was accepted.`);
+  }
+
+  async function startAnalysis(datasetId: string): Promise<void> {
     if (!selectedProject || !selectedModel) {
       return;
     }
-    const run = await api.startAnalysis(selectedProject.id, selectedModel.id, logReference);
+    const run = await api.startAnalysis(selectedProject.id, selectedModel.id, datasetId);
     await refreshProjectData(selectedProject.id);
     setView("runs");
     setNotice(
@@ -383,6 +392,8 @@ export default function App() {
                 selectedModel={selectedModel}
                 onOpenAnalysis={() => setShowAnalysisDialog(true)}
                 onShowResults={showResults}
+                onUploadDataset={uploadDataset}
+                onUnauthorized={handleRequestError}
               />
             )}
             {view === "administration" && user.is_administrator && (
@@ -414,6 +425,7 @@ export default function App() {
         <AnalysisDialog
           projectName={selectedProject.name}
           selectedModel={selectedModel}
+          datasets={datasets}
           onClose={() => setShowAnalysisDialog(false)}
           onStart={startAnalysis}
         />
@@ -643,6 +655,8 @@ function RunsView({
   selectedModel,
   onOpenAnalysis,
   onShowResults,
+  onUploadDataset,
+  onUnauthorized,
 }: {
   models: ModelVersion[];
   runs: AnalysisRun[];
@@ -650,6 +664,8 @@ function RunsView({
   selectedModel: ModelVersion | null;
   onOpenAnalysis: () => void;
   onShowResults: (run: AnalysisRun) => Promise<void>;
+  onUploadDataset: (logFile: File) => Promise<void>;
+  onUnauthorized: (error: unknown) => void;
 }): JSX.Element {
   return (
     <section className="content-section">
@@ -680,42 +696,16 @@ function RunsView({
         </div>
       )}
 
-      <div className="dataset-panel">
-        <h3 className="dataset-heading">Project datasets</h3>
-        <p className="muted">
-          Reusable HDFS sources for this project. Rejected inputs never appear here, and there is
-          no upload control in this view.
-        </p>
-        {datasets.length === 0 ? (
-          <p className="muted">No reusable datasets are registered yet.</p>
-        ) : (
-          <div className="dataset-list">
-            {datasets.map((dataset) => (
-              <article className="dataset-card" key={dataset.id}>
-                <div>
-                  <span className="summary-label">Dataset {shortId(dataset.id)}</span>
-                  <strong>{dataset.object_reference}</strong>
-                </div>
-                <dl className="metadata-list compact-metadata">
-                  <div>
-                    <dt>Storage</dt>
-                    <dd>{dataset.storage_kind}</dd>
-                  </div>
-                  <div>
-                    <dt>Checksum</dt>
-                    <dd className="truncate">{dataset.checksum ?? "none"}</dd>
-                  </div>
-                </dl>
-              </article>
-            ))}
-          </div>
-        )}
-      </div>
+      <DatasetPanel
+        datasets={datasets}
+        onUpload={onUploadDataset}
+        onUnauthorized={onUnauthorized}
+      />
 
       {runs.length === 0 ? (
         <EmptyState
           title="No analysis runs yet"
-          description="Start with a published model and an HDFS log reference stored in the controlled workspace."
+          description="Start with a published model and an accepted HDFS dataset from this project."
         />
       ) : (
         <div className="runs-list">
@@ -1298,27 +1288,123 @@ function ModelRegistrationDialog({
   );
 }
 
+function DatasetPanel({
+  datasets,
+  onUpload,
+  onUnauthorized,
+}: {
+  datasets: Dataset[];
+  onUpload: (logFile: File) => Promise<void>;
+  onUnauthorized: (error: unknown) => void;
+}): JSX.Element {
+  const [logFile, setLogFile] = useState<File | null>(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!logFile) {
+      setError("Choose a UTF-8 HDFS log file.");
+      return;
+    }
+    setError(null);
+    setIsUploading(true);
+    try {
+      await onUpload(logFile);
+      setLogFile(null);
+      setFileInputKey((current) => current + 1);
+    } catch (uploadError) {
+      if (uploadError instanceof ApiError && uploadError.status === 401) {
+        onUnauthorized(uploadError);
+        return;
+      }
+      setError(messageFor(uploadError));
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  return (
+    <div className="dataset-panel">
+      <h3 className="dataset-heading">Project datasets</h3>
+      <p className="muted">
+        Upload a UTF-8 HDFS log (at most 32 MiB). Invalid files return a validation report and
+        never appear in this list.
+      </p>
+      <form className="dataset-upload" onSubmit={(event) => void submit(event)}>
+        {error && <Banner tone="error" message={error} onDismiss={() => setError(null)} />}
+        <label className="file-field">
+          HDFS log file
+          <input
+            key={fileInputKey}
+            onChange={(event) => setLogFile(event.target.files?.[0] ?? null)}
+            required
+            type="file"
+          />
+          <span className="file-field-name">{logFile ? logFile.name : "No log file selected"}</span>
+        </label>
+        <button className="secondary-button" disabled={isUploading || !logFile} type="submit">
+          {isUploading ? "Uploading…" : "Upload dataset"}
+        </button>
+      </form>
+      {datasets.length === 0 ? (
+        <p className="muted">No reusable datasets are registered yet.</p>
+      ) : (
+        <div className="dataset-list">
+          {datasets.map((dataset) => (
+            <article className="dataset-card" key={dataset.id}>
+              <div>
+                <span className="summary-label">Dataset {shortId(dataset.id)}</span>
+                <strong>{dataset.object_reference}</strong>
+              </div>
+              <dl className="metadata-list compact-metadata">
+                <div>
+                  <dt>Storage</dt>
+                  <dd>{dataset.storage_kind}</dd>
+                </div>
+                <div>
+                  <dt>Checksum</dt>
+                  <dd className="truncate">{dataset.checksum ?? "none"}</dd>
+                </div>
+              </dl>
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AnalysisDialog({
   projectName,
   selectedModel,
+  datasets,
   onClose,
   onStart,
 }: {
   projectName: string;
   selectedModel: ModelVersion | null;
+  datasets: Dataset[];
   onClose: () => void;
-  onStart: (logReference: string) => Promise<void>;
+  onStart: (datasetId: string) => Promise<void>;
 }): JSX.Element {
-  const [logReference, setLogReference] = useState("");
+  const newestDataset = datasets[datasets.length - 1];
+  const [datasetId, setDatasetId] = useState(newestDataset?.id ?? "");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const canStart = Boolean(selectedModel) && datasets.length > 0 && datasetId.length > 0;
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
+    if (!canStart) {
+      setError("Upload an accepted HDFS dataset before starting analysis.");
+      return;
+    }
     setError(null);
     setIsSubmitting(true);
     try {
-      await onStart(logReference);
+      await onStart(datasetId);
       onClose();
     } catch (submissionError) {
       setError(messageFor(submissionError));
@@ -1338,31 +1424,38 @@ function AnalysisDialog({
             {selectedModel?.model_identifier} {selectedModel && `· ${selectedModel.version}`}
           </strong>
         </div>
-        <div className="warning-strip">
-          Browser log-file upload is not implemented by the current API. Put a UTF-8 HDFS log in
-          the controlled workspace, then enter its relative reference below.
-        </div>
         <p className="muted">
           Valid requests currently finish as <code>not_supported</code> until the isolated,
           non-executable inference-artifact contract is implemented. Invalid HDFS datasets are
-          fully rejected with a validation report.
+          rejected at upload and never appear in this list.
         </p>
         {error && <Banner tone="error" message={error} />}
-        <label>
-          Stored HDFS log reference
-          <input
-            onChange={(event) => setLogReference(event.target.value)}
-            placeholder="data/stored-hdfs.log"
-            required
-            value={logReference}
-          />
+        <label htmlFor="analysis-dataset">
+          Accepted HDFS dataset
+          <select
+            disabled={datasets.length === 0}
+            id="analysis-dataset"
+            onChange={(event) => setDatasetId(event.target.value)}
+            required={datasets.length > 0}
+            value={datasetId}
+          >
+            {datasets.length === 0 ? (
+              <option value="">No accepted datasets yet</option>
+            ) : (
+              datasets.map((dataset) => (
+                <option key={dataset.id} value={dataset.id}>
+                  {datasetOptionLabel(dataset)}
+                </option>
+              ))
+            )}
+          </select>
         </label>
         <div className="dialog-actions">
           <button className="secondary-button" type="button" onClick={onClose}>
             Cancel
           </button>
-          <button className="primary-button" disabled={isSubmitting || !selectedModel} type="submit">
-            {isSubmitting ? "Submitting…" : "Validate and start"}
+          <button className="primary-button" disabled={isSubmitting || !canStart} type="submit">
+            {isSubmitting ? "Submitting…" : "Start analysis"}
           </button>
         </div>
       </form>
@@ -1564,4 +1657,10 @@ function humanize(value: string): string {
 
 function shortId(value: string): string {
   return value.slice(0, 8);
+}
+
+function datasetOptionLabel(dataset: Dataset): string {
+  const segments = dataset.object_reference.split("/").filter((segment) => segment.length > 0);
+  const filename = segments[segments.length - 1] ?? dataset.object_reference;
+  return `${filename} · ${shortId(dataset.id)} · ${dataset.storage_kind}`;
 }
