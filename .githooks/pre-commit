@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Run scoped lint and typecheck on staged backend and frontend sources."""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+BACKEND_PYTHON_ROOTS = (
+    ROOT / "src",
+    ROOT / "tests",
+    ROOT / "scripts",
+)
+BACKEND_PYTHON_FILES = (ROOT / "run_ablation.py",)
+MYPY_ROOTS = (
+    ROOT / "src" / "api",
+    ROOT / "src" / "modules",
+    ROOT / "src" / "model_validator",
+    ROOT / "tests",
+)
+MYPY_FILES = (ROOT / "run_ablation.py",)
+FRONTEND_ROOT = ROOT / "frontend" / "src"
+NOTEBOOKS_ROOT = ROOT / "src" / "notebooks"
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    """Return whether a path belongs to a checked source root."""
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _staged_paths() -> list[Path]:
+    """Return existing staged paths relative to the repository root."""
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr.decode() or "git diff --cached failed.\n")
+        sys.exit(1)
+    names = [name for name in result.stdout.decode().split("\0") if name]
+    paths: list[Path] = []
+    for name in names:
+        path = (ROOT / name).resolve()
+        if path.is_file():
+            paths.append(path)
+    return paths
+
+
+def _python_interpreter() -> str:
+    """Prefer the project virtualenv for Ruff and mypy."""
+    virtualenv = ROOT / ".venv" / "bin" / "python"
+    return str(virtualenv) if virtualenv.is_file() else sys.executable
+
+
+def _frontend_command(script: str) -> list[str]:
+    """Run a frontend script with the Node version pinned in frontend/.nvmrc."""
+    nvm_command = (
+        'export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"; '
+        'if [ ! -s "$NVM_DIR/nvm.sh" ]; then '
+        'echo "nvm is required to run frontend checks." >&2; exit 127; fi; '
+        '. "$NVM_DIR/nvm.sh"; '
+        f'nvm exec --silent "$(cat frontend/.nvmrc)" npm --prefix frontend run {script}'
+    )
+    return ["bash", "-lc", nvm_command]
+
+
+def _run_check(label: str, command: list[str]) -> int:
+    """Run one check and stream its output. Return the process exit code."""
+    print(f"pre-commit: {label}", flush=True)
+    result = subprocess.run(command, cwd=ROOT, check=False)
+    if result.returncode != 0:
+        print(f"pre-commit: {label} failed", file=sys.stderr, flush=True)
+    return result.returncode
+
+
+def main() -> int:
+    """Lint and typecheck staged backend/frontend sources; skip unrelated paths."""
+    staged = _staged_paths()
+    python_files = [
+        path
+        for path in staged
+        if path.suffix == ".py"
+        and not _is_within(path, NOTEBOOKS_ROOT)
+        and (
+            any(_is_within(path, root) for root in BACKEND_PYTHON_ROOTS)
+            or path in BACKEND_PYTHON_FILES
+        )
+    ]
+    mypy_needed = any(
+        path.suffix == ".py"
+        and (
+            any(_is_within(path, root) for root in MYPY_ROOTS) or path in MYPY_FILES
+        )
+        for path in staged
+    )
+    frontend_needed = any(_is_within(path, FRONTEND_ROOT) for path in staged)
+
+    if not python_files and not mypy_needed and not frontend_needed:
+        return 0
+
+    interpreter = _python_interpreter()
+    failures = 0
+    if python_files:
+        relative = [str(path.relative_to(ROOT)) for path in python_files]
+        failures |= _run_check("Ruff", [interpreter, "-m", "ruff", "check", *relative])
+    if mypy_needed:
+        failures |= _run_check("mypy", [interpreter, "-m", "mypy"])
+    if frontend_needed:
+        failures |= _run_check("Frontend ESLint", _frontend_command("lint"))
+        failures |= _run_check("Frontend TypeScript", _frontend_command("typecheck"))
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

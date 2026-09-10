@@ -91,7 +91,7 @@ export default function App() {
   async function restoreSession(): Promise<void> {
     try {
       await loadAuthenticatedData();
-    } catch (error) {
+    } catch {
       endSession("Your sign-in session is no longer valid. Please sign in again.");
     } finally {
       setIsRestoringSession(false);

@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "postToolUse": [
+      {
+        "command": "python3 .cursor/hooks/quality_after_file_edit.py",
+        "matcher": "Write|ApplyPatch",
+        "timeout": 120
+      }
+    ]
+  }
+}
