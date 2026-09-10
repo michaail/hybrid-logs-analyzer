@@ -343,9 +343,9 @@ Not applicable. No schema or API contract change.
 
 #### Automated
 
-- [x] 3.1 `context/foundation/test-plan.md` §6.1, §6.2, and §6.4 no longer read “TBD — see §3 Phase 1”
-- [x] 3.2 `python -m pytest tests/test_api.py -m "not ml"` still passes
+- [x] 3.1 `context/foundation/test-plan.md` §6.1, §6.2, and §6.4 no longer read “TBD — see §3 Phase 1” — daf443d
+- [x] 3.2 `python -m pytest tests/test_api.py -m "not ml"` still passes — daf443d
 
 #### Manual
 
-- [x] 3.3 Read §6: no `file:line` failure anchors; 401/403/404 distinction is explicit; risk #3 tests are cited as already present, not re-specified
+- [x] 3.3 Read §6: no `file:line` failure anchors; 401/403/404 distinction is explicit; risk #3 tests are cited as already present, not re-specified — daf443d
