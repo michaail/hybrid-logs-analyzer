@@ -870,6 +870,7 @@ class ApiDatabase:
         error_code: str | None = None,
         results_summary_json: str | None = None,
         anomaly_results: Iterable[dict[str, Any]] | None = None,
+        validation_report_json: str | None = None,
     ) -> DatabaseRow:
         """Apply a legal compare-and-swap status transition inside one transaction."""
         if (expected_status, next_status) not in _LEGAL_RUN_TRANSITIONS:
@@ -894,10 +895,18 @@ class ApiDatabase:
                 updated_rows = connection.execute(
                     """
                     UPDATE analysis_runs
-                    SET status = ?, error_code = ?, completed_at = ?
+                    SET status = ?, error_code = ?, completed_at = ?,
+                        validation_report_json = COALESCE(?, validation_report_json)
                     WHERE id = ? AND status = ?
                     """,
-                    (next_status, error_code, completed_at, str(run_id), expected_status),
+                    (
+                        next_status,
+                        error_code,
+                        completed_at,
+                        validation_report_json,
+                        str(run_id),
+                        expected_status,
+                    ),
                 ).rowcount
             else:
                 updated_rows = connection.execute(
@@ -922,23 +931,22 @@ class ApiDatabase:
                     run_id,
                     anomaly_results or (),
                 )
-            if actor_user_id is not None:
-                self._insert_audit_event(
-                    connection,
-                    actor_user_id=actor_user_id,
-                    project_id=UUID(str(run["project_id"])),
-                    action=_ANALYSIS_AUDIT_ACTIONS[next_status],
-                    resource_type="analysis_run",
-                    resource_id=run_id,
-                    details_json=json.dumps(
-                        {
-                            "error_code": error_code,
-                            "from_status": expected_status,
-                            "status": next_status,
-                        },
-                        sort_keys=True,
-                    ),
-                )
+            self._insert_audit_event(
+                connection,
+                actor_user_id=actor_user_id,
+                project_id=UUID(str(run["project_id"])),
+                action=_ANALYSIS_AUDIT_ACTIONS[next_status],
+                resource_type="analysis_run",
+                resource_id=run_id,
+                details_json=json.dumps(
+                    {
+                        "error_code": error_code,
+                        "from_status": expected_status,
+                        "status": next_status,
+                    },
+                    sort_keys=True,
+                ),
+            )
         return self.get_analysis_run(run_id) or self._missing_record("analysis run")
 
     def replace_anomaly_results(
@@ -973,6 +981,39 @@ class ApiDatabase:
                     str(context_json),
                 ),
             )
+
+    def get_inference_execution(self, run_id: UUID) -> DatabaseRow | None:
+        """Return project-scoped run, model, bundle, and dataset pointers for inference."""
+
+        return self._one(
+            """
+            SELECT
+                r.*,
+                m.status AS model_status,
+                m.package_reference AS model_package_reference,
+                m.artifact_reference AS model_artifact_reference,
+                m.artifact_sha256 AS model_artifact_sha256,
+                m.metadata_json AS model_metadata_json,
+                m.metrics_json AS model_metrics_json,
+                m.preprocessing_bundle_id AS model_preprocessing_bundle_id,
+                b.identifier AS bundle_identifier,
+                b.version AS bundle_version,
+                b.object_prefix AS bundle_object_prefix,
+                b.manifest_checksum AS bundle_manifest_checksum,
+                b.metadata_json AS bundle_metadata_json,
+                d.object_reference AS dataset_object_reference,
+                d.checksum AS dataset_checksum
+            FROM analysis_runs AS r
+            JOIN model_versions AS m
+                ON m.id = r.model_version_id AND m.project_id = r.project_id
+            LEFT JOIN preprocessing_bundles AS b
+                ON b.id = m.preprocessing_bundle_id AND b.project_id = r.project_id
+            LEFT JOIN datasets AS d
+                ON d.id = r.dataset_id AND d.project_id = r.project_id
+            WHERE r.id = ?
+            """,
+            (str(run_id),),
+        )
 
     def get_analysis_run(self, run_id: UUID) -> DatabaseRow | None:
         return self._one(

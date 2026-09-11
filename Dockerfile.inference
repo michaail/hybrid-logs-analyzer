@@ -1,0 +1,22 @@
+# Private Linux inference runtime. Keep the public API image Torch-free.
+FROM python:3.10-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HOME=/tmp/inference-home \
+    TMPDIR=/tmp \
+    PORT=8080
+
+WORKDIR /app
+COPY requirements-inference.txt ./
+RUN python -m pip install --upgrade pip && python -m pip install -r requirements-inference.txt
+
+COPY src ./src
+
+RUN useradd --create-home --uid 10001 --home-dir /tmp/inference-home appuser \
+    && mkdir -p /tmp/inference-home \
+    && chown -R appuser:appuser /tmp/inference-home /tmp
+USER appuser
+
+CMD ["sh", "-c", "python -m src.inference_service"]

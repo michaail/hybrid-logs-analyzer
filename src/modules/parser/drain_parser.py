@@ -7,6 +7,15 @@ from drain3 import TemplateMiner
 from drain3.file_persistence import FilePersistence
 from drain3.template_miner_config import TemplateMinerConfig
 
+
+class UnmatchedLogLine(ValueError):
+  """Raised when strict annotation encounters a line with no frozen template."""
+
+  def __init__(self, line_number: int) -> None:
+    self.line_number = line_number
+    super().__init__(f"Log line {line_number} did not match a frozen template.")
+
+
 class DrainParser:
   """
   Wrapper around Drain3's TemplateMiner for:
@@ -145,12 +154,21 @@ class DrainParser:
     }
 
 
-  def annotate_file(self, log_path: str, max_lines: int | None = None):
+  def annotate_file(
+    self,
+    log_path: str,
+    max_lines: int | None = None,
+    *,
+    unmatched: str = "skip",
+  ):
     """Second pass over the log file using the final learned templates.
 
     Returns a pandas DataFrame with one row per log line. Column schema is
     determined by :meth:`_extract_row` (overridable by subclasses).
+    ``unmatched="fail"`` raises :class:`UnmatchedLogLine` instead of skipping.
     """
+    if unmatched not in {"skip", "fail"}:
+      raise ValueError("unmatched must be 'skip' or 'fail'.")
     import pandas as pd
 
     rows = []
@@ -168,15 +186,17 @@ class DrainParser:
         # Match against final templates (does not mutate clusters)
         match = self.miner.match(content)
         if match is None:
+          if unmatched == "fail":
+            raise UnmatchedLogLine(i)
           continue
 
         template_tokens = match.get_template()  # list[str]
         template_str    = " ".join(template_tokens)
         params          = self.miner.get_parameter_list(template_tokens, content)
 
-        rows.append(
-          self._extract_row(line, match.cluster_id, template_str, list(params) if params else [])
-        )
+        row = self._extract_row(line, match.cluster_id, template_str, list(params) if params else [])
+        row["line_number"] = i
+        rows.append(row)
 
         if max_lines is not None and i >= max_lines:
           break

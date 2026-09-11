@@ -8,9 +8,32 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
-from src.api.settings import ApiSettings
-
 _DELETE_BATCH_SIZE = 1000
+
+
+class ObjectStoreConfig(Protocol):
+    """Settings subset required to construct an object store."""
+
+    @property
+    def object_store_root(self) -> Path: ...
+
+    @property
+    def object_store_endpoint(self) -> str | None: ...
+
+    @property
+    def object_store_bucket(self) -> str | None: ...
+
+    @property
+    def object_store_access_key_id(self) -> str | None: ...
+
+    @property
+    def object_store_secret_access_key(self) -> str | None: ...
+
+    @property
+    def object_store_region(self) -> str: ...
+
+    @property
+    def uses_bucket_object_store(self) -> bool: ...
 
 
 class ObjectStore(Protocol):
@@ -102,7 +125,7 @@ def preprocessing_bundle_object_key(
 
 
 def build_object_store(
-    settings: ApiSettings,
+    settings: ObjectStoreConfig,
     *,
     s3_client: S3Client | None = None,
 ) -> ObjectStore:
@@ -117,7 +140,7 @@ def build_object_store(
     return FilesystemObjectStore(settings.object_store_root)
 
 
-def create_s3_client(settings: ApiSettings) -> S3Client:
+def create_s3_client(settings: ObjectStoreConfig) -> S3Client:
     """Build an S3-compatible client from Bucket settings. Imported only when needed."""
 
     if not settings.uses_bucket_object_store:

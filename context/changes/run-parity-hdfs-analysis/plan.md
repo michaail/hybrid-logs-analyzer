@@ -588,25 +588,25 @@ before staging; never roll back a deployed schema by destructive SQL.
 
 #### Automated
 
-- [x] 2.1 Package and bundle contract tests cover v1/v2 compatibility, hostile files, and schema mismatches
-- [x] 2.2 Object-store, migration, repository, and API admission tests pass
-- [x] 2.3 Ruff, mypy, and focused non-ML and marked ML tests pass
+- [x] 2.1 Package and bundle contract tests cover v1/v2 compatibility, hostile files, and schema mismatches — b5ca618
+- [x] 2.2 Object-store, migration, repository, and API admission tests pass — b5ca618
+- [x] 2.3 Ruff, mypy, and focused non-ML and marked ML tests pass — b5ca618
 
 #### Manual
 
-- [x] 2.4 Register a v2 release and verify separate, project-scoped immutable prefixes
+- [x] 2.4 Register a v2 release and verify separate, project-scoped immutable prefixes — b5ca618
 
 ### Phase 3: Implement the private, on-demand inference service
 
 #### Automated
 
-- [ ] 3.1 Valid frozen tiny HDFS release completes through the isolated service
-- [ ] 3.2 Service failure, checksum, authorization, duplicate-invocation, and atomic-persistence tests pass
-- [ ] 3.3 Ruff, mypy, and Linux ML tests pass while the API Torch-import guard remains green
+- [x] 3.1 Valid frozen tiny HDFS release completes through the isolated service
+- [x] 3.2 Service failure, checksum, authorization, duplicate-invocation, and atomic-persistence tests pass
+- [x] 3.3 Ruff, mypy, and Linux ML tests pass while the API Torch-import guard remains green
 
 #### Manual
 
-- [ ] 3.4 Verify only selected project artefacts materialize and completed results are Operator-readable
+- [x] 3.4 Verify only selected project artefacts materialize and completed results are Operator-readable
 
 ### Phase 4: Queue dispatch and coarse Operator lifecycle
 
