@@ -623,10 +623,10 @@ before staging; never roll back a deployed schema by destructive SQL.
 
 #### Automated
 
-- [x] 5.1 Golden HDFS fixture detects parsing, graph, score, ordering, and threshold drift
-- [x] 5.2 Full parity command rejects checksum, threshold, and core metric deltas beyond tolerance
-- [x] 5.3 Ruff, mypy, focused tests, and the native full-baseline gate pass
+- [x] 5.1 Golden HDFS fixture detects parsing, graph, score, ordering, and threshold drift — f2ac4b8
+- [x] 5.2 Full parity command rejects checksum, threshold, and core metric deltas beyond tolerance — f2ac4b8
+- [x] 5.3 Ruff, mypy, focused tests, and the native full-baseline gate pass — f2ac4b8
 
 #### Manual
 
-- [x] 5.4 Review and approve the controlled baseline comparison report before claiming FR-011
+- [x] 5.4 Review and approve the controlled baseline comparison report before claiming FR-011 — f2ac4b8
