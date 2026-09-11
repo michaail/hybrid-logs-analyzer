@@ -3,7 +3,7 @@ project: "Log Anomaly Detection System"
 version: 1
 status: draft
 created: 2026-09-09
-updated: 2026-09-10
+updated: 2026-09-11
 prd_version: 1
 main_goal: speed
 top_blocker: decisions
@@ -58,7 +58,7 @@ controlled model lifecycle that every later analysis run requires.
 | S-01 | provision-project-accounts | An administrator can provision a project-authorized Operator or Publisher account without public sign-up. | — | FR-001, FR-008 | done |
 | S-02 | publish-hdfs-model-package | A Publisher can upload a complete HDFS-compatible model package, receive a clear rejection when ineligible, and explicitly publish the eligible version. | F-01, F-02, S-01 | US-01, FR-002, FR-003, FR-004, FR-008 | done |
 | S-03 | intake-hdfs-dataset | An Operator can upload or select an HDFS dataset and receive a clear whole-dataset acceptance or rejection result. | F-01, S-01 | US-02, FR-005, FR-008 | done |
-| S-04 | run-parity-hdfs-analysis | An Operator can start asynchronous analysis of an HDFS dataset with a compatible, published same-project model and see a terminal run status. | F-01, F-02, S-02, S-03 | US-02, FR-006, FR-010, FR-011 | blocked |
+| S-04 | run-parity-hdfs-analysis | An Operator can start asynchronous analysis of an HDFS dataset with a compatible, published same-project model and see a terminal run status. | F-01, F-02, S-02, S-03 | US-02, FR-006, FR-010, FR-011 | in-progress |
 | S-05 | inspect-hdfs-analysis-results | An Operator can inspect traceable detected anomalies and summaries for normal, rejected, and invalid outcomes. | S-04 | US-02, FR-007, FR-008 | proposed |
 
 ## Streams
@@ -176,7 +176,7 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
     Block: yes.
 - **Risk:** Without an agreed comparison baseline, the analysis result cannot be
   accepted as preserving the required notebook behavior.
-- **Status:** blocked
+- **Status:** in-progress
 
 ### S-05: Inspect HDFS analysis results
 

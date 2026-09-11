@@ -15,6 +15,7 @@ models/hdfs/
 models/bgl/
 outputs/
 runs/
+releases/
 
 # Python and notebook execution state
 __pycache__/

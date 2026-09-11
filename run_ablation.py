@@ -32,7 +32,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from src.modules.artifacts import ArtifactStore
+from src.modules.artifacts import SUCCESS_FILE, ArtifactStore, fingerprint, input_metadata
 from src.modules.dataset import (
     build_pyg_dataset,
     compute_embeddings,
@@ -40,6 +40,11 @@ from src.modules.dataset import (
     split_dataset,
 )
 from src.modules.enrichment import enrich_templates, load_enriched_templates
+from src.modules.inference_release import (
+    HdfsReleaseIdentity,
+    HdfsReleaseSource,
+    export_hdfs_inference_release,
+)
 from src.modules.parser import BGLParser, DrainParser
 from src.modules.sequencer import build_sequences, load_sequences, save_sequences
 from src.modules.utils import get_device, seed_everything
@@ -419,6 +424,176 @@ def run_experiment(
     run_manifest.write_text(json.dumps(record, indent=2))
     _checkpoint_workspace(workspace, checkpoint_root)
     return record
+
+
+def resolve_hdfs_release_source(
+    config: dict[str, Any],
+    *,
+    workspace_root: str | Path | None = None,
+    code_root: str | Path | None = None,
+) -> HdfsReleaseSource:
+    """Locate completed HDFS stage artefacts without rebuilding or retraining."""
+    workspace, code = _roots(config, workspace_root, code_root)
+    dataset = _dataset(config)
+    if dataset != "hdfs":
+        raise ValueError("Inference-release export requires an HDFS configuration.")
+    store = ArtifactStore(workspace, dataset, code)
+    parser_settings = config["parser"][dataset]
+    raw_path = workspace / config["paths"]["raw_dir"] / parser_settings["raw_file"]
+    parser_config = code / parser_settings["config"]
+    labels_path = workspace / config["paths"]["raw_dir"] / "anomaly_label.csv"
+    stage1 = _require_completed_stage(
+        store,
+        stage="stage1_parse",
+        stage_config={
+            "dataset": dataset,
+            "parser_config": parser_settings["config"],
+            "raw_file": parser_settings["raw_file"],
+        },
+        inputs=[raw_path, parser_config],
+    )
+    ablation = config["ablation"]
+    stage2 = _require_completed_stage(
+        store,
+        stage="stage2_enrich",
+        stage_config={
+            "dataset": dataset,
+            "llm_enrichment_enabled": bool(ablation["llm_enrichment_enabled"]),
+            "enrichment_model_size": ablation["enrichment_model_size"],
+        },
+        inputs=[stage1["templates"]],
+    )
+    sequencing = config.get("sequencing", {}).get(dataset, {})
+    stage3 = _require_completed_stage(
+        store,
+        stage="stage3_sequence",
+        stage_config={"dataset": dataset, **sequencing},
+        inputs=[stage1["annotated"]],
+    )
+    stage45 = _require_completed_stage(
+        store,
+        stage="stage45_build_dataset",
+        stage_config={
+            "dataset": dataset,
+            "seed": config["experiment"]["seed"],
+            "embeddings": ablation["embeddings"],
+            "use_edge_features": ablation["graph"]["use_edge_features"],
+        },
+        inputs=[stage2["templates"], stage3["sequences"], labels_path],
+    )
+    training = _resolved_training(config, dataset)
+    ablation_graph = config["ablation"]["graph"]
+    stage6 = _require_completed_stage(
+        store,
+        stage="stage6_train",
+        stage_config={
+            "dataset": dataset,
+            "seed": config["experiment"]["seed"],
+            "training": training,
+            "gine_aggregation": ablation_graph["gine_aggregation"],
+            "node_transformation": ablation_graph["node_transformation"],
+        },
+        inputs=[stage45["graph_dataset"]],
+    )
+    return HdfsReleaseSource(
+        checkpoint_path=stage6["checkpoint"],
+        parser_state_path=stage1["parser_state"],
+        drain_config_path=parser_config,
+        embeddings_path=stage45["embeddings"],
+        labels_path=labels_path,
+        metrics_path=stage6["metrics"],
+    )
+
+
+def export_completed_hdfs_release(
+    config: dict[str, Any],
+    *,
+    workspace_root: str | Path | None = None,
+    code_root: str | Path | None = None,
+    output_dir: str | Path,
+    model_identifier: str,
+    version: str,
+    bundle_identifier: str | None = None,
+    bundle_version: str | None = None,
+    pipeline_run_id: str | None = None,
+    source: HdfsReleaseSource | None = None,
+) -> dict[str, Any]:
+    """Export a completed HDFS training run into v2 model and bundle ZIP archives."""
+    workspace, code = _roots(config, workspace_root, code_root)
+    resolved_source = source or resolve_hdfs_release_source(
+        config, workspace_root=workspace, code_root=code
+    )
+    identity = HdfsReleaseIdentity(
+        model_identifier=model_identifier,
+        version=version,
+        bundle_identifier=bundle_identifier or f"{model_identifier}-preprocessing",
+        bundle_version=bundle_version or version,
+        pipeline_run_id=pipeline_run_id or config.get("experiment", {}).get("run_id"),
+    )
+    exported = export_hdfs_inference_release(
+        config=config,
+        source=resolved_source,
+        identity=identity,
+        output_dir=Path(output_dir),
+        code_root=code,
+    )
+    return {
+        "model_package": str(exported.model_package_path),
+        "preprocessing_bundle": str(exported.preprocessing_bundle_path),
+        "model_identifier": identity.model_identifier,
+        "version": identity.version,
+        "bundle_identifier": identity.bundle_identifier,
+        "bundle_version": identity.bundle_version,
+        "bundle_digest": exported.bundle_manifest.digest,
+    }
+
+
+def _explicit_release_source(args: argparse.Namespace) -> HdfsReleaseSource | None:
+    supplied = {
+        "checkpoint": args.checkpoint,
+        "parser_state": args.parser_state,
+        "drain_config": args.drain_config,
+        "embeddings": args.embeddings,
+        "labels": args.labels,
+        "metrics": args.metrics,
+    }
+    present = {name: path for name, path in supplied.items() if path is not None}
+    if not present:
+        return None
+    missing = sorted(name for name, path in supplied.items() if path is None)
+    if missing:
+        raise ValueError(
+            "export-inference-release explicit artefact flags must be supplied together; "
+            f"missing: {', '.join(missing)}"
+        )
+    return HdfsReleaseSource(
+        checkpoint_path=args.checkpoint,
+        parser_state_path=args.parser_state,
+        drain_config_path=args.drain_config,
+        embeddings_path=args.embeddings,
+        labels_path=args.labels,
+        metrics_path=args.metrics,
+    )
+
+
+def _require_completed_stage(
+    store: ArtifactStore,
+    *,
+    stage: str,
+    stage_config: dict[str, Any],
+    inputs: list[Path],
+) -> dict[str, Path]:
+    metadata = input_metadata(inputs, workspace_root=store.workspace_root)
+    stage_fingerprint = fingerprint(
+        config=stage_config, inputs=metadata, revision=store.revision
+    )
+    final_dir = store.cache_dir(stage, stage_fingerprint)
+    manifest = ArtifactStore._read_valid_manifest(final_dir / SUCCESS_FILE, stage_fingerprint)
+    if manifest is None:
+        raise FileNotFoundError(
+            f"Completed {stage} artefacts are required before exporting an inference release."
+        )
+    return ArtifactStore._outputs_from_manifest(final_dir, manifest)
 
 
 def _stage1_artifacts(
@@ -957,9 +1132,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--mode",
-        choices=("full", "train-only", "smoke"),
+        choices=("full", "train-only", "smoke", "export-inference-release"),
         default="full",
-        help="Full raw-log pipeline, training-only, or a one-epoch no-LLM check.",
+        help="Full raw-log pipeline, training-only, a one-epoch no-LLM check, or release export.",
     )
     parser.add_argument(
         "--config",
@@ -1006,6 +1181,27 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="KEY=VALUE",
         help="YAML-aware override; may be repeated.",
     )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Destination directory for export-inference-release ZIP archives.",
+    )
+    parser.add_argument(
+        "--model-identifier",
+        default="attribute-gae",
+        help="model_identifier written into the exported v2 package.",
+    )
+    parser.add_argument(
+        "--model-version",
+        default="v2",
+        help="Package/bundle version written into the exported release.",
+    )
+    parser.add_argument("--checkpoint", type=Path, help="Training checkpoint for export.")
+    parser.add_argument("--parser-state", type=Path, help="Frozen Drain snapshot for export.")
+    parser.add_argument("--drain-config", type=Path, help="Drain INI used at fit time.")
+    parser.add_argument("--embeddings", type=Path, help="Frozen embeddings.npz for export.")
+    parser.add_argument("--labels", type=Path, help="HDFS anomaly_label.csv for export.")
+    parser.add_argument("--metrics", type=Path, help="Training metrics JSON for export.")
     return parser
 
 
@@ -1029,6 +1225,25 @@ def main() -> int:
                 "training.epochs=1",
             ],
         )
+    if args.mode == "export-inference-release":
+        if args.matrix:
+            raise ValueError("export-inference-release does not accept --matrix.")
+        output_dir = args.output_dir
+        if output_dir is None:
+            output_dir = Path(args.workspace_root).resolve() / "releases" / "hdfs"
+        explicit_source = _explicit_release_source(args)
+        exported = export_completed_hdfs_release(
+            config,
+            workspace_root=args.workspace_root,
+            code_root=args.code_root,
+            output_dir=output_dir,
+            model_identifier=args.model_identifier,
+            version=args.model_version,
+            pipeline_run_id=args.run_id or config.get("experiment", {}).get("run_id"),
+            source=explicit_source,
+        )
+        print(json.dumps(exported, indent=2))
+        return 0
     if args.matrix:
         return _run_matrix(args, config)
     record = run_experiment(
