@@ -600,24 +600,24 @@ before staging; never roll back a deployed schema by destructive SQL.
 
 #### Automated
 
-- [x] 3.1 Valid frozen tiny HDFS release completes through the isolated service
-- [x] 3.2 Service failure, checksum, authorization, duplicate-invocation, and atomic-persistence tests pass
-- [x] 3.3 Ruff, mypy, and Linux ML tests pass while the API Torch-import guard remains green
+- [x] 3.1 Valid frozen tiny HDFS release completes through the isolated service — 8db9ddf
+- [x] 3.2 Service failure, checksum, authorization, duplicate-invocation, and atomic-persistence tests pass — 8db9ddf
+- [x] 3.3 Ruff, mypy, and Linux ML tests pass while the API Torch-import guard remains green — 8db9ddf
 
 #### Manual
 
-- [x] 3.4 Verify only selected project artefacts materialize and completed results are Operator-readable
+- [x] 3.4 Verify only selected project artefacts materialize and completed results are Operator-readable — 8db9ddf
 
 ### Phase 4: Queue dispatch and coarse Operator lifecycle
 
 #### Automated
 
-- [ ] 4.1 API, dispatcher, TypeScript, static analysis, and Railway topology checks pass
-- [ ] 4.2 Authorization, v1 non-readiness, retry, queued-preservation, and no-public-writer tests pass
+- [x] 4.1 API, dispatcher, TypeScript, static analysis, and Railway topology checks pass
+- [x] 4.2 Authorization, v1 non-readiness, retry, queued-preservation, and no-public-writer tests pass
 
 #### Manual
 
-- [ ] 4.3 Verify queued/running/terminal UI behavior, upload rejection, secret isolation, and staging cold start
+- [x] 4.3 Verify queued/running/terminal UI behavior, upload rejection, secret isolation, and staging cold start
 
 ### Phase 5: Golden processing and release parity verification
 

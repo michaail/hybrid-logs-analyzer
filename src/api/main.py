@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
@@ -40,10 +40,11 @@ from src.api.schemas import (
     TokenResponse,
     UserResponse,
 )
+from src.api.inference_dispatch import dispatch_analysis_run
 from src.api.object_store import build_object_store, dataset_object_prefix
 from src.api.security import create_access_token, decode_access_token, hash_password, verify_password
 from src.api.settings import ApiSettings
-from src.api.storage import ApiDatabase, DatabaseIntegrityError, utc_now
+from src.api.storage import ApiDatabase, DatabaseIntegrityError
 from src.api.validation import (
     MAX_HDFS_UPLOAD_BYTES,
     ValidationError,
@@ -114,6 +115,9 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             return
         if role not in allowed_roles:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient project role.")
+
+    def _dispatch_queued_run(run_id: UUID) -> None:
+        dispatch_analysis_run(run_id, resolved_settings)
 
     app = FastAPI(
         title="HDFS Anomaly Detection API",
@@ -537,9 +541,10 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     def create_analysis_run(
         project_id: UUID,
         request: AnalysisRunCreate,
+        background_tasks: BackgroundTasks,
         user: CurrentUser = Depends(get_current_user),
     ) -> AnalysisRunResponse:
-        """Start analysis of an admitted same-project dataset without re-scanning the log."""
+        """Queue analysis of an admitted same-project dataset without re-scanning the log."""
         require_project_role(project_id, user, {ProjectRole.OPERATOR})
         model = database.get_model_version(request.model_version_id)
         if model is None or model["project_id"] != str(project_id):
@@ -558,27 +563,20 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         if dataset is None or dataset["project_id"] != str(project_id):
             raise _not_found("Dataset")
 
-        validation_report = {
-            "execution": (
-                "Not started: a non-executable HDFS inference artifact contract is not available."
-            )
-        }
         run = database.create_analysis_run(
             project_id=project_id,
             model_version_id=request.model_version_id,
             requested_by_user_id=user.id,
             log_reference=str(dataset["object_reference"]),
-            status=AnalysisRunStatus.NOT_SUPPORTED.value,
-            validation_report_json=json.dumps(validation_report, sort_keys=True),
-            error_code="INFERENCE_CONTRACT_UNAVAILABLE",
-            completed_at=utc_now(),
+            status=AnalysisRunStatus.QUEUED.value,
+            validation_report_json=None,
+            error_code=None,
+            completed_at=None,
             actor_user_id=user.id,
-            results_summary_json=_stored_results_summary(
-                AnalysisRunStatus.NOT_SUPPORTED,
-                validation_report,
-            ),
+            results_summary_json=None,
             dataset_id=request.dataset_id,
         )
+        background_tasks.add_task(_dispatch_queued_run, UUID(str(run["id"])))
         return _analysis_run_from_store(run)
 
     @app.get(

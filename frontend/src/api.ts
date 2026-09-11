@@ -61,6 +61,12 @@ export interface ModelVersion {
   published_by_user_id: string | null;
   storage_kind: StorageKind;
   checksum: string | null;
+  inference_ready: boolean;
+  preprocessing_bundle: {
+    identifier: string;
+    version: string;
+    digest: string;
+  } | null;
 }
 
 export interface AnalysisRun {

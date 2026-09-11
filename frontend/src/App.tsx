@@ -134,10 +134,11 @@ export default function App() {
       setRuns(projectRuns);
       setDatasets(projectDatasets);
       setSelectedModelId((current) => {
-        if (current && projectModels.some((model) => model.id === current && model.status === "published")) {
-          return current;
-        }
-        return projectModels.find((model) => model.status === "published")?.id ?? null;
+        return projectModels.find((model) => model.id === current && model.status === "published")
+          ? current
+          : projectModels.find((model) => model.status === "published" && model.inference_ready)?.id
+            ?? projectModels.find((model) => model.status === "published")?.id
+            ?? null;
       });
     } catch (error) {
       handleRequestError(error);
@@ -257,8 +258,8 @@ export default function App() {
     await refreshProjectData(selectedProject.id);
     setView("runs");
     setNotice(
-      run.status === "not_supported"
-        ? "The HDFS dataset was validated, but inference is not available in the current API."
+      run.status === "queued"
+        ? `Analysis ${shortId(run.id)} is queued. Status refreshes automatically every five seconds.`
         : `Analysis run ${run.id} was created with status ${run.status}.`,
     );
   }
@@ -570,8 +571,8 @@ function ModelsView({
           <p className="eyebrow">Model registry</p>
           <h2>Choose a model for analysis</h2>
           <p className="muted">
-            Only published HDFS model versions can be selected. The API always enforces project
-            access and model lifecycle rules.
+            Only published HDFS model versions can be selected. Inference-ready releases are bound
+            to an immutable preprocessing bundle; legacy packages stay visible but cannot run.
           </p>
         </div>
         <button className="primary-button" type="button" onClick={onRegister}>
@@ -595,6 +596,11 @@ function ModelsView({
                   <div>
                     <p className="model-name">{model.model_identifier}</p>
                     <p className="muted">Version {model.version}</p>
+                    {model.status === "published" && (
+                      <p className="muted">
+                        {model.inference_ready ? "Ready for analysis" : "Not inference-ready"}
+                      </p>
+                    )}
                   </div>
                   <StatusBadge status={model.status} />
                 </div>
@@ -675,7 +681,9 @@ function RunsView({
           <h2>Validate an HDFS log dataset</h2>
           <p className="muted">
             {selectedModel
-              ? `Using ${selectedModel.model_identifier} ${selectedModel.version}.`
+              ? `Using ${selectedModel.model_identifier} ${selectedModel.version}${
+                  selectedModel.inference_ready ? "." : ". This published model is not inference-ready."
+                }`
               : "Select a published model in the Models view before starting an analysis."}
           </p>
         </div>
@@ -1425,9 +1433,9 @@ function AnalysisDialog({
           </strong>
         </div>
         <p className="muted">
-          Valid requests currently finish as <code>not_supported</code> until the isolated,
-          non-executable inference-artifact contract is implemented. Invalid HDFS datasets are
-          rejected at upload and never appear in this list.
+          A valid request is accepted as <code>queued</code>. In-progress runs refresh every five
+          seconds until they complete or fail. Failed runs show a safe execution report and error
+          code. Invalid HDFS datasets are rejected at upload and never appear in this list.
         </p>
         {error && <Banner tone="error" message={error} />}
         <label htmlFor="analysis-dataset">
@@ -1485,6 +1493,11 @@ function ResultsDialog({
           <StatusBadge status={run.status} />
         </div>
 
+        {(run.status === "queued" || run.status === "running") && (
+          <p className="muted">
+            This run is still in progress. Counts and anomaly rows appear when it completes.
+          </p>
+        )}
         {run.validation_report?.execution && (
           <div className="warning-strip">{run.validation_report.execution}</div>
         )}

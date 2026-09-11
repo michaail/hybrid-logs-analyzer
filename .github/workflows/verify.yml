@@ -25,7 +25,7 @@ jobs:
       - name: Type check
         run: mypy
       - name: Test API and artifact behavior
-        run: python -m pytest tests/test_api.py tests/test_model_package.py tests/test_artifacts.py tests/test_object_store.py -m "not ml"
+        run: python -m pytest tests/test_api.py tests/test_inference_dispatch.py tests/test_model_package.py tests/test_artifacts.py tests/test_object_store.py -m "not ml"
 
   frontend:
     runs-on: ubuntu-latest

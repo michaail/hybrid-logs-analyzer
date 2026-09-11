@@ -5,7 +5,7 @@ import json
 import sqlite3
 import sys
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterator
 from uuid import UUID
@@ -1100,6 +1100,8 @@ def test_openapi_exposes_administration_lifecycle_without_legacy_user_create(
     assert "patch" not in paths[results_path]
     run_item = "/projects/{project_id}/analysis-runs/{analysis_run_id}"
     assert "patch" not in paths.get(run_item, {})
+    assert "post" not in paths.get(run_item, {})
+    assert not any("/internal/" in path for path in paths)
     status_schema = schema["components"]["schemas"]["AnalysisRunStatus"]
     assert set(status_schema["enum"]) == {
         "queued",
@@ -1383,7 +1385,16 @@ def test_v2_registration_rejects_missing_or_v1_bundle(api: ApiFixture) -> None:
     assert [path for path in api.settings.object_store_root.rglob("*") if path.is_file()] == []
 
 
-def test_published_v2_model_still_finishes_not_supported(api: ApiFixture) -> None:
+def test_published_v2_model_queues_and_schedules_dispatch(
+    api: ApiFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dispatched: list[UUID] = []
+
+    def fake_dispatch(run_id: UUID, settings: ApiSettings, **kwargs: object) -> None:
+        del settings, kwargs
+        dispatched.append(run_id)
+
+    monkeypatch.setattr("src.api.main.dispatch_analysis_run", fake_dispatch)
     client = api.client
     administrator = _login(client, "admin")
     project = _create_project(client, administrator, "incident-a")
@@ -1409,16 +1420,78 @@ def test_published_v2_model_still_finishes_not_supported(api: ApiFixture) -> Non
         },
     )
     assert analysis.status_code == 202, analysis.text
-    assert analysis.json()["status"] == "not_supported"
-    assert analysis.json()["error_code"] == "INFERENCE_CONTRACT_UNAVAILABLE"
+    payload = analysis.json()
+    assert payload["status"] == "queued"
+    assert payload["error_code"] is None
+    assert payload["completed_at"] is None
+    assert payload["validation_report"] is None
+    assert dispatched == [UUID(payload["id"])]
     results = client.get(
-        f"/projects/{project['id']}/analysis-runs/{analysis.json()['id']}/results",
+        f"/projects/{project['id']}/analysis-runs/{payload['id']}/results",
         headers=operator_headers,
     )
     assert results.status_code == 200
+    assert results.json()["run"]["status"] == "queued"
     assert results.json()["summary"] == {
         "anomaly_count": 0,
         "normal_count": 0,
         "rejected_records": 0,
         "invalid_records": 0,
     }
+
+
+def test_exhausted_dispatch_preserves_queued_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = {"n": 0}
+
+    def fail_post(url: str, headers: object, connect: float, read: float) -> int:
+        del url, headers, connect, read
+        calls["n"] += 1
+        raise ConnectionRefusedError("connection refused")
+
+    monkeypatch.setattr("src.api.inference_dispatch.post_inference_execute", fail_post)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    settings = replace(
+        _api_settings(tmp_path, workspace),
+        inference_service_url="http://inference.test",
+        inference_internal_token="dispatch-test-token",
+        inference_retry_attempts=2,
+        inference_retry_backoff_seconds=0.0,
+    )
+    ApiDatabase(settings.database_url).apply_migrations()
+    bootstrap_administrator(settings, "admin", PASSWORD)
+    with TestClient(create_app(settings)) as client:
+        api = ApiFixture(client=client, workspace=workspace, settings=settings)
+        _, publisher_headers, project_id = _publisher_client(api)
+        _provision_project_account(client, _login(client, "admin"), "operator", project_id, "operator")
+        operator_headers = _login(client, "operator")
+        package_zip, bundle_zip = _v2_zips(workspace)
+        registration = _register(client, publisher_headers, project_id, package_zip, bundle_zip)
+        assert registration.status_code == 201, registration.text
+        publication = client.post(
+            f"/projects/{project_id}/models/{registration.json()['id']}/publish",
+            headers=publisher_headers,
+        )
+        assert publication.status_code == 200, publication.text
+        uploaded = _upload_log(client, operator_headers, project_id)
+        analysis = client.post(
+            f"/projects/{project_id}/analysis-runs",
+            headers=operator_headers,
+            json={
+                "model_version_id": registration.json()["id"],
+                "dataset_id": uploaded.json()["id"],
+            },
+        )
+        assert analysis.status_code == 202, analysis.text
+        assert analysis.json()["status"] == "queued"
+        fetched = client.get(
+            f"/projects/{project_id}/analysis-runs/{analysis.json()['id']}",
+            headers=operator_headers,
+        )
+        assert fetched.status_code == 200
+        assert fetched.json()["status"] == "queued"
+        assert fetched.json()["error_code"] is None
+        assert fetched.json()["completed_at"] is None
+        assert calls["n"] == 2

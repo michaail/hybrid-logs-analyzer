@@ -341,6 +341,27 @@ The API is then available at `http://127.0.0.1:8000`, with OpenAPI documentation
 There is no public sign-up route. The first Administrator is created only by the
 interactive CLI bootstrap above; the browser never creates Administrators.
 
+Local analysis uses three processes. Keep the public API Torch-free; run inference in
+its own environment (the Linux inference image, or a local ML venv) with the shared
+database and object store:
+
+```bash
+# Terminal 1 — public API (requirements-api.txt)
+uvicorn src.api.main:create_app --factory --reload
+
+# Terminal 2 — private inference (requirements-inference.txt). Listens on PORT or 8080.
+python -m src.inference_service
+
+# Terminal 3 — React client
+cd frontend && npm install && npm run dev
+```
+
+Set `INFERENCE_SERVICE_URL` (for example `http://127.0.0.1:8080`) and the same
+`INFERENCE_INTERNAL_TOKEN` in the API process and the inference process. Do not put
+that token, JWT secret, or object-store keys in the Vite/React build. If the inference
+URL and token are unset, a valid analysis request still returns `202 queued` and waits;
+dispatch does not fabricate a terminal result.
+
 Sign-in uses a username and password. Usernames are stored as a canonical lowercase
 identity (3–64 characters: letters, digits, underscore, dot, or hyphen), and sign-in is
 case-insensitive. A successful `POST /auth/token` returns a JWT bearer token with a
@@ -408,19 +429,23 @@ oversize, or non-UTF-8 payloads return 422 with a validation report, persist no 
 insert no row. Analysis starts with `POST /projects/{project_id}/analysis-runs` using
 `{ model_version_id, dataset_id }` only. Missing or foreign datasets return 404. The API
 copies the dataset object key into `log_reference`; it does not re-scan the log at analyze
-time. Model and run responses add `storage_kind` and nullable `checksum`; runs also return
-`dataset_id`. GET results returns the stored `results_summary_json`, not a computed empty
-summary. There is no public PATCH for datasets, and no public POST/PATCH for anomaly rows
-or run status.
+time. A published v1 model without a bound preprocessing bundle returns 409 before any run
+is created. An inference-ready published v2 model returns `202` with status `queued` and
+null completion/error fields; the API then activates the private inference service. Dispatch
+failures stay `queued` and are logged without secrets. The inference service owns
+`queued → running → completed|failed`. Model and run responses add `storage_kind` and
+nullable `checksum`; runs also return `dataset_id`. GET results returns the stored
+`results_summary_json`, not a computed empty summary. There is no public PATCH for
+datasets, and no public POST/PATCH for anomaly rows or run status.
 
-Invalid uploads never become analysis runs. Valid datasets currently end in the explicit
-`not_supported` terminal state: `INFERENCE_CONTRACT_UNAVAILABLE`. Isolated inference is a
-later slice. Do not SHA-256 Operator HDFS logs at analyze time.
+Invalid uploads never become analysis runs. Isolated inference runs in a private service
+built from `Dockerfile.inference`; the public API image stays on `requirements-api.txt`
+and never imports PyTorch. Do not SHA-256 Operator HDFS logs at analyze time.
 
-S-04 analysis will load a frozen Drain3 FilePersistence snapshot with `configs/drain.ini`
-via `DrainParser.load`, then call `annotate_file` only. Do not fit Drain, do not re-enrich
-templates, and do not put parser files in the GAE package. Unmatched-line handling is an
-S-04 decision.
+S-04 analysis loads a frozen Drain3 FilePersistence snapshot with the bundle `drain.ini`
+via `DrainParser.load`, then calls `annotate_file` only. It does not fit Drain, re-enrich
+templates, or put parser files in the GAE package. Unmatched admitted lines fail the run
+with `UNMATCHED_TEMPLATE`.
 
 Optional PostgreSQL dialect tests use a local Compose database and stay out of default CI:
 
@@ -444,10 +469,11 @@ cd frontend && npm install && npm run dev
 Vite proxies API paths to `http://127.0.0.1:8000` during local development. A deployed static
 build leaves `VITE_API_BASE_URL` unset when the API serves the client from the same origin.
 The Railway image builds `frontend/dist` and serves it through FastAPI. See the
-[Railway staging deployment guide](context/deployment/deploy-plan.md) for the manual
-provisioning, validation, rollback, and deferred-inference boundaries.
+[Railway staging deployment guide](context/deployment/deploy-plan.md) for the two-service
+topology: public `web` plus a private on-demand `inference` service that shares PostgreSQL
+and the Bucket. There is no polling worker and no public inference route.
 
 The current API accepts a Publisher ZIP for model registration and an Operator HDFS log
 upload. The datasets panel admits a file; the analyze dialog selects an accepted
-`dataset_id`. Valid analysis currently ends `not_supported` until the isolated inference
-contract exists.
+`dataset_id`. Inference-ready published v2 models queue an asynchronous run; the UI polls
+`queued` and `running` every five seconds until `completed` or `failed`.

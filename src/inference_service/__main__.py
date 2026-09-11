@@ -10,7 +10,7 @@ import uvicorn
 def main() -> None:
     """Run the inference ASGI app. Requires INFERENCE_INTERNAL_TOKEN."""
 
-    port = int(os.environ.get("PORT", "8081"))
+    port = int(os.environ.get("PORT", "8080"))
     uvicorn.run(
         "src.inference_service.main:create_app",
         factory=True,
