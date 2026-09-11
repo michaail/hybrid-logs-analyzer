@@ -15,11 +15,13 @@ SHARED_STATE_VERSION = "002_shared_durable_runtime_state"
 # F-02 originally numbered this 002; F-01 already occupied that slot.
 PACKAGE_ADMISSION_VERSION = "003_model_package_admission"
 OBJECT_CHECKSUM_VERSION = "004_model_object_checksum"
+PREPROCESSING_BUNDLE_VERSION = "005_preprocessing_bundles"
 _MIGRATION_ORDER = (
     INITIAL_SCHEMA_VERSION,
     SHARED_STATE_VERSION,
     PACKAGE_ADMISSION_VERSION,
     OBJECT_CHECKSUM_VERSION,
+    PREPROCESSING_BUNDLE_VERSION,
 )
 
 _INITIAL_SCHEMA_STATEMENTS: tuple[str, ...] = (
@@ -200,6 +202,28 @@ _MODEL_VERSIONS_COPY_COLUMNS = (
 )
 _POSTGRES_OBJECT_CHECKSUM_CONSTRAINT = "model_versions_object_kind_checksum_check"
 
+_PREPROCESSING_BUNDLES_TABLE = """
+CREATE TABLE IF NOT EXISTS preprocessing_bundles (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id),
+    identifier TEXT NOT NULL,
+    version TEXT NOT NULL,
+    object_prefix TEXT NOT NULL,
+    manifest_checksum TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (project_id, identifier, version)
+)
+"""
+_PREPROCESSING_BUNDLE_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_preprocessing_bundles_project_id "
+    "ON preprocessing_bundles(project_id)"
+)
+_PREPROCESSING_BUNDLE_MODEL_COLUMN = (
+    "ALTER TABLE model_versions ADD COLUMN preprocessing_bundle_id TEXT "
+    "REFERENCES preprocessing_bundles(id)"
+)
+
 _PACKAGE_ADMISSION_STATEMENTS: tuple[str, ...] = (
     """
     ALTER TABLE model_versions
@@ -216,7 +240,8 @@ _IDEMPOTENT_ADD_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     PACKAGE_ADMISSION_VERSION: (
         ("model_versions", "package_reference"),
         ("model_versions", "artifact_sha256"),
-    )
+    ),
+    PREPROCESSING_BUNDLE_VERSION: (("model_versions", "preprocessing_bundle_id"),),
 }
 
 
@@ -269,6 +294,12 @@ def apply_migrations(database: ApiDatabase, *, target: str | None = None) -> Non
             ):
                 _apply_object_checksum_postgres(connection)
                 _record_migration(connection, OBJECT_CHECKSUM_VERSION)
+                applied_versions.add(OBJECT_CHECKSUM_VERSION)
+            if (
+                _should_apply(PREPROCESSING_BUNDLE_VERSION, target)
+                and PREPROCESSING_BUNDLE_VERSION not in applied_versions
+            ):
+                _apply_preprocessing_bundles(database, connection)
             return
 
     if (
@@ -293,6 +324,14 @@ def apply_migrations(database: ApiDatabase, *, target: str | None = None) -> Non
     ):
         _upgrade_model_object_checksum_sqlite(database)
 
+    if (
+        not database.uses_postgresql
+        and _should_apply(PREPROCESSING_BUNDLE_VERSION, target)
+        and PREPROCESSING_BUNDLE_VERSION not in _current_applied_versions(database)
+    ):
+        with database.session() as connection:
+            _apply_preprocessing_bundles(database, connection)
+
 
 def main() -> None:
     """Run pending migrations using the configured runtime database URL."""
@@ -307,6 +346,14 @@ def _apply_package_admission(database: ApiDatabase, connection: Any) -> None:
         database, connection, PACKAGE_ADMISSION_VERSION, _PACKAGE_ADMISSION_STATEMENTS
     )
     _record_migration(connection, PACKAGE_ADMISSION_VERSION)
+
+
+def _apply_preprocessing_bundles(database: ApiDatabase, connection: Any) -> None:
+    connection.execute(_PREPROCESSING_BUNDLES_TABLE)
+    connection.execute(_PREPROCESSING_BUNDLE_INDEX)
+    if "preprocessing_bundle_id" not in _table_columns(database, connection, "model_versions"):
+        connection.execute(_PREPROCESSING_BUNDLE_MODEL_COLUMN)
+    _record_migration(connection, PREPROCESSING_BUNDLE_VERSION)
 
 
 def _apply_object_checksum_postgres(connection: _Executor) -> None:

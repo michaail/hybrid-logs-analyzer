@@ -577,24 +577,24 @@ before staging; never roll back a deployed schema by destructive SQL.
 
 #### Automated
 
-- [x] 1.1 Export and validate a synthetic HDFS inference release; reject incomplete or smoke inputs
+- [x] 1.1 Export and validate a synthetic HDFS inference release; reject incomplete or smoke inputs — 8e59962
 - [x] 1.2 Ruff, mypy, and focused exporter tests pass
 
 #### Manual
 
-- [x] 1.3 Record and approve the supplied trained baseline provenance, checksums, threshold, and core metrics
+- [x] 1.3 Record and approve the supplied trained baseline provenance, checksums, threshold, and core metrics — 8e59962
 
 ### Phase 2: Bind and admit immutable preprocessing bundles
 
 #### Automated
 
-- [ ] 2.1 Package and bundle contract tests cover v1/v2 compatibility, hostile files, and schema mismatches
-- [ ] 2.2 Object-store, migration, repository, and API admission tests pass
-- [ ] 2.3 Ruff, mypy, and focused non-ML and marked ML tests pass
+- [x] 2.1 Package and bundle contract tests cover v1/v2 compatibility, hostile files, and schema mismatches
+- [x] 2.2 Object-store, migration, repository, and API admission tests pass
+- [x] 2.3 Ruff, mypy, and focused non-ML and marked ML tests pass
 
 #### Manual
 
-- [ ] 2.4 Register a v2 release and verify separate, project-scoped immutable prefixes
+- [x] 2.4 Register a v2 release and verify separate, project-scoped immutable prefixes
 
 ### Phase 3: Implement the private, on-demand inference service
 

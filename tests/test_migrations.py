@@ -11,6 +11,7 @@ from src.api.migrations import (
     INITIAL_SCHEMA_VERSION,
     OBJECT_CHECKSUM_VERSION,
     PACKAGE_ADMISSION_VERSION,
+    PREPROCESSING_BUNDLE_VERSION,
     SHARED_STATE_VERSION,
     apply_migrations,
     _upgrade_shared_state_sqlite,
@@ -59,7 +60,19 @@ def _assert_shared_state_schema(database: ApiDatabase) -> None:
         SHARED_STATE_VERSION,
         PACKAGE_ADMISSION_VERSION,
         OBJECT_CHECKSUM_VERSION,
+        PREPROCESSING_BUNDLE_VERSION,
     } <= _applied_versions(database)
+    assert {
+        "id",
+        "project_id",
+        "identifier",
+        "version",
+        "object_prefix",
+        "manifest_checksum",
+        "metadata_json",
+        "created_at",
+    } <= _table_columns(database, "preprocessing_bundles")
+    assert "preprocessing_bundle_id" in _table_columns(database, "model_versions")
 
 
 def _seed_model(database: ApiDatabase) -> tuple[UUID, UUID, UUID]:

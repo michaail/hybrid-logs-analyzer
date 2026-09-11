@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Generator, Iterable
+from collections.abc import Generator, Iterable, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +45,17 @@ _ANALYSIS_AUDIT_ACTIONS = {
     "rejected": "analysis.rejected",
     "not_supported": "analysis.not_supported",
 }
+_MODEL_VERSION_WITH_BUNDLE = """
+SELECT
+    model_versions.*,
+    preprocessing_bundles.identifier AS preprocessing_bundle_identifier,
+    preprocessing_bundles.version AS preprocessing_bundle_version,
+    preprocessing_bundles.manifest_checksum AS preprocessing_bundle_digest,
+    preprocessing_bundles.object_prefix AS preprocessing_bundle_prefix
+FROM model_versions
+LEFT JOIN preprocessing_bundles
+    ON preprocessing_bundles.id = model_versions.preprocessing_bundle_id
+""".strip()
 _ANALYSIS_RUN_WITH_DATASET = """
 SELECT r.*, d.storage_kind AS dataset_storage_kind, d.checksum AS dataset_checksum
 FROM analysis_runs AS r
@@ -488,19 +499,28 @@ class ApiDatabase:
         checksum: str | None = None,
         actor_user_id: UUID | None = None,
         model_id: UUID | None = None,
+        preprocessing_bundle: Mapping[str, Any] | None = None,
+        preprocessing_bundle_id: UUID | None = None,
     ) -> DatabaseRow:
         resolved_model_id = str(model_id) if model_id is not None else str(uuid4())
         created_at = utc_now()
         pointer_checksum = _normalized_checksum(storage_kind, checksum)
         with self.session() as connection:
+            linked_bundle_id = _resolve_preprocessing_bundle_id(
+                connection,
+                project_id=project_id,
+                created_at=created_at,
+                preprocessing_bundle=preprocessing_bundle,
+                preprocessing_bundle_id=preprocessing_bundle_id,
+            )
             connection.execute(
                 """
                 INSERT INTO model_versions (
                     id, project_id, model_identifier, version, source_compatibility, status,
                     pipeline_run_id, artifact_reference, package_reference, artifact_sha256,
                     metrics_json, metadata_json, external_evaluation_evidence, created_at,
-                    storage_kind, checksum
-                ) VALUES (?, ?, ?, ?, 'hdfs', 'eligible', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    storage_kind, checksum, preprocessing_bundle_id
+                ) VALUES (?, ?, ?, ?, 'hdfs', 'eligible', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     resolved_model_id,
@@ -517,6 +537,7 @@ class ApiDatabase:
                     created_at,
                     storage_kind,
                     pointer_checksum,
+                    linked_bundle_id,
                 ),
             )
             if actor_user_id is not None:
@@ -542,16 +563,28 @@ class ApiDatabase:
         return self.get_model_version(UUID(resolved_model_id)) or self._missing_record("model version")
 
     def get_model_version(self, model_id: UUID) -> DatabaseRow | None:
-        return self._one("SELECT * FROM model_versions WHERE id = ?", (str(model_id),))
+        return self._one(
+            f"{_MODEL_VERSION_WITH_BUNDLE} WHERE model_versions.id = ?",
+            (str(model_id),),
+        )
 
     def list_model_versions(self, project_id: UUID) -> list[DatabaseRow]:
         return self._all(
-            """
-            SELECT * FROM model_versions
-            WHERE project_id = ?
-            ORDER BY model_identifier, version
+            f"""
+            {_MODEL_VERSION_WITH_BUNDLE}
+            WHERE model_versions.project_id = ?
+            ORDER BY model_versions.model_identifier, model_versions.version
             """,
             (str(project_id),),
+        )
+
+    def get_preprocessing_bundle(self, project_id: UUID, bundle_id: UUID) -> DatabaseRow | None:
+        return self._one(
+            """
+            SELECT * FROM preprocessing_bundles
+            WHERE id = ? AND project_id = ?
+            """,
+            (str(bundle_id), str(project_id)),
         )
 
     def publish_model_version(
@@ -1043,6 +1076,48 @@ class ApiDatabase:
     @staticmethod
     def _missing_record(resource_name: str) -> DatabaseRow:
         raise RuntimeError(f"Created {resource_name} could not be read.")
+
+
+def _resolve_preprocessing_bundle_id(
+    connection: _DatabaseConnection,
+    *,
+    project_id: UUID,
+    created_at: str,
+    preprocessing_bundle: Mapping[str, Any] | None,
+    preprocessing_bundle_id: UUID | None,
+) -> str | None:
+    if preprocessing_bundle is not None and preprocessing_bundle_id is not None:
+        raise ValueError("Provide either a new preprocessing bundle or an existing bundle id.")
+    if preprocessing_bundle_id is not None:
+        row = connection.execute(
+            "SELECT project_id FROM preprocessing_bundles WHERE id = ?",
+            (str(preprocessing_bundle_id),),
+        ).fetchone()
+        if row is None or str(dict(row)["project_id"]) != str(project_id):
+            raise ValueError("Preprocessing bundle was not found.")
+        return str(preprocessing_bundle_id)
+    if preprocessing_bundle is None:
+        return None
+    bundle_id = str(preprocessing_bundle.get("id") or uuid4())
+    connection.execute(
+        """
+        INSERT INTO preprocessing_bundles (
+            id, project_id, identifier, version, object_prefix, manifest_checksum,
+            metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            bundle_id,
+            str(project_id),
+            str(preprocessing_bundle["identifier"]),
+            str(preprocessing_bundle["version"]),
+            str(preprocessing_bundle["object_prefix"]),
+            str(preprocessing_bundle["manifest_checksum"]),
+            str(preprocessing_bundle["metadata_json"]),
+            created_at,
+        ),
+    )
+    return bundle_id
 
 
 def _sqlite_path_from_url(database_url: str) -> Path:

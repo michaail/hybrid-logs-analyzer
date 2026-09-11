@@ -18,7 +18,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 MANIFEST_NAME = "manifest.json"
 DEFAULT_ARTIFACT_NAME = "model.pt"
 DEFAULT_EVIDENCE_NAME = "evidence.json"
-PACKAGE_FORMAT = "attribute-aware-gae-v1"
+PACKAGE_FORMAT_V1 = "attribute-aware-gae-v1"
+PACKAGE_FORMAT_V2 = "attribute-aware-gae-v2"
+PACKAGE_FORMAT = PACKAGE_FORMAT_V1
 MAX_ZIP_MEMBERS = 64
 MAX_ZIP_COMPRESSED_BYTES = 32 * 1024 * 1024
 MAX_ZIP_UNCOMPRESSED_BYTES = 96 * 1024 * 1024
@@ -117,6 +119,14 @@ class PackageScoring(PackageModel):
         return self
 
 
+class PreprocessingBundleRef(PackageModel):
+    """Immutable pointer from a v2 model package to its preprocessing bundle."""
+
+    identifier: str = Field(min_length=1, max_length=128, pattern=_IDENTIFIER_PATTERN)
+    version: str = Field(min_length=1, max_length=64, pattern=_IDENTIFIER_PATTERN)
+    digest: str = Field(pattern=_SHA256_PATTERN)
+
+
 class PackageFiles(PackageModel):
     """Declared package members and their SHA-256 digests."""
 
@@ -153,12 +163,22 @@ class ModelPackageManifest(PackageModel):
     model_identifier: str = Field(min_length=1, max_length=128, pattern=_IDENTIFIER_PATTERN)
     version: str = Field(min_length=1, max_length=64, pattern=_IDENTIFIER_PATTERN)
     source_compatibility: Literal["hdfs"]
-    format: Literal["attribute-aware-gae-v1"]
+    format: Literal["attribute-aware-gae-v1", "attribute-aware-gae-v2"]
     pipeline_run_id: str | None = Field(default=None, min_length=1)
     metrics: PackageMetrics
     architecture: PackageArchitecture
     scoring: PackageScoring
     files: PackageFiles
+    preprocessing_bundle: PreprocessingBundleRef | None = None
+
+    @model_validator(mode="after")
+    def _bundle_matches_format(self) -> ModelPackageManifest:
+        if self.format == PACKAGE_FORMAT_V2:
+            if self.preprocessing_bundle is None:
+                raise ValueError("v2 packages require preprocessing_bundle")
+        elif self.preprocessing_bundle is not None:
+            raise ValueError("v1 packages must not declare preprocessing_bundle")
+        return self
 
 
 class TensorSpec:
@@ -458,6 +478,13 @@ def materialize_declared_package_files(package_root: Path, destination: Path) ->
         target.write_bytes(located.read_bytes())
         copied.append(relative)
     return copied
+
+
+def try_load_model_package_manifest(package_root: Path) -> ModelPackageManifest | None:
+    """Return a parsed manifest when the file is readable and contract-valid."""
+
+    manifest, _issues = _load_manifest(package_root)
+    return manifest
 
 
 def _load_manifest(

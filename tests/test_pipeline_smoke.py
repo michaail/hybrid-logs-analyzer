@@ -333,6 +333,7 @@ def test_export_validates_synthetic_hdfs_inference_release(
         item.sha256 for item in second_inspected.bundle_files
     ]
     assert inspected.bundle_manifest.digest == second_inspected.bundle_manifest.digest
+    assert inspected.model_manifest.preprocessing_bundle is not None
     assert (
         inspected.model_manifest.preprocessing_bundle.digest
         == inspected.bundle_manifest.digest

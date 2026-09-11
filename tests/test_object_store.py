@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Mapping
+from io import BytesIO
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
@@ -18,6 +19,8 @@ from src.api.object_store import (
     dataset_object_prefix,
     model_package_object_key,
     model_package_object_prefix,
+    preprocessing_bundle_object_key,
+    preprocessing_bundle_object_prefix,
 )
 from src.api.settings import ApiSettings
 
@@ -52,6 +55,13 @@ class FakeS3Client:
         for item in Delete.get("Objects", []):
             self.objects.pop((Bucket, item["Key"]), None)
         return {}
+
+    def get_object(self, *, Bucket: str, Key: str) -> Mapping[str, Any]:
+        try:
+            payload = self.objects[(Bucket, Key)]
+        except KeyError as error:
+            raise FileNotFoundError(Key) from error
+        return {"Body": BytesIO(payload)}
 
 
 def test_object_store_source_does_not_import_torch() -> None:
@@ -102,6 +112,19 @@ def test_dataset_object_key_rejects_path_escape() -> None:
         dataset_object_key("proj", "ds", "nested/../../etc/passwd")
 
 
+def test_preprocessing_bundle_object_key_is_posix_prefix() -> None:
+    project_id = UUID("11111111-1111-4111-8111-111111111111")
+    bundle_id = UUID("44444444-4444-4444-8444-444444444444")
+    assert preprocessing_bundle_object_prefix(project_id, bundle_id, "v2") == (
+        "projects/11111111-1111-4111-8111-111111111111/"
+        "preprocessing-bundles/44444444-4444-4444-8444-444444444444/v2"
+    )
+    assert preprocessing_bundle_object_key(project_id, bundle_id, "v2", "drain.ini") == (
+        "projects/11111111-1111-4111-8111-111111111111/"
+        "preprocessing-bundles/44444444-4444-4444-8444-444444444444/v2/drain.ini"
+    )
+
+
 def test_filesystem_put_and_delete_prefix(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -146,6 +169,19 @@ def test_filesystem_rejects_path_escape(tmp_path: Path) -> None:
         store.delete_prefix("projects/../outside")
     assert list((tmp_path / "objects").rglob("*")) == []
     assert not (tmp_path / "escape.bin").exists()
+
+
+def test_filesystem_get_reads_key_and_rejects_missing_or_escape(tmp_path: Path) -> None:
+    store = FilesystemObjectStore(tmp_path / "objects")
+    key = "projects/p/preprocessing-bundles/b/v2/drain.ini"
+    store.put(key, b"[DRAIN]\n")
+    assert store.get(key) == b"[DRAIN]\n"
+    with pytest.raises(FileNotFoundError):
+        store.get("projects/p/preprocessing-bundles/b/v2/missing.ini")
+    with pytest.raises(ValueError, match="relative POSIX"):
+        store.get("/etc/passwd")
+    with pytest.raises(ValueError, match=r"\.\."):
+        store.get("../escape.bin")
 
 
 def _clear_bucket_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -274,6 +310,20 @@ def test_bucket_put_and_delete_prefix() -> None:
     assert sibling in remaining
     assert overlapping in remaining
     assert fake.objects[("models-test", sibling)] == b'{"keep":true}'
+
+
+def test_bucket_get_reads_key_and_rejects_missing_or_escape() -> None:
+    fake = FakeS3Client()
+    store = BucketObjectStore(fake, "models-test")
+    key = "projects/p/preprocessing-bundles/b/v2/embeddings.npz"
+    store.put(key, b"npz")
+    assert store.get(key) == b"npz"
+    with pytest.raises(FileNotFoundError):
+        store.get("projects/p/preprocessing-bundles/b/v2/missing.npz")
+    with pytest.raises(ValueError, match="relative POSIX"):
+        store.get("/etc/passwd")
+    with pytest.raises(ValueError, match=r"\.\."):
+        store.get("../escape.bin")
 
 
 def test_bucket_rejects_path_escape() -> None:

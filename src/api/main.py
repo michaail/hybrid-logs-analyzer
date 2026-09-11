@@ -31,6 +31,7 @@ from src.api.schemas import (
     MembershipRoleUpdate,
     ModelStatus,
     ModelVersionResponse,
+    PreprocessingBundleIdentity,
     ProjectAccountCreate,
     ProjectAccountResponse,
     ProjectCreate,
@@ -384,16 +385,24 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         project_id: UUID,
         user: CurrentUser = Depends(get_current_user),
         package: UploadFile = File(..., description="Complete HDFS model package ZIP"),
+        preprocessing_bundle: UploadFile | None = File(
+            default=None,
+            description="Companion preprocessing-bundle ZIP required for v2 packages",
+        ),
     ) -> ModelVersionResponse:
         """Admit a Publisher ZIP upload. Never loads the artifact in this process."""
         require_project_role(project_id, user, {ProjectRole.PUBLISHER})
         archive_bytes = package.file.read(MAX_ZIP_COMPRESSED_BYTES + 1)
+        bundle_bytes = None
+        if preprocessing_bundle is not None:
+            bundle_bytes = preprocessing_bundle.file.read(MAX_ZIP_COMPRESSED_BYTES + 1)
         try:
             report, admitted = admit_uploaded_zip_package(
                 archive_bytes,
                 settings=resolved_settings,
                 object_store=object_store,
                 project_id=project_id,
+                preprocessing_bundle_bytes=bundle_bytes,
             )
         except ValidatorUnavailableError as error:
             raise HTTPException(
@@ -431,9 +440,25 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 checksum=admitted.artifact_sha256,
                 actor_user_id=user.id,
                 model_id=admitted.model_id,
+                preprocessing_bundle=(
+                    {
+                        "id": str(admitted.preprocessing_bundle.bundle_id),
+                        "identifier": admitted.preprocessing_bundle.identifier,
+                        "version": admitted.preprocessing_bundle.version,
+                        "object_prefix": admitted.preprocessing_bundle.object_prefix,
+                        "manifest_checksum": admitted.preprocessing_bundle.manifest_checksum,
+                        "metadata_json": json.dumps(
+                            admitted.preprocessing_bundle.metadata, sort_keys=True
+                        ),
+                    }
+                    if admitted.preprocessing_bundle is not None
+                    else None
+                ),
             )
         except DatabaseIntegrityError:
             object_store.delete_prefix(admitted.package_reference)
+            if admitted.preprocessing_bundle is not None:
+                object_store.delete_prefix(admitted.preprocessing_bundle.object_prefix)
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This model identifier and version already exists in the project.",
@@ -523,6 +548,11 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Only published model versions can start analysis.",
+            )
+        if not model.get("preprocessing_bundle_id"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Published model is not inference-ready.",
             )
         dataset = database.get_dataset(request.dataset_id)
         if dataset is None or dataset["project_id"] != str(project_id):
@@ -805,6 +835,16 @@ def _model_response(row: Any) -> ModelVersionResponse:
         ),
         storage_kind=row["storage_kind"],
         checksum=str(row["checksum"]) if row["checksum"] else None,
+        inference_ready=bool(row.get("preprocessing_bundle_id")),
+        preprocessing_bundle=(
+            PreprocessingBundleIdentity(
+                identifier=str(row["preprocessing_bundle_identifier"]),
+                version=str(row["preprocessing_bundle_version"]),
+                digest=str(row["preprocessing_bundle_digest"]),
+            )
+            if row.get("preprocessing_bundle_identifier")
+            else None
+        ),
     )
 
 

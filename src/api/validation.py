@@ -21,16 +21,22 @@ from src.api.object_store import (
     dataset_object_prefix,
     model_package_object_key,
     model_package_object_prefix,
+    preprocessing_bundle_object_key,
+    preprocessing_bundle_object_prefix,
 )
 from src.api.settings import ApiSettings
 from src.model_validator.runtime import allowed_validator_environment
+from src.modules.inference_bundle import materialize_declared_bundle_files
 from src.modules.model_package import (
     MANIFEST_NAME,
     MAX_ZIP_COMPRESSED_BYTES,
+    PACKAGE_FORMAT_V1,
+    PACKAGE_FORMAT_V2,
     ModelPackageManifest,
     PackageValidationIssue,
     PackageValidationResult,
     materialize_declared_package_files,
+    try_load_model_package_manifest,
     unpack_zip_bytes,
 )
 
@@ -62,6 +68,18 @@ class AdmittedHdfsDataset:
 
 
 @dataclass(frozen=True)
+class AdmittedPreprocessingBundle:
+    """Validated preprocessing-bundle identity persisted beside a v2 model."""
+
+    bundle_id: UUID
+    identifier: str
+    version: str
+    object_prefix: str
+    manifest_checksum: str
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class AdmittedModelPackage:
     """Validated package identity persisted after a successful private probe."""
 
@@ -76,16 +94,20 @@ class AdmittedModelPackage:
     external_evaluation_evidence: str
     model_id: UUID | None = None
     storage_kind: str = "workspace"
+    preprocessing_bundle: AdmittedPreprocessingBundle | None = None
 
 
 def run_private_package_validator(
     package_root: Path,
     settings: ApiSettings,
+    bundle_root: Path | None = None,
 ) -> PackageValidationResult:
     """Ask the isolated validator process for a typed report. Never load the artifact here."""
 
     command = list(settings.model_validator_command or (sys.executable, "-m", "src.model_validator"))
     command.append(str(package_root))
+    if bundle_root is not None:
+        command.append(str(bundle_root))
     try:
         completed = subprocess.run(
             command,
@@ -113,6 +135,7 @@ def admit_uploaded_zip_package(
     settings: ApiSettings,
     object_store: ObjectStore,
     project_id: UUID,
+    preprocessing_bundle_bytes: bytes | None = None,
 ) -> tuple[PackageValidationResult, AdmittedModelPackage | None]:
     """Validate a ZIP in a temp directory, then persist declared files only.
 
@@ -120,45 +143,70 @@ def admit_uploaded_zip_package(
     Invalid packages return the typed report and put nothing.
     """
 
-    if len(archive_bytes) > MAX_ZIP_COMPRESSED_BYTES:
-        return (
-            PackageValidationResult.from_issues(
-                [
-                    PackageValidationIssue(
-                        path="package",
-                        reason="Zip archive exceeds the 32 MiB compressed size limit.",
-                    )
-                ]
-            ),
-            None,
-        )
-    if not archive_bytes:
-        return (
-            PackageValidationResult.from_issues(
-                [
-                    PackageValidationIssue(
-                        path="package",
-                        reason="Package zip must contain a readable archive.",
-                    )
-                ]
-            ),
-            None,
-        )
+    size_issue = _zip_size_issue(archive_bytes, path="package")
+    if size_issue is not None:
+        return size_issue, None
+    if preprocessing_bundle_bytes is not None:
+        bundle_size_issue = _zip_size_issue(preprocessing_bundle_bytes, path="preprocessing_bundle")
+        if bundle_size_issue is not None:
+            return bundle_size_issue, None
 
     with tempfile.TemporaryDirectory(prefix="model-upload-") as tmp:
         tmp_root = Path(tmp)
-        extract_root = tmp_root / "extract"
+        extract_root = tmp_root / "package"
         extract_root.mkdir()
         unpack_report = unpack_zip_bytes(archive_bytes, extract_root)
         if not unpack_report.valid:
             return unpack_report, None
-        report = run_private_package_validator(extract_root, settings)
+        identity_preview = try_load_model_package_manifest(extract_root)
+        package_format = identity_preview.format if identity_preview is not None else None
+        if package_format == PACKAGE_FORMAT_V2 and not preprocessing_bundle_bytes:
+            return (
+                PackageValidationResult.from_issues(
+                    [
+                        PackageValidationIssue(
+                            path="preprocessing_bundle",
+                            reason="attribute-aware-gae-v2 packages require a preprocessing bundle.",
+                        )
+                    ]
+                ),
+                None,
+            )
+        if package_format == PACKAGE_FORMAT_V1 and preprocessing_bundle_bytes:
+            return (
+                PackageValidationResult.from_issues(
+                    [
+                        PackageValidationIssue(
+                            path="preprocessing_bundle",
+                            reason="A preprocessing bundle is not allowed for attribute-aware-gae-v1.",
+                        )
+                    ]
+                ),
+                None,
+            )
+
+        bundle_root: Path | None = None
+        if preprocessing_bundle_bytes:
+            bundle_root = tmp_root / "bundle"
+            bundle_root.mkdir()
+            bundle_unpack = unpack_zip_bytes(preprocessing_bundle_bytes, bundle_root)
+            if not bundle_unpack.valid:
+                return bundle_unpack, None
+
+        report = run_private_package_validator(extract_root, settings, bundle_root)
         if not report.valid:
             return report, None
         identity = _admitted_identity_from_directory(extract_root)
         model_id = uuid4()
         prefix = model_package_object_prefix(project_id, model_id, identity.version)
+        bundle_id = uuid4()
+        bundle_prefix = (
+            preprocessing_bundle_object_prefix(project_id, bundle_id, identity.preprocessing_bundle.version)
+            if identity.preprocessing_bundle is not None
+            else None
+        )
         persist_root = tmp_root / "declared"
+        admitted_bundle: AdmittedPreprocessingBundle | None = None
         try:
             relatives = materialize_declared_package_files(extract_root, persist_root)
             for relative in relatives:
@@ -166,11 +214,36 @@ def admit_uploaded_zip_package(
                     model_package_object_key(project_id, model_id, identity.version, relative),
                     (persist_root / relative).read_bytes(),
                 )
+            if bundle_root is not None and identity.preprocessing_bundle is not None and bundle_prefix is not None:
+                bundle_persist = tmp_root / "bundle-declared"
+                bundle_relatives = materialize_declared_bundle_files(bundle_root, bundle_persist)
+                for relative in bundle_relatives:
+                    object_store.put(
+                        preprocessing_bundle_object_key(
+                            project_id,
+                            bundle_id,
+                            identity.preprocessing_bundle.version,
+                            relative,
+                        ),
+                        (bundle_persist / relative).read_bytes(),
+                    )
+                admitted_bundle = AdmittedPreprocessingBundle(
+                    bundle_id=bundle_id,
+                    identifier=identity.preprocessing_bundle.identifier,
+                    version=identity.preprocessing_bundle.version,
+                    object_prefix=bundle_prefix,
+                    manifest_checksum=identity.preprocessing_bundle.digest,
+                    metadata=identity.preprocessing_bundle.model_dump(),
+                )
         except ValueError as error:
             object_store.delete_prefix(prefix)
+            if bundle_prefix is not None:
+                object_store.delete_prefix(bundle_prefix)
             raise ValidationError(str(error)) from error
         except Exception:
             object_store.delete_prefix(prefix)
+            if bundle_prefix is not None:
+                object_store.delete_prefix(bundle_prefix)
             raise
         artifact_key = model_package_object_key(
             project_id,
@@ -186,16 +259,46 @@ def admit_uploaded_zip_package(
             artifact_reference=artifact_key,
             artifact_sha256=identity.files.checksums[identity.files.artifact],
             metrics=identity.metrics.model_dump(),
-            metadata={
-                "format": identity.format,
-                "architecture": identity.architecture.model_dump(),
-                "scoring": identity.scoring.model_dump(),
-            },
+            metadata=_package_metadata(identity),
             external_evaluation_evidence=identity.files.evidence,
             model_id=model_id,
             storage_kind="object",
+            preprocessing_bundle=admitted_bundle,
         )
         return PackageValidationResult.from_issues([]), admitted
+
+
+def _zip_size_issue(archive_bytes: bytes, *, path: str) -> PackageValidationResult | None:
+    if len(archive_bytes) > MAX_ZIP_COMPRESSED_BYTES:
+        return PackageValidationResult.from_issues(
+            [
+                PackageValidationIssue(
+                    path=path,
+                    reason="Zip archive exceeds the 32 MiB compressed size limit.",
+                )
+            ]
+        )
+    if not archive_bytes:
+        return PackageValidationResult.from_issues(
+            [
+                PackageValidationIssue(
+                    path=path,
+                    reason="Package zip must contain a readable archive.",
+                )
+            ]
+        )
+    return None
+
+
+def _package_metadata(identity: ModelPackageManifest) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "format": identity.format,
+        "architecture": identity.architecture.model_dump(),
+        "scoring": identity.scoring.model_dump(),
+    }
+    if identity.preprocessing_bundle is not None:
+        metadata["preprocessing_bundle"] = identity.preprocessing_bundle.model_dump()
+    return metadata
 
 
 def admit_validated_package(package_root: Path, workspace_root: Path) -> AdmittedModelPackage:

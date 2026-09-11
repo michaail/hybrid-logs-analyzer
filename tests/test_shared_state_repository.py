@@ -389,3 +389,94 @@ def test_postgres_dataset_identity_checksum_check_and_cas_conflict(
             actor_user_id=user_id,
             error_code="INFERENCE_FAILED",
         )
+
+
+def _bundle_fields() -> dict[str, str]:
+    return {
+        "identifier": "attribute-gae-preprocessing",
+        "version": "v2",
+        "object_prefix": "projects/x/preprocessing-bundles/y/v2",
+        "manifest_checksum": "a" * 64,
+        "metadata_json": "{}",
+    }
+
+
+def test_preprocessing_bundle_is_project_scoped_and_unique(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    project_id, user_id, _model_id = _seed_model(database)
+    other_project = database.create_project("incident-b")
+    other_user = database.create_user(
+        username="other-publisher", password_hash="x", is_administrator=False
+    )
+    created = database.create_model_version(
+        project_id=project_id,
+        model_identifier="attribute-gae",
+        version="v2",
+        pipeline_run_id="baseline-v2",
+        artifact_reference="outputs/hdfs/v2/model.pt",
+        package_reference="packages/hdfs/attribute-gae-v2",
+        artifact_sha256="1" * 64,
+        metrics_json="{}",
+        metadata_json="{}",
+        external_evaluation_evidence="evidence",
+        actor_user_id=user_id,
+        preprocessing_bundle=_bundle_fields(),
+    )
+    assert created["preprocessing_bundle_identifier"] == "attribute-gae-preprocessing"
+    bundle_id = UUID(str(created["preprocessing_bundle_id"]))
+    assert database.get_preprocessing_bundle(project_id, bundle_id) is not None
+    assert database.get_preprocessing_bundle(UUID(str(other_project["id"])), bundle_id) is None
+
+    with pytest.raises(DatabaseIntegrityError):
+        database.create_model_version(
+            project_id=project_id,
+            model_identifier="attribute-gae",
+            version="v2-other",
+            pipeline_run_id="baseline-v2-other",
+            artifact_reference="outputs/hdfs/v2-other/model.pt",
+            package_reference="packages/hdfs/attribute-gae-v2-other",
+            artifact_sha256="2" * 64,
+            metrics_json="{}",
+            metadata_json="{}",
+            external_evaluation_evidence="evidence",
+            preprocessing_bundle=_bundle_fields(),
+        )
+
+    with pytest.raises(ValueError, match="not found"):
+        database.create_model_version(
+            project_id=UUID(str(other_project["id"])),
+            model_identifier="attribute-gae",
+            version="foreign",
+            pipeline_run_id="foreign",
+            artifact_reference="outputs/hdfs/foreign/model.pt",
+            package_reference="packages/hdfs/foreign",
+            artifact_sha256="3" * 64,
+            metrics_json="{}",
+            metadata_json="{}",
+            external_evaluation_evidence="evidence",
+            actor_user_id=UUID(str(other_user["id"])),
+            preprocessing_bundle_id=bundle_id,
+        )
+
+
+def test_failed_model_insert_rolls_back_preprocessing_bundle(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    project_id, user_id, _model_id = _seed_model(database)
+    with pytest.raises(DatabaseIntegrityError):
+        database.create_model_version(
+            project_id=project_id,
+            model_identifier="attribute-gae",
+            version="2026.09",
+            pipeline_run_id="duplicate",
+            artifact_reference="outputs/hdfs/dup/model.pt",
+            package_reference="packages/hdfs/dup",
+            artifact_sha256="4" * 64,
+            metrics_json="{}",
+            metadata_json="{}",
+            external_evaluation_evidence="evidence",
+            actor_user_id=user_id,
+            preprocessing_bundle=_bundle_fields(),
+        )
+    with database.session() as connection:
+        count = connection.execute("SELECT COUNT(*) AS n FROM preprocessing_bundles").fetchone()
+        assert int(dict(count)["n"]) == 0

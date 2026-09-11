@@ -6,15 +6,16 @@ import json
 import sys
 from pathlib import Path
 
-from src.modules.model_package import validate_model_package
+from src.modules.inference_bundle import validate_packaged_release
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
-    if len(arguments) != 1:
-        sys.stderr.write("usage: files_only_validator.py <package-root>\n")
+    if len(arguments) not in {1, 2}:
+        sys.stderr.write("usage: files_only_validator.py <package-root> [bundle-root]\n")
         return 2
-    result = validate_model_package(Path(arguments[0]))
+    bundle_root = Path(arguments[1]) if len(arguments) == 2 else None
+    result = validate_packaged_release(Path(arguments[0]), bundle_root)
     sys.stdout.write(json.dumps(result.model_dump(), indent=2, sort_keys=True) + "\n")
     return 0
 

@@ -15,29 +15,36 @@ import tempfile
 import zipfile
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.modules.artifacts import git_revision
+from src.modules.inference_bundle import (
+    BUNDLE_FORMAT,
+    DRAIN_CONFIG_NAME,
+    DRAIN_PARSER_NAME,
+    EMBEDDINGS_NAME,
+    BundleFiles,
+    BundleManifest,
+    bundle_digest as compute_bundle_digest,
+)
 from src.modules.model_package import (
     DEFAULT_ARTIFACT_NAME,
     DEFAULT_EVIDENCE_NAME,
     MANIFEST_NAME,
+    PACKAGE_FORMAT_V2,
+    ModelPackageManifest,
     PackageArchitecture,
     PackageFiles,
     PackageMetrics,
     PackageModel,
     PackageScoring,
+    PreprocessingBundleRef,
 )
 
-MODEL_PACKAGE_FORMAT_V2 = "attribute-aware-gae-v2"
-BUNDLE_FORMAT = "hdfs-preprocessing-bundle-v1"
-DRAIN_CONFIG_NAME = "drain.ini"
-DRAIN_PARSER_NAME = "drain_parser.bin"
-EMBEDDINGS_NAME = "embeddings.npz"
+MODEL_PACKAGE_FORMAT_V2 = PACKAGE_FORMAT_V2
 _IDENTIFIER_PATTERN = r"^[A-Za-z0-9_.-]+$"
-_SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _FIXED_ZIP_DATE = (2020, 1, 1, 0, 0, 0)
 
 
@@ -66,70 +73,6 @@ class HdfsReleaseIdentity(PackageModel):
     pipeline_run_id: str | None = Field(default=None, min_length=1)
 
 
-class PreprocessingBundleRef(PackageModel):
-    """Immutable pointer from a v2 model package to its preprocessing bundle."""
-
-    identifier: str = Field(min_length=1, max_length=128, pattern=_IDENTIFIER_PATTERN)
-    version: str = Field(min_length=1, max_length=64, pattern=_IDENTIFIER_PATTERN)
-    digest: str = Field(pattern=_SHA256_PATTERN)
-
-
-class BundleFiles(PackageModel):
-    """Declared preprocessing-bundle members and their SHA-256 digests."""
-
-    drain_config: str
-    drain_parser: str
-    embeddings: str
-    checksums: dict[str, str]
-
-    @field_validator("drain_config", "drain_parser", "embeddings")
-    @classmethod
-    def _relative_posix_path(cls, value: str) -> str:
-        return _require_relative_posix(value)
-
-    @field_validator("checksums")
-    @classmethod
-    def _lowercase_checksums(cls, value: dict[str, str]) -> dict[str, str]:
-        for path, digest in value.items():
-            _require_relative_posix(path)
-            if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
-                raise ValueError(f"checksum for {path} must be a lowercase hex SHA-256")
-        return value
-
-    @model_validator(mode="after")
-    def _checksums_match_declared_files(self) -> BundleFiles:
-        expected = {self.drain_config, self.drain_parser, self.embeddings}
-        if set(self.checksums) != expected:
-            raise ValueError("checksums must contain exactly the declared bundle files")
-        return self
-
-
-class BundleManifest(PackageModel):
-    """Closed inspectable contract for a frozen HDFS preprocessing bundle."""
-
-    identifier: str = Field(min_length=1, max_length=128, pattern=_IDENTIFIER_PATTERN)
-    version: str = Field(min_length=1, max_length=64, pattern=_IDENTIFIER_PATTERN)
-    source_compatibility: Literal["hdfs"]
-    format: Literal["hdfs-preprocessing-bundle-v1"]
-    digest: str = Field(pattern=_SHA256_PATTERN)
-    files: BundleFiles
-
-
-class InferenceModelManifest(PackageModel):
-    """v2 model-package contract bound to a preprocessing-bundle digest."""
-
-    model_identifier: str = Field(min_length=1, max_length=128, pattern=_IDENTIFIER_PATTERN)
-    version: str = Field(min_length=1, max_length=64, pattern=_IDENTIFIER_PATTERN)
-    source_compatibility: Literal["hdfs"]
-    format: Literal["attribute-aware-gae-v2"]
-    pipeline_run_id: str | None = Field(default=None, min_length=1)
-    metrics: PackageMetrics
-    architecture: PackageArchitecture
-    scoring: PackageScoring
-    files: PackageFiles
-    preprocessing_bundle: PreprocessingBundleRef
-
-
 class InspectedArchiveFile(PackageModel):
     """One declared archive member and its SHA-256 digest."""
 
@@ -143,7 +86,7 @@ class InspectedInferenceRelease(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    model_manifest: InferenceModelManifest
+    model_manifest: ModelPackageManifest
     bundle_manifest: BundleManifest
     model_files: list[InspectedArchiveFile]
     bundle_files: list[InspectedArchiveFile]
@@ -156,7 +99,7 @@ class ExportedInferenceRelease(BaseModel):
 
     model_package_path: Path
     preprocessing_bundle_path: Path
-    model_manifest: InferenceModelManifest
+    model_manifest: ModelPackageManifest
     bundle_manifest: BundleManifest
 
 
@@ -191,13 +134,13 @@ def export_hdfs_inference_release(
             EMBEDDINGS_NAME: _sha256_bytes(embeddings_bytes),
         },
     )
-    bundle_digest = _bundle_digest(bundle_files.checksums)
+    declared_digest = compute_bundle_digest(bundle_files.checksums)
     bundle_manifest = BundleManifest(
         identifier=identity.bundle_identifier,
         version=identity.bundle_version,
         source_compatibility="hdfs",
         format=BUNDLE_FORMAT,
-        digest=bundle_digest,
+        digest=declared_digest,
         files=bundle_files,
     )
     bundle_manifest_bytes = _json_bytes(bundle_manifest.model_dump(mode="json"))
@@ -222,7 +165,7 @@ def export_hdfs_inference_release(
             DEFAULT_EVIDENCE_NAME: _sha256_bytes(evidence_bytes),
         },
     )
-    model_manifest = InferenceModelManifest(
+    model_manifest = ModelPackageManifest(
         model_identifier=identity.model_identifier,
         version=identity.version,
         source_compatibility="hdfs",
@@ -235,7 +178,7 @@ def export_hdfs_inference_release(
         preprocessing_bundle=PreprocessingBundleRef(
             identifier=identity.bundle_identifier,
             version=identity.bundle_version,
-            digest=bundle_digest,
+            digest=declared_digest,
         ),
     )
     model_manifest_bytes = _json_bytes(model_manifest.model_dump(mode="json"))
@@ -292,7 +235,7 @@ def inspect_inference_release(
 
     model_members = _read_zip_members(model_package)
     bundle_members = _read_zip_members(preprocessing_bundle)
-    model_manifest = InferenceModelManifest.model_validate(
+    model_manifest = ModelPackageManifest.model_validate(
         _load_manifest_payload(model_members, model_package.name)
     )
     bundle_manifest = BundleManifest.model_validate(
@@ -314,11 +257,14 @@ def inspect_inference_release(
         bundle_manifest.files.checksums,
         archive_name=preprocessing_bundle.name,
     )
-    if model_manifest.preprocessing_bundle.digest != bundle_manifest.digest:
+    bundle_ref = model_manifest.preprocessing_bundle
+    if bundle_ref is None:
+        raise InferenceReleaseError("Model package is missing a preprocessing bundle descriptor.")
+    if bundle_ref.digest != bundle_manifest.digest:
         raise InferenceReleaseError("Model package bundle digest does not match the bundle manifest.")
-    if model_manifest.preprocessing_bundle.identifier != bundle_manifest.identifier:
+    if bundle_ref.identifier != bundle_manifest.identifier:
         raise InferenceReleaseError("Model package bundle identifier does not match the bundle manifest.")
-    if model_manifest.preprocessing_bundle.version != bundle_manifest.version:
+    if bundle_ref.version != bundle_manifest.version:
         raise InferenceReleaseError("Model package bundle version does not match the bundle manifest.")
     _embeddings_from_bytes(bundle_members[bundle_manifest.files.embeddings])
     return InspectedInferenceRelease(
@@ -534,25 +480,12 @@ def _public_config(config: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in config.items() if key != "__pipeline__"}
 
 
-def _bundle_digest(checksums: Mapping[str, str]) -> str:
-    material = "".join(f"{path}:{digest}\n" for path, digest in sorted(checksums.items()))
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()
-
-
 def _json_bytes(payload: Mapping[str, Any]) -> bytes:
     return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False).encode("utf-8")
 
 
 def _sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
-
-
-def _require_relative_posix(value: str) -> str:
-    if not value or value.startswith("/") or "\\" in value or Path(value).is_absolute():
-        raise ValueError("path must be a relative POSIX path")
-    if ".." in Path(value).parts:
-        raise ValueError("path must not contain '..' segments")
-    return value
 
 
 def _write_zip(destination: Path, members: Mapping[str, bytes]) -> None:
