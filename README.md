@@ -447,6 +447,35 @@ via `DrainParser.load`, then calls `annotate_file` only. It does not fit Drain, 
 templates, or put parser files in the GAE package. Unmatched admitted lines fail the run
 with `UNMATCHED_TEMPLATE`.
 
+Processing drift is checked by the versioned golden fixture in
+`tests/fixtures/hdfs_inference_release/` (parser matches, ordered `block_id`s, graph
+topology, features, scores, and `score > threshold` decisions). Feature and score
+comparisons use absolute/relative tolerances of `1e-5`; block order, source line
+references, parser checksums, and the decision threshold are exact.
+
+Labelled FR-011 verification is a controlled release gate, not a browser upload and not
+part of default CI. Supply the exported v2 ZIP pair, the labelled corpus, and an
+immutable expected JSON (checksums plus test F1 / PR-AUC / ROC-AUC / threshold). The
+command writes `parity-report.json` beside that record and does not modify it. Exit
+status is nonzero when a checksum mismatches, the threshold changes, or a core metric
+moves by more than 0.01:
+
+```bash
+python scripts/verify_hdfs_parity.py \
+  --model-package releases/hdfs/attribute-gae-v2.zip \
+  --preprocessing-bundle releases/hdfs/attribute-gae-preprocessing-v2.zip \
+  --corpus data/raw/hdfs/HDFS_full.log \
+  --labels data/raw/hdfs/anomaly_label.csv \
+  --expected path/to/expected.json \
+  --report releases/hdfs/parity-report.json \
+  --test-block-ids path/to/test_block_ids.txt
+```
+
+`--test-block-ids` is required for the selected baseline's held-out split. Omit it only
+when every scored block in the supplied corpus is the evaluation set (the golden fixture).
+Run this in the Linux inference environment or a local ML venv, not in Cursor's
+restricted native-library sandbox. Do not treat a passing Operator upload as FR-011.
+
 Optional PostgreSQL dialect tests use a local Compose database and stay out of default CI:
 
 ```bash

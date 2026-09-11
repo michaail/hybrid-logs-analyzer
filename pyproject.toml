@@ -6,6 +6,7 @@ pythonpath = ["."]
 markers = [
   "ml: requires the Intel-compatible PyTorch and PyTorch Geometric environment",
   "postgres: requires TEST_DATABASE_URL pointing at a disposable PostgreSQL database",
+  "release_gate: labelled HDFS baseline verification; not a default CI check",
 ]
 
 [tool.ruff]

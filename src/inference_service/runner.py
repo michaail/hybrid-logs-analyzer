@@ -18,16 +18,12 @@ from src.modules.inference_bundle import (
     DRAIN_CONFIG_NAME,
     DRAIN_PARSER_NAME,
     EMBEDDINGS_NAME,
-    NODE_FEATURE_EXTRA_DIM,
     bundle_digest,
 )
 from src.modules.model_package import MANIFEST_NAME, ModelPackageManifest
-from src.modules.parser.drain_parser import DrainParser, UnmatchedLogLine
+from src.modules.parser.drain_parser import UnmatchedLogLine
 
 logger = logging.getLogger(__name__)
-
-_MAX_CONTEXT_LINES = 20
-_MAX_RAW_CHARS = 500
 
 
 def execute_analysis_run(
@@ -189,124 +185,45 @@ def _infer_from_materialized(
     log_path: Path,
     artifact: Path,
 ) -> tuple[dict[str, int], list[dict[str, Any]]]:
-    from src.modules.dataset import MissingClusterEmbedding, build_pyg_dataset
-    from src.modules.models.gae import AttributeAwareGAE, compute_anomaly_scores
-    from src.modules.sequencer import build_sequences
-    from torch_geometric.loader import DataLoader
-
-    import numpy as np
-    import torch
+    from src.modules.dataset import MissingClusterEmbedding
+    from src.modules.hdfs_inference import HdfsInferenceError, score_frozen_hdfs_log
 
     try:
-        parser = DrainParser.load(
-            str(bundle_dir / DRAIN_PARSER_NAME),
-            config_path=str(bundle_dir / DRAIN_CONFIG_NAME),
+        result = score_frozen_hdfs_log(
+            manifest=manifest,
+            bundle_dir=bundle_dir,
+            log_path=log_path,
+            artifact_path=artifact,
         )
-        annotated = parser.annotate_file(str(log_path), unmatched="fail")
     except UnmatchedLogLine:
         raise
-    except Exception as error:
-        raise InferenceExecutionError("PARSER_FAILED", cause=type(error).__name__) from error
-
-    sequences = build_sequences(annotated, "hdfs") if not annotated.empty else {}
-    embeddings = _load_embeddings(bundle_dir / EMBEDDINGS_NAME)
-    embed_width = next(iter(embeddings.values())).shape[0] if embeddings else 0
-    expected_node_dim = embed_width + NODE_FEATURE_EXTRA_DIM
-    if embeddings and expected_node_dim != manifest.architecture.node_dim:
-        raise InferenceExecutionError(
-            "PREPROCESSING_BUNDLE_UNAVAILABLE",
-            cause="embedding width does not match architecture.node_dim",
-        )
-    use_edge_features = manifest.architecture.edge_dim > 1
-    if sequences:
-        try:
-            graphs = build_pyg_dataset(
-                sequences,
-                {block_id: 0 for block_id in sequences},
-                embeddings,
-                use_edge_features=use_edge_features,
-                dataset="hdfs",
-                missing_embedding="fail",
-                on_graph_error="fail",
-            )
-        except MissingClusterEmbedding:
-            raise
-        except InferenceExecutionError:
-            raise
-        except Exception as error:
-            raise InferenceExecutionError(
-                "INFERENCE_FAILED",
-                cause=type(error).__name__,
-            ) from error
-    else:
-        graphs = []
-
-    _normalise_edges(graphs, manifest.architecture.edge_mean, manifest.architecture.edge_std)
-    try:
-        model = AttributeAwareGAE(
-            node_dim=manifest.architecture.node_dim,
-            edge_dim=manifest.architecture.edge_dim,
-            hidden_dim=manifest.architecture.hidden_dim,
-            latent_dim=manifest.architecture.latent_dim,
-            gine_aggregation=manifest.architecture.gine_aggregation,
-            node_transformation=manifest.architecture.node_transformation,
-        )
-        payload = torch.load(artifact, map_location="cpu", weights_only=True)
-        if not isinstance(payload, dict):
-            raise TypeError("state dict must be a mapping")
-        model.load_state_dict(payload)
-        model.eval()
-    except InferenceExecutionError:
+    except MissingClusterEmbedding:
         raise
+    except HdfsInferenceError as error:
+        raise InferenceExecutionError(error.code, cause=error.cause) from error
     except Exception as error:
-        raise InferenceExecutionError("MODEL_LOAD_FAILED", cause=type(error).__name__) from error
+        raise InferenceExecutionError("INFERENCE_FAILED", cause=type(error).__name__) from error
 
-    threshold = float(manifest.metrics.best_threshold)
-    block_ids = list(sequences.keys())
-    if graphs:
-        try:
-            loader = DataLoader(graphs, batch_size=1, shuffle=False)
-            scores, _labels = compute_anomaly_scores(
-                model,
-                loader,
-                torch.device("cpu"),
-                alpha=manifest.scoring.alpha,
-                beta=manifest.scoring.beta,
-                gamma=manifest.scoring.gamma,
-            )
-            scores_list = [float(value) for value in np.asarray(scores).reshape(-1)]
-        except Exception as error:
-            raise InferenceExecutionError(
-                "INFERENCE_FAILED",
-                cause=type(error).__name__,
-            ) from error
-    else:
-        scores_list = []
-
-    if len(scores_list) != len(block_ids):
-        raise InferenceExecutionError(
-            "INFERENCE_FAILED",
-            cause="score count does not match block count",
-        )
-    anomalies: list[dict[str, Any]] = []
-    anomaly_count = 0
-    for block_id, score in zip(block_ids, scores_list, strict=True):
-        if score > threshold:
-            anomaly_count += 1
-            frame = sequences[block_id]
-            anomalies.append(
-                {
-                    "record_reference": str(block_id),
-                    "anomaly_score": score,
-                    "anomaly_level": "anomaly",
-                    "decision_threshold": threshold,
-                    "context": _block_context(frame),
-                }
-            )
+    anomalies = [
+        {
+            "record_reference": block.block_id,
+            "anomaly_score": block.score,
+            "anomaly_level": "anomaly",
+            "decision_threshold": result.threshold,
+            "context": {
+                "matched_line_count": block.matched_line_count,
+                "source_lines": [
+                    {"line_number": line.line_number, "raw": line.raw} for line in block.source_lines
+                ],
+            },
+        }
+        for block in result.blocks
+        if block.decision
+    ]
     return (
         {
-            "anomaly_count": anomaly_count,
-            "normal_count": len(block_ids) - anomaly_count,
+            "anomaly_count": len(anomalies),
+            "normal_count": len(result.blocks) - len(anomalies),
             "rejected_records": 0,
             "invalid_records": 0,
         },
@@ -368,52 +285,6 @@ def _verify_bundle_checksums(bundle_dir: Path, expected_digest: str) -> None:
             "PREPROCESSING_BUNDLE_UNAVAILABLE",
             cause=type(error).__name__,
         ) from error
-
-
-def _load_embeddings(path: Path) -> dict[int, Any]:
-    import numpy as np
-
-    try:
-        with np.load(path, allow_pickle=False) as payload:
-            cluster_ids = np.asarray(payload["cluster_ids"])
-            vectors = np.asarray(payload["embeddings"], dtype=np.float32)
-    except Exception as error:
-        raise InferenceExecutionError(
-            "PREPROCESSING_BUNDLE_UNAVAILABLE",
-            cause=type(error).__name__,
-        ) from error
-    return {int(cluster_id): vectors[index] for index, cluster_id in enumerate(cluster_ids)}
-
-
-def _normalise_edges(
-    graphs: list[Any],
-    edge_mean: list[float] | None,
-    edge_std: list[float] | None,
-) -> None:
-    if edge_mean is None or edge_std is None:
-        return
-    import torch
-
-    mean = torch.tensor(edge_mean, dtype=torch.float32)
-    std = torch.tensor(edge_std, dtype=torch.float32)
-    for graph in graphs:
-        edge_attr = getattr(graph, "edge_attr", None)
-        if edge_attr is not None and edge_attr.numel() > 0:
-            graph.edge_attr = (edge_attr.float() - mean) / std
-
-
-def _block_context(frame: Any) -> dict[str, Any]:
-    rows = frame.to_dict("records") if hasattr(frame, "to_dict") else []
-    evidence = []
-    for row in rows[:_MAX_CONTEXT_LINES]:
-        raw = str(row.get("raw") or "")[:_MAX_RAW_CHARS]
-        evidence.append(
-            {
-                "line_number": int(row["line_number"]) if row.get("line_number") is not None else None,
-                "raw": raw,
-            }
-        )
-    return {"matched_line_count": len(rows), "source_lines": evidence}
 
 
 def public_error_codes() -> Mapping[str, str]:

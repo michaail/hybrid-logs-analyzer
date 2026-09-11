@@ -612,21 +612,21 @@ before staging; never roll back a deployed schema by destructive SQL.
 
 #### Automated
 
-- [x] 4.1 API, dispatcher, TypeScript, static analysis, and Railway topology checks pass
-- [x] 4.2 Authorization, v1 non-readiness, retry, queued-preservation, and no-public-writer tests pass
+- [x] 4.1 API, dispatcher, TypeScript, static analysis, and Railway topology checks pass — 0258b7d
+- [x] 4.2 Authorization, v1 non-readiness, retry, queued-preservation, and no-public-writer tests pass — 0258b7d
 
 #### Manual
 
-- [x] 4.3 Verify queued/running/terminal UI behavior, upload rejection, secret isolation, and staging cold start
+- [x] 4.3 Verify queued/running/terminal UI behavior, upload rejection, secret isolation, and staging cold start — 0258b7d
 
 ### Phase 5: Golden processing and release parity verification
 
 #### Automated
 
-- [ ] 5.1 Golden HDFS fixture detects parsing, graph, score, ordering, and threshold drift
-- [ ] 5.2 Full parity command rejects checksum, threshold, and core metric deltas beyond tolerance
-- [ ] 5.3 Ruff, mypy, focused tests, and the native full-baseline gate pass
+- [x] 5.1 Golden HDFS fixture detects parsing, graph, score, ordering, and threshold drift
+- [x] 5.2 Full parity command rejects checksum, threshold, and core metric deltas beyond tolerance
+- [x] 5.3 Ruff, mypy, focused tests, and the native full-baseline gate pass
 
 #### Manual
 
-- [ ] 5.4 Review and approve the controlled baseline comparison report before claiming FR-011
+- [x] 5.4 Review and approve the controlled baseline comparison report before claiming FR-011

@@ -1,0 +1,159 @@
+{
+  "annotated_line_count": 4,
+  "blocks": [
+    {
+      "block_id": "blk_1",
+      "decision": true,
+      "edge_features": [
+        [
+          3.465735912322998,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          5.0,
+          5.0
+        ]
+      ],
+      "edge_index": [
+        [
+          0
+        ],
+        [
+          0
+        ]
+      ],
+      "matched_line_count": 2,
+      "node_features": [
+        [
+          1.0,
+          0.0,
+          1.0986123085021973,
+          1.945910096168518,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.5,
+          0.5,
+          1.0
+        ]
+      ],
+      "num_edges": 1,
+      "num_nodes": 1,
+      "score": 8.181917190551758,
+      "source_lines": [
+        {
+          "line_number": 1,
+          "raw": "081109 203615 148 INFO dfs.DataNode$DataXceiver: Receiving block blk_1 src: /10.0.0.1:50010 dest: /10.0.0.2:50010"
+        },
+        {
+          "line_number": 2,
+          "raw": "081109 203616 149 INFO dfs.DataNode$DataXceiver: Receiving block blk_1 src: /10.0.0.1:50011 dest: /10.0.0.2:50010"
+        }
+      ]
+    },
+    {
+      "block_id": "blk_2",
+      "decision": false,
+      "edge_features": [
+        [
+          3.465735912322998,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          5.0,
+          5.0
+        ]
+      ],
+      "edge_index": [
+        [
+          0
+        ],
+        [
+          1
+        ]
+      ],
+      "matched_line_count": 2,
+      "node_features": [
+        [
+          1.0,
+          0.0,
+          0.6931471824645996,
+          1.3862943649291992,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          2.0,
+          0.5,
+          0.6931471824645996,
+          0.6931471824645996,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "num_edges": 1,
+      "num_nodes": 2,
+      "score": 8.115030288696289,
+      "source_lines": [
+        {
+          "line_number": 3,
+          "raw": "081109 203617 150 INFO dfs.DataNode$DataXceiver: Receiving block blk_2 src: /10.0.0.1:50010 dest: /10.0.0.2:50010"
+        },
+        {
+          "line_number": 4,
+          "raw": "081109 203618 151 INFO dfs.DataNode$PacketResponder: PacketResponder 1 for block blk_2 terminating"
+        }
+      ]
+    }
+  ],
+  "checksums": {
+    "corpus": "ea5194c5b806fb8d506d7501d9db0bbd246ab70e2f19c70d7d3b8373bc0394cf",
+    "drain.ini": "ad472f32bac75f4884fc0f471776d991d65d51125e5424c13793e9f8b0bfb8e5",
+    "drain_parser.bin": "64d1b17493c57c05c06ab98026262977bb826ab24c9fc26e2f8f390d797879bb",
+    "embeddings.npz": "49f57225f43a163322abb9a57435180bdf76a17f58a3a367f446a68fee29287c",
+    "labels": "88e9dcf677eb96b0ac3255c97ec0de7bf1c7d8f60464ea2b04a015fd56ce87d5",
+    "model.pt": "473c9fe5d545d9f3a631bdad4f8555e49dd154cbc8e88812b437aba9da603cfa"
+  },
+  "metric_tolerance": 0.01,
+  "metrics": {
+    "best_threshold": 8.148473739624023,
+    "test_f1": 1.0,
+    "test_pr_auc": 1.0,
+    "test_roc_auc": 1.0
+  },
+  "ordered_block_ids": [
+    "blk_1",
+    "blk_2"
+  ],
+  "source_line_count": 4,
+  "test_block_ids": [
+    "blk_1",
+    "blk_2"
+  ],
+  "threshold": 8.148473739624023,
+  "tolerances": {
+    "feature_atol": 1e-05,
+    "feature_rtol": 1e-05,
+    "score_atol": 1e-05,
+    "score_rtol": 1e-05
+  }
+}
