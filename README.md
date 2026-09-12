@@ -480,6 +480,58 @@ when every scored block in the supplied corpus is the evaluation set (the golden
 Run this in the Linux inference environment or a local ML venv, not in Cursor's
 restricted native-library sandbox. Do not treat a passing Operator upload as FR-011.
 
+### Complete-history HDFS evaluation data
+
+FR-013 evaluation data is a checksum-bound projection of an approved HDFS corpus onto an
+explicit ordered block-ID list. A selected block is complete *within that corpus*: every
+source line whose first `blk_*` match is selected appears exactly once, in original
+source-file order, in one bounded shard. That is reproducible evaluation evidence, not a
+claim that an arbitrary Operator upload is lifecycle-complete. Distinguishing finalized
+versus provisional live-upload histories belongs to S-06 / FR-012 and does not change
+anomaly or normal result classification here.
+
+Line-prefix samples are parser or intake smoke tests only and cannot support
+anomaly-quality evaluation. The builder never infers a newest corpus, label file, release,
+or held-out split; every input path is explicit. Source-file order is canonical.
+Unparseable or backward timestamps become manifest warnings and do not reorder or discard
+retained lines.
+
+Production frozen-inference limits drive sharding: 100,000 non-empty source lines and
+25,000 blocks per shard. A selected block is never split across shards.
+
+Create the artifact from explicit paths:
+
+```bash
+python scripts/build_hdfs_evaluation_dataset.py \
+  --corpus data/raw/hdfs/HDFS_full.log \
+  --labels data/raw/hdfs/anomaly_label.csv \
+  --selected-block-ids releases/hdfs/test_block_ids.txt \
+  --workspace-root . \
+  --code-root .
+```
+
+The command prints the published or reused `manifest.json` path. Output stays under the
+ignored workspace cache `artifacts/cache/hdfs/evaluation-data/<fingerprint>/` and
+includes:
+
+- `selected-block-ids.txt` — copy of the supplied ordered ID file
+- `shard-NNN.log` — bounded complete-history shards
+- `manifest.json` — schema version; corpus, label, and selected-ID SHA-256 values;
+  selected-block count; per-block retained-line counts; per-shard digests and counts;
+  configured limits; and timestamp warnings
+- `_SUCCESS.json` — atomic publication record
+
+Unchanged inputs, shard limits, and git revision reuse the same cache entry. Changing
+corpus, label, or selected-ID bytes produces a distinct artifact even if a path, size, or
+mtime is reused.
+
+The approved 11,167,740-line corpus build and the controlled `scripts/verify_hdfs_parity.py`
+run against the v3 release are documented manual release checks. They need the
+workspace-local LogHub files and an ML/native environment; they are not default CI tests.
+Automated coverage uses `tests/test_hdfs_evaluation_data.py` plus the golden fixture in
+`tests/fixtures/hdfs_inference_release/`. The golden `release_gate` tests remain opt-in
+(`pytest tests/test_hdfs_inference_parity.py -m release_gate` in an ML venv).
+
 Optional PostgreSQL dialect tests use a local Compose database and stay out of default CI:
 
 ```bash

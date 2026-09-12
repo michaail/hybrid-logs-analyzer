@@ -1,4 +1,10 @@
-"""Golden HDFS processing fixture and controlled parity-command tests."""
+"""Golden HDFS processing fixture and controlled parity-command tests.
+
+The labelled 11,167,740-line corpus build and full-release parity command are
+documented manual checks. They are not pytest cases: the source data is
+workspace-local, and ML/native execution is not a default test dependency.
+Golden ``release_gate`` tests stay opt-in via ``pytest -m release_gate``.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +13,7 @@ import json
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -421,15 +427,31 @@ def test_golden_fixture_fails_when_parser_bytes_change(tmp_path: Path) -> None:
     assert any(item.startswith("PARSER_CHECKSUM") for item in mismatches)
 
 
+# Golden-fixture release_gate tests remain opt-in. The approved 11-million-line
+# corpus is a documented manual release check, not a default pytest dependency.
 @pytest.mark.ml
 @pytest.mark.release_gate
 def test_parity_command_shards_complete_test_blocks_under_service_limits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import src.modules.hdfs_inference as hdfs_inference
+    import src.modules.hdfs_parity as hdfs_parity
+
+    shard_writes: list[Path] = []
+    original_write = hdfs_parity.write_evaluation_shards
+
+    def _record_write(
+        *,
+        corpus: Path,
+        partitions: Sequence[Sequence[str]],
+        destination: Path,
+    ) -> list[Path]:
+        shard_writes.append(destination)
+        return original_write(corpus=corpus, partitions=partitions, destination=destination)
 
     monkeypatch.setattr(hdfs_inference, "MAX_SOURCE_LINES", 2)
     monkeypatch.setattr(hdfs_inference, "MAX_BLOCKS", 1)
+    monkeypatch.setattr(hdfs_parity, "write_evaluation_shards", _record_write)
     model_zip, bundle_zip = _zip_fixture(tmp_path)
     report = verify_hdfs_release(
         model_package=model_zip,
@@ -440,6 +462,7 @@ def test_parity_command_shards_complete_test_blocks_under_service_limits(
         report_path=tmp_path / "parity-report.json",
     )
 
+    assert shard_writes, "parity scoring must materialize shards through the shared builder"
     assert report["passed"] is True
     assert report["inference"]["n_shards"] == 2
     assert report["inference"]["source_line_count"] == 4

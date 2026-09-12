@@ -31,6 +31,7 @@ files = [
   "tests",
   "run_ablation.py",
   "scripts/verify_hdfs_parity.py",
+  "scripts/build_hdfs_evaluation_dataset.py",
 ]
 exclude = ["src/notebooks"]
 check_untyped_defs = true
