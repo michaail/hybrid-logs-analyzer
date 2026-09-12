@@ -11,10 +11,12 @@ frontend/dist/
 # Generated datasets, models, and experiment artifacts
 data/
 artifacts/
+artifacts_colab/
 models/hdfs/
 models/bgl/
 outputs/
 runs/
+releases/
 
 # Python and notebook execution state
 __pycache__/

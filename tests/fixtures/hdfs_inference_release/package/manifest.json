@@ -1,0 +1,63 @@
+{
+  "architecture": {
+    "edge_dim": 10,
+    "edge_mean": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "edge_std": [
+      0.2,
+      0.2,
+      0.2,
+      0.2,
+      0.2,
+      0.2,
+      0.2,
+      0.2,
+      0.2,
+      0.2
+    ],
+    "gine_aggregation": "sum",
+    "hidden_dim": 2,
+    "latent_dim": 2,
+    "node_dim": 11,
+    "node_transformation": "mlp"
+  },
+  "files": {
+    "artifact": "model.pt",
+    "checksums": {
+      "evidence.json": "3b477345f79a5610384e7c59dd3fcd4db16ebbf771b2ee6b8606a76742b43f44",
+      "model.pt": "473c9fe5d545d9f3a631bdad4f8555e49dd154cbc8e88812b437aba9da603cfa"
+    },
+    "evidence": "evidence.json"
+  },
+  "format": "attribute-aware-gae-v2",
+  "metrics": {
+    "best_threshold": 8.148473739624023,
+    "test_f1": 1.0,
+    "test_pr_auc": 1.0,
+    "test_roc_auc": 1.0
+  },
+  "model_identifier": "attribute-gae",
+  "pipeline_run_id": "hdfs-golden-fixture",
+  "preprocessing_bundle": {
+    "digest": "f4386c1e3b361e7e75f7e9c9ec12256de1fd7832bd970cd720d408a644ce8a79",
+    "identifier": "attribute-gae-preprocessing",
+    "version": "golden"
+  },
+  "scoring": {
+    "alpha": 1.0,
+    "beta": 1.0,
+    "gamma": 1.0
+  },
+  "source_compatibility": "hdfs",
+  "version": "golden"
+}

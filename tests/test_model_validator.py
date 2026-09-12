@@ -21,6 +21,7 @@ def _import_nodes(path: Path) -> list[ast.AST]:
 def test_model_package_and_api_sources_do_not_import_torch() -> None:
     for path in (
         Path("src/modules/model_package.py"),
+        Path("src/modules/inference_bundle.py"),
         Path("src/api/main.py"),
         Path("src/api/validation.py"),
     ):
@@ -107,3 +108,21 @@ def test_validator_process_prints_typed_report_for_invalid_package(tmp_path: Pat
     assert payload["valid"] is False
     assert payload["issues"]
     assert all("path" in issue and "reason" in issue for issue in payload["issues"])
+
+
+def test_validator_process_accepts_optional_bundle_root(tmp_path: Path) -> None:
+    package = _write_package(tmp_path)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    completed = subprocess.run(
+        [sys.executable, "-m", "src.model_validator", str(package), str(tmp_path / "missing-bundle")],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+    )
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout)
+    assert payload["valid"] is False
+    assert payload["issues"]

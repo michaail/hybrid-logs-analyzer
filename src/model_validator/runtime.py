@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from src.modules.inference_bundle import validate_packaged_release
 from src.modules.model_package import PackageValidationResult, validate_model_package
 
 _ALLOWED_ENV_KEYS = frozenset(
@@ -80,6 +81,19 @@ def validate_package_with_probe(root: Path) -> PackageValidationResult:
     """Validate a directory package including the restricted tensor probe."""
 
     return validate_model_package(root, load_state_dict=load_tensor_state_dict)
+
+
+def validate_release_with_probe(
+    package_root: Path,
+    bundle_root: Path | None = None,
+) -> PackageValidationResult:
+    """Validate a model package and optional preprocessing bundle with the tensor probe."""
+
+    return validate_packaged_release(
+        package_root,
+        bundle_root,
+        load_state_dict=load_tensor_state_dict,
+    )
 
 
 def report_json(result: PackageValidationResult) -> str:

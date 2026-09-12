@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
@@ -31,6 +31,7 @@ from src.api.schemas import (
     MembershipRoleUpdate,
     ModelStatus,
     ModelVersionResponse,
+    PreprocessingBundleIdentity,
     ProjectAccountCreate,
     ProjectAccountResponse,
     ProjectCreate,
@@ -39,10 +40,11 @@ from src.api.schemas import (
     TokenResponse,
     UserResponse,
 )
+from src.api.inference_dispatch import dispatch_analysis_run
 from src.api.object_store import build_object_store, dataset_object_prefix
 from src.api.security import create_access_token, decode_access_token, hash_password, verify_password
 from src.api.settings import ApiSettings
-from src.api.storage import ApiDatabase, DatabaseIntegrityError, utc_now
+from src.api.storage import ApiDatabase, DatabaseIntegrityError
 from src.api.validation import (
     MAX_HDFS_UPLOAD_BYTES,
     ValidationError,
@@ -113,6 +115,9 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             return
         if role not in allowed_roles:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient project role.")
+
+    def _dispatch_queued_run(run_id: UUID) -> None:
+        dispatch_analysis_run(run_id, resolved_settings)
 
     app = FastAPI(
         title="HDFS Anomaly Detection API",
@@ -384,16 +389,24 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         project_id: UUID,
         user: CurrentUser = Depends(get_current_user),
         package: UploadFile = File(..., description="Complete HDFS model package ZIP"),
+        preprocessing_bundle: UploadFile | None = File(
+            default=None,
+            description="Companion preprocessing-bundle ZIP required for v2 packages",
+        ),
     ) -> ModelVersionResponse:
         """Admit a Publisher ZIP upload. Never loads the artifact in this process."""
         require_project_role(project_id, user, {ProjectRole.PUBLISHER})
         archive_bytes = package.file.read(MAX_ZIP_COMPRESSED_BYTES + 1)
+        bundle_bytes = None
+        if preprocessing_bundle is not None:
+            bundle_bytes = preprocessing_bundle.file.read(MAX_ZIP_COMPRESSED_BYTES + 1)
         try:
             report, admitted = admit_uploaded_zip_package(
                 archive_bytes,
                 settings=resolved_settings,
                 object_store=object_store,
                 project_id=project_id,
+                preprocessing_bundle_bytes=bundle_bytes,
             )
         except ValidatorUnavailableError as error:
             raise HTTPException(
@@ -431,9 +444,25 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 checksum=admitted.artifact_sha256,
                 actor_user_id=user.id,
                 model_id=admitted.model_id,
+                preprocessing_bundle=(
+                    {
+                        "id": str(admitted.preprocessing_bundle.bundle_id),
+                        "identifier": admitted.preprocessing_bundle.identifier,
+                        "version": admitted.preprocessing_bundle.version,
+                        "object_prefix": admitted.preprocessing_bundle.object_prefix,
+                        "manifest_checksum": admitted.preprocessing_bundle.manifest_checksum,
+                        "metadata_json": json.dumps(
+                            admitted.preprocessing_bundle.metadata, sort_keys=True
+                        ),
+                    }
+                    if admitted.preprocessing_bundle is not None
+                    else None
+                ),
             )
         except DatabaseIntegrityError:
             object_store.delete_prefix(admitted.package_reference)
+            if admitted.preprocessing_bundle is not None:
+                object_store.delete_prefix(admitted.preprocessing_bundle.object_prefix)
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This model identifier and version already exists in the project.",
@@ -512,9 +541,10 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     def create_analysis_run(
         project_id: UUID,
         request: AnalysisRunCreate,
+        background_tasks: BackgroundTasks,
         user: CurrentUser = Depends(get_current_user),
     ) -> AnalysisRunResponse:
-        """Start analysis of an admitted same-project dataset without re-scanning the log."""
+        """Queue analysis of an admitted same-project dataset without re-scanning the log."""
         require_project_role(project_id, user, {ProjectRole.OPERATOR})
         model = database.get_model_version(request.model_version_id)
         if model is None or model["project_id"] != str(project_id):
@@ -524,31 +554,29 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Only published model versions can start analysis.",
             )
+        if not model.get("preprocessing_bundle_id"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Published model is not inference-ready.",
+            )
         dataset = database.get_dataset(request.dataset_id)
         if dataset is None or dataset["project_id"] != str(project_id):
             raise _not_found("Dataset")
 
-        validation_report = {
-            "execution": (
-                "Not started: a non-executable HDFS inference artifact contract is not available."
-            )
-        }
         run = database.create_analysis_run(
             project_id=project_id,
             model_version_id=request.model_version_id,
             requested_by_user_id=user.id,
             log_reference=str(dataset["object_reference"]),
-            status=AnalysisRunStatus.NOT_SUPPORTED.value,
-            validation_report_json=json.dumps(validation_report, sort_keys=True),
-            error_code="INFERENCE_CONTRACT_UNAVAILABLE",
-            completed_at=utc_now(),
+            status=AnalysisRunStatus.QUEUED.value,
+            validation_report_json=None,
+            error_code=None,
+            completed_at=None,
             actor_user_id=user.id,
-            results_summary_json=_stored_results_summary(
-                AnalysisRunStatus.NOT_SUPPORTED,
-                validation_report,
-            ),
+            results_summary_json=None,
             dataset_id=request.dataset_id,
         )
+        background_tasks.add_task(_dispatch_queued_run, UUID(str(run["id"])))
         return _analysis_run_from_store(run)
 
     @app.get(
@@ -805,6 +833,16 @@ def _model_response(row: Any) -> ModelVersionResponse:
         ),
         storage_kind=row["storage_kind"],
         checksum=str(row["checksum"]) if row["checksum"] else None,
+        inference_ready=bool(row.get("preprocessing_bundle_id")),
+        preprocessing_bundle=(
+            PreprocessingBundleIdentity(
+                identifier=str(row["preprocessing_bundle_identifier"]),
+                version=str(row["preprocessing_bundle_version"]),
+                digest=str(row["preprocessing_bundle_digest"]),
+            )
+            if row.get("preprocessing_bundle_identifier")
+            else None
+        ),
     )
 
 

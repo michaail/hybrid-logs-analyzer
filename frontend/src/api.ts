@@ -61,6 +61,12 @@ export interface ModelVersion {
   published_by_user_id: string | null;
   storage_kind: StorageKind;
   checksum: string | null;
+  inference_ready: boolean;
+  preprocessing_bundle: {
+    identifier: string;
+    version: string;
+    digest: string;
+  } | null;
 }
 
 export interface AnalysisRun {
@@ -175,9 +181,20 @@ export class ApiClient {
     return this.request<ModelVersion[]>(`/projects/${projectId}/models`);
   }
 
-  registerModel(projectId: string, packageFile: File): Promise<ModelVersion> {
+  registerModel(
+    projectId: string,
+    packageFile: File,
+    preprocessingBundleFile: File | null,
+  ): Promise<ModelVersion> {
     const body = new FormData();
     body.append("package", packageFile, packageFile.name);
+    if (preprocessingBundleFile) {
+      body.append(
+        "preprocessing_bundle",
+        preprocessingBundleFile,
+        preprocessingBundleFile.name,
+      );
+    }
     return this.request<ModelVersion>(`/projects/${projectId}/models`, {
       method: "POST",
       body,

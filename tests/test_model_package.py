@@ -142,7 +142,26 @@ def test_extra_undeclared_files_are_accepted(tmp_path: Path) -> None:
     assert result.valid
 
 
-def test_extra_manifest_keys_are_rejected(tmp_path: Path) -> None:
+def test_v2_manifest_requires_preprocessing_bundle(tmp_path: Path) -> None:
+    payload = _manifest_payload(format="attribute-aware-gae-v2", version="v2")
+    package = _write_package(tmp_path, manifest=payload)
+    result = validate_model_package(package)
+    assert not result.valid
+    _assert_has_issue(result, "preprocessing_bundle")
+
+
+def test_v1_manifest_rejects_preprocessing_bundle(tmp_path: Path) -> None:
+    payload = _manifest_payload(
+        preprocessing_bundle={
+            "identifier": "attribute-gae-preprocessing",
+            "version": "v2",
+            "digest": "a" * 64,
+        }
+    )
+    package = _write_package(tmp_path, manifest=payload)
+    result = validate_model_package(package)
+    assert not result.valid
+    _assert_has_issue(result, "preprocessing_bundle")
     payload = _manifest_payload(unexpected="nope")
     package = _write_package(tmp_path, manifest=payload)
     result = validate_model_package(package)

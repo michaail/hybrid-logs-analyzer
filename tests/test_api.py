@@ -5,7 +5,7 @@ import json
 import sqlite3
 import sys
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterator
 from uuid import UUID
@@ -132,12 +132,31 @@ def _zip_staged(workspace: Path, **kwargs: Any) -> bytes:
     return _zip_package(workspace / reference)
 
 
-def _register(client: TestClient, headers: dict[str, str], project_id: object, archive: bytes):
+def _register(
+    client: TestClient,
+    headers: dict[str, str],
+    project_id: object,
+    archive: bytes,
+    bundle: bytes | None = None,
+):
+    files = {"package": ("package.zip", archive, "application/zip")}
+    if bundle is not None:
+        files["preprocessing_bundle"] = ("bundle.zip", bundle, "application/zip")
     return client.post(
         f"/projects/{project_id}/models",
         headers=headers,
-        files={"package": ("package.zip", archive, "application/zip")},
+        files=files,
     )
+
+
+def _v2_zips(workspace: Path) -> tuple[bytes, bytes]:
+    from tests.test_inference_bundle import _v2_package, _write_bundle
+
+    staging = workspace / "v2-release"
+    bundle_dir = _write_bundle(staging)
+    digest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))["digest"]
+    package_dir = _v2_package(staging, digest)
+    return _zip_package(package_dir), _zip_package(bundle_dir)
 
 
 VALID_HDFS_LOG = (
@@ -480,17 +499,17 @@ def test_cross_project_member_routes_return_404(api: ApiFixture) -> None:
     operator_a = _login(client, "operator-a")
     publisher_b = _login(client, "publisher-b")
     operator_b = _login(client, "operator-b")
-    archive = _zip_staged(api.workspace)
+    package_zip, bundle_zip = _v2_zips(api.workspace)
 
     assert (
         client.post(
             f"/projects/{project_a['id']}/models",
-            files={"package": ("package.zip", archive, "application/zip")},
+            files={"package": ("package.zip", package_zip, "application/zip")},
         ).status_code
         == 401
     )
 
-    registration = _register(client, publisher_a, project_a["id"], archive)
+    registration = _register(client, publisher_a, project_a["id"], package_zip, bundle_zip)
     assert registration.status_code == 201, registration.text
     model = registration.json()
     model_id = model["id"]
@@ -511,7 +530,7 @@ def test_cross_project_member_routes_return_404(api: ApiFixture) -> None:
         == 404
     )
 
-    foreign_register = _register(client, publisher_b, project_a["id"], archive)
+    foreign_register = _register(client, publisher_b, project_a["id"], package_zip, bundle_zip)
     assert foreign_register.status_code == 404
     listed_a = client.get(f"/projects/{project_a['id']}/models", headers=publisher_a)
     assert listed_a.status_code == 200
@@ -645,6 +664,8 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
     assert registration.status_code == 201, registration.text
     model = registration.json()
     assert model["status"] == "eligible"
+    assert model["inference_ready"] is False
+    assert model["preprocessing_bundle"] is None
     assert model["storage_kind"] == "object"
     assert model["checksum"] == model["artifact_sha256"]
     assert model["package_reference"] == (
@@ -707,21 +728,8 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
         headers=operator_headers,
         json={"model_version_id": model["id"], "dataset_id": dataset["id"]},
     )
-    assert analysis.status_code == 202, analysis.text
-    assert analysis.json()["status"] == "not_supported"
-    assert analysis.json()["error_code"] == "INFERENCE_CONTRACT_UNAVAILABLE"
-    assert analysis.json()["dataset_id"] == dataset["id"]
-    assert analysis.json()["storage_kind"] == "object"
-    assert analysis.json()["checksum"] == dataset["checksum"]
-
-    repeat = client.post(
-        f"/projects/{project['id']}/analysis-runs",
-        headers=operator_headers,
-        json={"model_version_id": model["id"], "dataset_id": dataset["id"]},
-    )
-    assert repeat.status_code == 202, repeat.text
-    assert repeat.json()["id"] != analysis.json()["id"]
-    assert repeat.json()["dataset_id"] == dataset["id"]
+    assert analysis.status_code == 409, analysis.text
+    assert analysis.json()["detail"] == "Published model is not inference-ready."
 
     objects_before_invalid = _object_files(api)
     rejected = _upload_log(client, operator_headers, project["id"], b"not an HDFS record\n")
@@ -738,10 +746,8 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
     }
     assert _object_files(api) == objects_before_invalid
     listed_runs = client.get(f"/projects/{project['id']}/analysis-runs", headers=operator_headers)
-    assert {item["id"] for item in listed_runs.json()} == {
-        analysis.json()["id"],
-        repeat.json()["id"],
-    }
+    assert listed_runs.status_code == 200
+    assert listed_runs.json() == []
 
     fetched = client.get(
         f"/projects/{project['id']}/datasets/{dataset['id']}",
@@ -750,25 +756,12 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
     assert fetched.status_code == 200, fetched.text
     assert fetched.json()["storage_kind"] == "object"
 
-    supported_results = client.get(
-        f"/projects/{project['id']}/analysis-runs/{analysis.json()['id']}/results",
-        headers=operator_headers,
-    )
-    assert supported_results.status_code == 200, supported_results.text
-    assert supported_results.json()["summary"] == {
-        "anomaly_count": 0,
-        "normal_count": 0,
-        "rejected_records": 0,
-        "invalid_records": 0,
-    }
-
     audit_events = client.get(f"/projects/{project['id']}/audit-events", headers=administrator)
     assert audit_events.status_code == 200
     assert {event["action"] for event in audit_events.json()} >= {
         "model.registered",
         "model.published",
         "dataset.registered",
-        "analysis.not_supported",
     }
 
 
@@ -1050,6 +1043,23 @@ def test_project_account_lifecycle_isolation_and_audit(api: ApiFixture) -> None:
     assert "project.membership_granted" not in system_actions
 
 
+def _openapi_schema_properties(schema: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
+    if "properties" in node:
+        return node["properties"]
+    ref = node.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/"):
+        current: Any = schema
+        for part in ref[2:].split("/"):
+            current = current[part]
+        return _openapi_schema_properties(schema, current)
+    for item in node.get("allOf", []):
+        try:
+            return _openapi_schema_properties(schema, item)
+        except (KeyError, TypeError):
+            continue
+    raise AssertionError(f"OpenAPI schema node has no properties: {sorted(node)}")
+
+
 def test_openapi_exposes_administration_lifecycle_without_legacy_user_create(
     api: ApiFixture,
 ) -> None:
@@ -1090,6 +1100,8 @@ def test_openapi_exposes_administration_lifecycle_without_legacy_user_create(
     assert "patch" not in paths[results_path]
     run_item = "/projects/{project_id}/analysis-runs/{analysis_run_id}"
     assert "patch" not in paths.get(run_item, {})
+    assert "post" not in paths.get(run_item, {})
+    assert not any("/internal/" in path for path in paths)
     status_schema = schema["components"]["schemas"]["AnalysisRunStatus"]
     assert set(status_schema["enum"]) == {
         "queued",
@@ -1115,9 +1127,15 @@ def test_openapi_exposes_administration_lifecycle_without_legacy_user_create(
     model_schema = schema["components"]["schemas"]["ModelVersionResponse"]
     assert "package_reference" in model_schema["properties"]
     assert "artifact_sha256" in model_schema["properties"]
+    assert "inference_ready" in model_schema["properties"]
+    assert "preprocessing_bundle" in model_schema["properties"]
     register_op = paths["/projects/{project_id}/models"]["post"]
     assert "multipart/form-data" in register_op["requestBody"]["content"]
     assert "application/json" not in register_op["requestBody"]["content"]
+    multipart_schema = register_op["requestBody"]["content"]["multipart/form-data"]["schema"]
+    multipart = _openapi_schema_properties(schema, multipart_schema)
+    assert "package" in multipart
+    assert "preprocessing_bundle" in multipart
     assert "ModelRegistrationRequest" not in schema["components"]["schemas"]
 
 
@@ -1186,6 +1204,7 @@ def test_registration_rejects_dummy_artifact_with_probe_failure(tmp_path: Path) 
     )
     ApiDatabase(settings.database_url).apply_migrations()
     bootstrap_administrator(settings, "admin", PASSWORD)
+    imported_before = set(sys.modules)
     with TestClient(create_app(settings)) as client:
         api = ApiFixture(client=client, workspace=workspace, settings=settings)
         _, headers, project_id = _publisher_client(api)
@@ -1195,7 +1214,7 @@ def test_registration_rejects_dummy_artifact_with_probe_failure(tmp_path: Path) 
             "model.pt" in issue["path"] or "artifact" in issue["path"]
             for issue in rejected.json()["detail"]["issues"]
         )
-        assert "torch" not in sys.modules
+        assert "torch" not in (set(sys.modules) - imported_before)
         assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
 
 
@@ -1316,3 +1335,163 @@ def test_unpublished_eligible_model_cannot_start_analysis(api: ApiFixture) -> No
     listed = client.get(f"/projects/{project['id']}/analysis-runs", headers=operator_headers)
     assert listed.status_code == 200
     assert listed.json() == []
+
+
+def test_v2_registration_persists_separate_prefixes_and_is_inference_ready(api: ApiFixture) -> None:
+    client, headers, project_id = _publisher_client(api)
+    package_zip, bundle_zip = _v2_zips(api.workspace)
+    created = _register(client, headers, project_id, package_zip, bundle_zip)
+    assert created.status_code == 201, created.text
+    model = created.json()
+    assert model["inference_ready"] is True
+    assert model["preprocessing_bundle"]["identifier"] == "attribute-gae-preprocessing"
+    assert model["preprocessing_bundle"]["version"] == "v2"
+    stored = {
+        path.relative_to(api.settings.object_store_root).as_posix()
+        for path in api.settings.object_store_root.rglob("*")
+        if path.is_file()
+    }
+    assert f"{model['package_reference']}/manifest.json" in stored
+    assert f"{model['package_reference']}/model.pt" in stored
+    bundle_prefix = next(
+        path.rsplit("/", 1)[0]
+        for path in stored
+        if "/preprocessing-bundles/" in path and path.endswith("/manifest.json")
+    )
+    assert bundle_prefix.startswith(f"projects/{project_id}/preprocessing-bundles/")
+    assert f"{bundle_prefix}/drain.ini" in stored
+    assert f"{bundle_prefix}/drain_parser.bin" in stored
+    assert f"{bundle_prefix}/embeddings.npz" in stored
+
+    duplicate = _register(client, headers, project_id, package_zip, bundle_zip)
+    assert duplicate.status_code == 409
+    assert stored == {
+        path.relative_to(api.settings.object_store_root).as_posix()
+        for path in api.settings.object_store_root.rglob("*")
+        if path.is_file()
+    }
+
+
+def test_v2_registration_rejects_missing_or_v1_bundle(api: ApiFixture) -> None:
+    client, headers, project_id = _publisher_client(api)
+    package_zip, bundle_zip = _v2_zips(api.workspace)
+    missing = _register(client, headers, project_id, package_zip)
+    assert missing.status_code == 422
+    assert any("preprocessing_bundle" in issue["path"] for issue in missing.json()["detail"]["issues"])
+    v1_with_bundle = _register(client, headers, project_id, _zip_staged(api.workspace), bundle_zip)
+    assert v1_with_bundle.status_code == 422
+    assert any("preprocessing_bundle" in issue["path"] for issue in v1_with_bundle.json()["detail"]["issues"])
+    assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+    assert [path for path in api.settings.object_store_root.rglob("*") if path.is_file()] == []
+
+
+def test_published_v2_model_queues_and_schedules_dispatch(
+    api: ApiFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dispatched: list[UUID] = []
+
+    def fake_dispatch(run_id: UUID, settings: ApiSettings, **kwargs: object) -> None:
+        del settings, kwargs
+        dispatched.append(run_id)
+
+    monkeypatch.setattr("src.api.main.dispatch_analysis_run", fake_dispatch)
+    client = api.client
+    administrator = _login(client, "admin")
+    project = _create_project(client, administrator, "incident-a")
+    _provision_project_account(client, administrator, "publisher", str(project["id"]), "publisher")
+    _provision_project_account(client, administrator, "operator", str(project["id"]), "operator")
+    publisher_headers = _login(client, "publisher")
+    operator_headers = _login(client, "operator")
+    package_zip, bundle_zip = _v2_zips(api.workspace)
+    registration = _register(client, publisher_headers, project["id"], package_zip, bundle_zip)
+    assert registration.status_code == 201, registration.text
+    publication = client.post(
+        f"/projects/{project['id']}/models/{registration.json()['id']}/publish",
+        headers=publisher_headers,
+    )
+    assert publication.status_code == 200, publication.text
+    uploaded = _upload_log(client, operator_headers, project["id"])
+    analysis = client.post(
+        f"/projects/{project['id']}/analysis-runs",
+        headers=operator_headers,
+        json={
+            "model_version_id": registration.json()["id"],
+            "dataset_id": uploaded.json()["id"],
+        },
+    )
+    assert analysis.status_code == 202, analysis.text
+    payload = analysis.json()
+    assert payload["status"] == "queued"
+    assert payload["error_code"] is None
+    assert payload["completed_at"] is None
+    assert payload["validation_report"] is None
+    assert dispatched == [UUID(payload["id"])]
+    results = client.get(
+        f"/projects/{project['id']}/analysis-runs/{payload['id']}/results",
+        headers=operator_headers,
+    )
+    assert results.status_code == 200
+    assert results.json()["run"]["status"] == "queued"
+    assert results.json()["summary"] == {
+        "anomaly_count": 0,
+        "normal_count": 0,
+        "rejected_records": 0,
+        "invalid_records": 0,
+    }
+
+
+def test_exhausted_dispatch_preserves_queued_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = {"n": 0}
+
+    def fail_post(url: str, headers: object, connect: float, read: float) -> int:
+        del url, headers, connect, read
+        calls["n"] += 1
+        raise ConnectionRefusedError("connection refused")
+
+    monkeypatch.setattr("src.api.inference_dispatch.post_inference_execute", fail_post)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    settings = replace(
+        _api_settings(tmp_path, workspace),
+        inference_service_url="http://inference.test",
+        inference_internal_token="dispatch-test-token",
+        inference_retry_attempts=2,
+        inference_retry_backoff_seconds=0.0,
+    )
+    ApiDatabase(settings.database_url).apply_migrations()
+    bootstrap_administrator(settings, "admin", PASSWORD)
+    with TestClient(create_app(settings)) as client:
+        api = ApiFixture(client=client, workspace=workspace, settings=settings)
+        _, publisher_headers, project_id = _publisher_client(api)
+        _provision_project_account(client, _login(client, "admin"), "operator", project_id, "operator")
+        operator_headers = _login(client, "operator")
+        package_zip, bundle_zip = _v2_zips(workspace)
+        registration = _register(client, publisher_headers, project_id, package_zip, bundle_zip)
+        assert registration.status_code == 201, registration.text
+        publication = client.post(
+            f"/projects/{project_id}/models/{registration.json()['id']}/publish",
+            headers=publisher_headers,
+        )
+        assert publication.status_code == 200, publication.text
+        uploaded = _upload_log(client, operator_headers, project_id)
+        analysis = client.post(
+            f"/projects/{project_id}/analysis-runs",
+            headers=operator_headers,
+            json={
+                "model_version_id": registration.json()["id"],
+                "dataset_id": uploaded.json()["id"],
+            },
+        )
+        assert analysis.status_code == 202, analysis.text
+        assert analysis.json()["status"] == "queued"
+        fetched = client.get(
+            f"/projects/{project_id}/analysis-runs/{analysis.json()['id']}",
+            headers=operator_headers,
+        )
+        assert fetched.status_code == 200
+        assert fetched.json()["status"] == "queued"
+        assert fetched.json()["error_code"] is None
+        assert fetched.json()["completed_at"] is None
+        assert calls["n"] == 2

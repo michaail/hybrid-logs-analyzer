@@ -1,0 +1,17 @@
+{
+  "digest": "f4386c1e3b361e7e75f7e9c9ec12256de1fd7832bd970cd720d408a644ce8a79",
+  "files": {
+    "checksums": {
+      "drain.ini": "ad472f32bac75f4884fc0f471776d991d65d51125e5424c13793e9f8b0bfb8e5",
+      "drain_parser.bin": "64d1b17493c57c05c06ab98026262977bb826ab24c9fc26e2f8f390d797879bb",
+      "embeddings.npz": "49f57225f43a163322abb9a57435180bdf76a17f58a3a367f446a68fee29287c"
+    },
+    "drain_config": "drain.ini",
+    "drain_parser": "drain_parser.bin",
+    "embeddings": "embeddings.npz"
+  },
+  "format": "hdfs-preprocessing-bundle-v1",
+  "identifier": "attribute-gae-preprocessing",
+  "source_compatibility": "hdfs",
+  "version": "golden"
+}

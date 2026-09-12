@@ -2,6 +2,7 @@
 # the same checks; these packages publish Intel macOS-compatible distributions.
 httpx==0.28.1
 mypy==2.3.1
+numpy==1.26.4
 pip-audit==2.10.1
 pytest==9.1.1
 ruff==0.16.5

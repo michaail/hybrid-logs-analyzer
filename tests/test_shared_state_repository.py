@@ -389,3 +389,196 @@ def test_postgres_dataset_identity_checksum_check_and_cas_conflict(
             actor_user_id=user_id,
             error_code="INFERENCE_FAILED",
         )
+
+
+def _bundle_fields() -> dict[str, str]:
+    return {
+        "identifier": "attribute-gae-preprocessing",
+        "version": "v2",
+        "object_prefix": "projects/x/preprocessing-bundles/y/v2",
+        "manifest_checksum": "a" * 64,
+        "metadata_json": "{}",
+    }
+
+
+def test_preprocessing_bundle_is_project_scoped_and_unique(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    project_id, user_id, _model_id = _seed_model(database)
+    other_project = database.create_project("incident-b")
+    other_user = database.create_user(
+        username="other-publisher", password_hash="x", is_administrator=False
+    )
+    created = database.create_model_version(
+        project_id=project_id,
+        model_identifier="attribute-gae",
+        version="v2",
+        pipeline_run_id="baseline-v2",
+        artifact_reference="outputs/hdfs/v2/model.pt",
+        package_reference="packages/hdfs/attribute-gae-v2",
+        artifact_sha256="1" * 64,
+        metrics_json="{}",
+        metadata_json="{}",
+        external_evaluation_evidence="evidence",
+        actor_user_id=user_id,
+        preprocessing_bundle=_bundle_fields(),
+    )
+    assert created["preprocessing_bundle_identifier"] == "attribute-gae-preprocessing"
+    bundle_id = UUID(str(created["preprocessing_bundle_id"]))
+    assert database.get_preprocessing_bundle(project_id, bundle_id) is not None
+    assert database.get_preprocessing_bundle(UUID(str(other_project["id"])), bundle_id) is None
+
+    with pytest.raises(DatabaseIntegrityError):
+        database.create_model_version(
+            project_id=project_id,
+            model_identifier="attribute-gae",
+            version="v2-other",
+            pipeline_run_id="baseline-v2-other",
+            artifact_reference="outputs/hdfs/v2-other/model.pt",
+            package_reference="packages/hdfs/attribute-gae-v2-other",
+            artifact_sha256="2" * 64,
+            metrics_json="{}",
+            metadata_json="{}",
+            external_evaluation_evidence="evidence",
+            preprocessing_bundle=_bundle_fields(),
+        )
+
+    with pytest.raises(ValueError, match="not found"):
+        database.create_model_version(
+            project_id=UUID(str(other_project["id"])),
+            model_identifier="attribute-gae",
+            version="foreign",
+            pipeline_run_id="foreign",
+            artifact_reference="outputs/hdfs/foreign/model.pt",
+            package_reference="packages/hdfs/foreign",
+            artifact_sha256="3" * 64,
+            metrics_json="{}",
+            metadata_json="{}",
+            external_evaluation_evidence="evidence",
+            actor_user_id=UUID(str(other_user["id"])),
+            preprocessing_bundle_id=bundle_id,
+        )
+
+
+def test_failed_model_insert_rolls_back_preprocessing_bundle(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    project_id, user_id, _model_id = _seed_model(database)
+    with pytest.raises(DatabaseIntegrityError):
+        database.create_model_version(
+            project_id=project_id,
+            model_identifier="attribute-gae",
+            version="2026.09",
+            pipeline_run_id="duplicate",
+            artifact_reference="outputs/hdfs/dup/model.pt",
+            package_reference="packages/hdfs/dup",
+            artifact_sha256="4" * 64,
+            metrics_json="{}",
+            metadata_json="{}",
+            external_evaluation_evidence="evidence",
+            actor_user_id=user_id,
+            preprocessing_bundle=_bundle_fields(),
+        )
+    with database.session() as connection:
+        count = connection.execute("SELECT COUNT(*) AS n FROM preprocessing_bundles").fetchone()
+        assert int(dict(count)["n"]) == 0
+
+
+def test_inference_execution_lookup_and_system_audit(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    project_id, user_id, _model_id = _seed_model(database)
+    other_project = database.create_project("incident-b")
+    model = database.create_model_version(
+        project_id=project_id,
+        model_identifier="attribute-gae",
+        version="lookup-v2",
+        pipeline_run_id="lookup",
+        artifact_reference="projects/p/models/m/v2/model.pt",
+        package_reference="projects/p/models/m/v2",
+        artifact_sha256="5" * 64,
+        metrics_json="{}",
+        metadata_json="{}",
+        external_evaluation_evidence="evidence",
+        actor_user_id=user_id,
+        preprocessing_bundle=_bundle_fields(),
+    )
+    database.publish_model_version(UUID(str(model["id"])), user_id)
+    dataset = database.upsert_dataset(
+        project_id=project_id,
+        storage_kind="object",
+        object_reference="projects/p/datasets/d/hdfs.log",
+        checksum="6" * 64,
+        actor_user_id=user_id,
+    )
+    run = database.create_analysis_run(
+        project_id=project_id,
+        model_version_id=UUID(str(model["id"])),
+        requested_by_user_id=user_id,
+        log_reference="ignored",
+        status="queued",
+        validation_report_json="{}",
+        error_code=None,
+        completed_at=None,
+        dataset_id=UUID(str(dataset["id"])),
+    )
+    job = database.get_inference_execution(UUID(str(run["id"])))
+    assert job is not None
+    assert job["bundle_object_prefix"] == "projects/x/preprocessing-bundles/y/v2"
+    assert job["dataset_object_reference"] == "projects/p/datasets/d/hdfs.log"
+    assert job["model_status"] == "published"
+
+    other_dataset = database.upsert_dataset(
+        project_id=UUID(str(other_project["id"])),
+        storage_kind="object",
+        object_reference="projects/other/datasets/d/hdfs.log",
+        checksum="7" * 64,
+        actor_user_id=user_id,
+    )
+    foreign = database.create_analysis_run(
+        project_id=UUID(str(other_project["id"])),
+        model_version_id=UUID(str(model["id"])),
+        requested_by_user_id=user_id,
+        log_reference="ignored",
+        status="queued",
+        validation_report_json="{}",
+        error_code=None,
+        completed_at=None,
+        dataset_id=UUID(str(other_dataset["id"])),
+    )
+    assert database.get_inference_execution(UUID(str(foreign["id"]))) is None
+
+    run_id = UUID(str(run["id"]))
+    database.transition_analysis_run(
+        run_id,
+        expected_status="queued",
+        next_status="running",
+        actor_user_id=None,
+    )
+    with pytest.raises(RunStatusConflict):
+        database.transition_analysis_run(
+            run_id,
+            expected_status="queued",
+            next_status="running",
+            actor_user_id=None,
+        )
+    failed = database.transition_analysis_run(
+        run_id,
+        expected_status="running",
+        next_status="failed",
+        actor_user_id=None,
+        error_code="UNMATCHED_TEMPLATE",
+        validation_report_json=json.dumps(
+            {"execution": "An admitted log line did not match the frozen Drain templates."},
+            sort_keys=True,
+        ),
+    )
+    assert failed["error_code"] == "UNMATCHED_TEMPLATE"
+    assert "frozen Drain templates" in str(failed["validation_report_json"])
+    actions = [event["action"] for event in database.list_audit_events(project_id)]
+    assert "analysis.running" in actions
+    assert "analysis.failed" in actions
+    system_events = [
+        event
+        for event in database.list_audit_events(project_id)
+        if event["action"] in {"analysis.running", "analysis.failed"}
+        and event["actor_user_id"] is None
+    ]
+    assert len(system_events) == 2

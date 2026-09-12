@@ -2,10 +2,20 @@ from typing import List, Dict, Any, Optional
 from collections import defaultdict
 from pathlib import Path
 import json
+import re
 
 from drain3 import TemplateMiner
 from drain3.file_persistence import FilePersistence
 from drain3.template_miner_config import TemplateMinerConfig
+
+
+class UnmatchedLogLine(ValueError):
+  """Raised when strict annotation encounters a line with no frozen template."""
+
+  def __init__(self, line_number: int) -> None:
+    self.line_number = line_number
+    super().__init__(f"Log line {line_number} did not match a frozen template.")
+
 
 class DrainParser:
   """
@@ -26,6 +36,7 @@ class DrainParser:
   # Stripping the first 3 (date, time, thread) removes always-variable header
   # fields; LEVEL and component are kept because they help Drain cluster lines.
   _HEADER_TOKENS = 3
+  _HDFS_BLOCK_ID_RE = re.compile(r"blk_-?\d+")
 
   @staticmethod
   def _preprocess_line(line: str, strip_tokens: int = 3) -> str:
@@ -38,6 +49,12 @@ class DrainParser:
     """
     parts = line.split(None, strip_tokens)
     return parts[strip_tokens] if len(parts) > strip_tokens else line
+
+  @classmethod
+  def extract_hdfs_block_id(cls, line: str) -> str | None:
+    """Return the first HDFS block ID using the parser's sequence identity rule."""
+    block_match = cls._HDFS_BLOCK_ID_RE.search(line)
+    return block_match.group(0) if block_match else None
 
   def __init__(self, config_path: str | None = None, persistence_path: Optional[str] = None):
     cfg = TemplateMinerConfig()
@@ -116,10 +133,7 @@ class DrainParser:
     Subclasses targeting other log formats (e.g. :class:`BGLParser`)
     should override this method to return an alternative column dict.
     """
-    import re
     from datetime import datetime
-
-    BLOCK_RE = re.compile(r"blk_-?\d+")
 
     parts = line.split(None, 3)  # date time thread rest
     date_s, time_s, thread_s = (parts + ["", "", ""])[:3]
@@ -129,8 +143,7 @@ class DrainParser:
     except ValueError:
       ts = None
 
-    block_match = BLOCK_RE.search(line)
-    block_id    = block_match.group(0) if block_match else None
+    block_id = self.extract_hdfs_block_id(line)
 
     return {
       "date":       date_s,
@@ -145,12 +158,21 @@ class DrainParser:
     }
 
 
-  def annotate_file(self, log_path: str, max_lines: int | None = None):
+  def annotate_file(
+    self,
+    log_path: str,
+    max_lines: int | None = None,
+    *,
+    unmatched: str = "skip",
+  ):
     """Second pass over the log file using the final learned templates.
 
     Returns a pandas DataFrame with one row per log line. Column schema is
     determined by :meth:`_extract_row` (overridable by subclasses).
+    ``unmatched="fail"`` raises :class:`UnmatchedLogLine` instead of skipping.
     """
+    if unmatched not in {"skip", "fail"}:
+      raise ValueError("unmatched must be 'skip' or 'fail'.")
     import pandas as pd
 
     rows = []
@@ -168,15 +190,17 @@ class DrainParser:
         # Match against final templates (does not mutate clusters)
         match = self.miner.match(content)
         if match is None:
+          if unmatched == "fail":
+            raise UnmatchedLogLine(i)
           continue
 
         template_tokens = match.get_template()  # list[str]
         template_str    = " ".join(template_tokens)
         params          = self.miner.get_parameter_list(template_tokens, content)
 
-        rows.append(
-          self._extract_row(line, match.cluster_id, template_str, list(params) if params else [])
-        )
+        row = self._extract_row(line, match.cluster_id, template_str, list(params) if params else [])
+        row["line_number"] = i
+        rows.append(row)
 
         if max_lines is not None and i >= max_lines:
           break
@@ -242,6 +266,10 @@ class DrainParser:
     Passing the same *config_path* as during training ensures masking rules and
     Drain hyperparameters are identical — only cluster state is loaded from the
     snapshot file (as per drain3 design).
+
+    Drain3 FilePersistence reconstructs objects with jsonpickle. Production inference
+    may call this only on a checksum-bound ``drain_parser.bin`` from a Publisher-admitted
+    preprocessing bundle. The public API and isolated validator must not deserialize it.
     """
     if not Path(path).exists():
       raise FileNotFoundError(f"Snapshot file not found: {path}")

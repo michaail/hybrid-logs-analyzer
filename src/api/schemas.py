@@ -149,6 +149,14 @@ class ProjectAccountResponse(ApiModel):
     membership: MembershipResponse
 
 
+class PreprocessingBundleIdentity(ApiModel):
+    """Non-sensitive identity of a project-scoped preprocessing bundle."""
+
+    identifier: str
+    version: str
+    digest: str
+
+
 class ModelVersionResponse(ApiModel):
     """Traceable model version metadata; never exposes artifact contents."""
 
@@ -170,6 +178,8 @@ class ModelVersionResponse(ApiModel):
     published_by_user_id: UUID | None
     storage_kind: StorageKind
     checksum: str | None
+    inference_ready: bool = False
+    preprocessing_bundle: PreprocessingBundleIdentity | None = None
 
 
 class DatasetResponse(ApiModel):

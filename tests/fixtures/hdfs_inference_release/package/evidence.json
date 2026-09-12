@@ -1,0 +1,22 @@
+{
+  "code_revision": "0258b7da8ce53b509a0af5fa0cd1149ac4a27835",
+  "config": {
+    "experiment": {
+      "dataset": "hdfs"
+    },
+    "training": {
+      "alpha": 1.0,
+      "beta": 1.0,
+      "gamma": 1.0,
+      "test_run": false
+    }
+  },
+  "kind": "hdfs-inference-release",
+  "metrics": {
+    "best_threshold": 0.0,
+    "test_f1": 0.0,
+    "test_pr_auc": 0.0,
+    "test_roc_auc": 0.0
+  },
+  "source": "run_ablation.py"
+}

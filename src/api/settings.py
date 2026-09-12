@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,12 @@ class ApiSettings:
     object_store_access_key_id: str | None = None
     object_store_secret_access_key: str | None = None
     object_store_region: str = "auto"
+    inference_service_url: str | None = None
+    inference_internal_token: str | None = None
+    inference_connect_timeout_seconds: float = 2.0
+    inference_read_timeout_seconds: float = 5.0
+    inference_retry_attempts: int = 5
+    inference_retry_backoff_seconds: float = 2.0
 
     @property
     def uses_bucket_object_store(self) -> bool:
@@ -71,6 +78,7 @@ class ApiSettings:
             raise RuntimeError("API_JWT_TTL_MINUTES must be a positive integer.")
         endpoint, bucket, access_key, secret_key = _bucket_credentials_from_environment()
         region = _optional_env("API_OBJECT_STORE_REGION") or "auto"
+        inference_url, inference_token = _inference_credentials_from_environment()
 
         return cls(
             database_url=database_url,
@@ -84,6 +92,18 @@ class ApiSettings:
             object_store_access_key_id=access_key,
             object_store_secret_access_key=secret_key,
             object_store_region=region,
+            inference_service_url=inference_url,
+            inference_internal_token=inference_token,
+            inference_connect_timeout_seconds=_positive_float_env(
+                "INFERENCE_CONNECT_TIMEOUT_SECONDS", 2.0
+            ),
+            inference_read_timeout_seconds=_positive_float_env(
+                "INFERENCE_READ_TIMEOUT_SECONDS", 5.0
+            ),
+            inference_retry_attempts=_positive_int_env("INFERENCE_RETRY_ATTEMPTS", 5),
+            inference_retry_backoff_seconds=_non_negative_float_env(
+                "INFERENCE_RETRY_BACKOFF_SECONDS", 2.0
+            ),
         )
 
 
@@ -118,3 +138,71 @@ def _bucket_credentials_from_environment() -> tuple[str | None, str | None, str 
             "API_OBJECT_STORE_ACCESS_KEY_ID, and API_OBJECT_STORE_SECRET_ACCESS_KEY."
         )
     return endpoint, bucket, access_key, secret_key
+
+
+def _inference_credentials_from_environment() -> tuple[str | None, str | None]:
+    """Require the private service URL and invocation token together, or neither."""
+
+    url = _optional_env("INFERENCE_SERVICE_URL")
+    token = _optional_env("INFERENCE_INTERNAL_TOKEN")
+    present = [
+        name
+        for name, value in (
+            ("INFERENCE_SERVICE_URL", url),
+            ("INFERENCE_INTERNAL_TOKEN", token),
+        )
+        if value is not None
+    ]
+    if not present:
+        return None, None
+    if len(present) != 2:
+        raise RuntimeError(
+            "Inference dispatch settings must be set together: "
+            "INFERENCE_SERVICE_URL and INFERENCE_INTERNAL_TOKEN."
+        )
+    return url, token
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw = _optional_env(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be a positive integer.") from error
+    if value <= 0:
+        raise RuntimeError(f"{name} must be a positive integer.")
+    return value
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    return _float_env(name, default, minimum=0.0, exclusive_minimum=True)
+
+
+def _non_negative_float_env(name: str, default: float) -> float:
+    return _float_env(name, default, minimum=0.0, exclusive_minimum=False)
+
+
+def _float_env(
+    name: str,
+    default: float,
+    *,
+    minimum: float,
+    exclusive_minimum: bool,
+) -> float:
+    raw = _optional_env(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be a finite number.") from error
+    if not math.isfinite(value):
+        raise RuntimeError(f"{name} must be a finite number.")
+    if exclusive_minimum:
+        if value <= minimum:
+            raise RuntimeError(f"{name} must be greater than {minimum}.")
+    elif value < minimum:
+        raise RuntimeError(f"{name} must be at least {minimum}.")
+    return value

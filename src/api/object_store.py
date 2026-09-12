@@ -8,16 +8,42 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
-from src.api.settings import ApiSettings
-
 _DELETE_BATCH_SIZE = 1000
 
 
+class ObjectStoreConfig(Protocol):
+    """Settings subset required to construct an object store."""
+
+    @property
+    def object_store_root(self) -> Path: ...
+
+    @property
+    def object_store_endpoint(self) -> str | None: ...
+
+    @property
+    def object_store_bucket(self) -> str | None: ...
+
+    @property
+    def object_store_access_key_id(self) -> str | None: ...
+
+    @property
+    def object_store_secret_access_key(self) -> str | None: ...
+
+    @property
+    def object_store_region(self) -> str: ...
+
+    @property
+    def uses_bucket_object_store(self) -> bool: ...
+
+
 class ObjectStore(Protocol):
-    """Put and delete POSIX object keys under a private prefix."""
+    """Put, get, and delete POSIX object keys under a private prefix."""
 
     def put(self, key: str, payload: bytes) -> None:
         """Write ``payload`` at ``key``, replacing any existing object."""
+
+    def get(self, key: str) -> bytes:
+        """Return the bytes stored at ``key``."""
 
     def delete_prefix(self, prefix: str) -> None:
         """Remove every object whose key equals ``prefix`` or starts with ``prefix/``."""
@@ -40,6 +66,9 @@ class S3Client(Protocol):
 
     def delete_objects(self, *, Bucket: str, Delete: Mapping[str, Any]) -> object:
         """Delete a batch of object keys."""
+
+    def get_object(self, *, Bucket: str, Key: str) -> Mapping[str, Any]:
+        """Download one object. ``Body`` must provide ``read() -> bytes``."""
 
 
 def model_package_object_key(
@@ -73,8 +102,30 @@ def dataset_object_key(project_id: UUID | str, dataset_id: UUID | str, relative:
     return f"projects/{project_id}/datasets/{dataset_id}/{member}"
 
 
+def preprocessing_bundle_object_prefix(
+    project_id: UUID | str,
+    bundle_id: UUID | str,
+    version: str,
+) -> str:
+    """Return the directory prefix for one preprocessing bundle version."""
+
+    return f"projects/{project_id}/preprocessing-bundles/{bundle_id}/{version}"
+
+
+def preprocessing_bundle_object_key(
+    project_id: UUID | str,
+    bundle_id: UUID | str,
+    version: str,
+    relative: str,
+) -> str:
+    """Build ``projects/<project-id>/preprocessing-bundles/<bundle-id>/<version>/<relative>``."""
+
+    member = _require_relative_posix(relative)
+    return f"projects/{project_id}/preprocessing-bundles/{bundle_id}/{version}/{member}"
+
+
 def build_object_store(
-    settings: ApiSettings,
+    settings: ObjectStoreConfig,
     *,
     s3_client: S3Client | None = None,
 ) -> ObjectStore:
@@ -89,7 +140,7 @@ def build_object_store(
     return FilesystemObjectStore(settings.object_store_root)
 
 
-def create_s3_client(settings: ApiSettings) -> S3Client:
+def create_s3_client(settings: ObjectStoreConfig) -> S3Client:
     """Build an S3-compatible client from Bucket settings. Imported only when needed."""
 
     if not settings.uses_bucket_object_store:
@@ -127,6 +178,12 @@ class FilesystemObjectStore:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(payload)
 
+    def get(self, key: str) -> bytes:
+        target = self._resolved_key(key)
+        if not target.is_file():
+            raise FileNotFoundError(key)
+        return target.read_bytes()
+
     def delete_prefix(self, prefix: str) -> None:
         target = self._resolved_key(prefix.rstrip("/"))
         if target.is_dir():
@@ -157,6 +214,21 @@ class BucketObjectStore:
     def put(self, key: str, payload: bytes) -> None:
         relative = _require_relative_posix(key)
         self._client.put_object(Bucket=self._bucket, Key=relative, Body=payload)
+
+    def get(self, key: str) -> bytes:
+        relative = _require_relative_posix(key)
+        try:
+            response = self._client.get_object(Bucket=self._bucket, Key=relative)
+        except Exception as error:
+            raise FileNotFoundError(key) from error
+        body = response.get("Body")
+        read = getattr(body, "read", None)
+        if not callable(read):
+            raise FileNotFoundError(key)
+        payload = read()
+        if not isinstance(payload, (bytes, bytearray)):
+            raise FileNotFoundError(key)
+        return bytes(payload)
 
     def delete_prefix(self, prefix: str) -> None:
         relative = _require_relative_posix(prefix.rstrip("/"))
