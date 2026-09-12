@@ -6,7 +6,6 @@ It never mutates the immutable expected values; it only writes a comparison repo
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 import tempfile
@@ -17,6 +16,13 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.modules.hdfs_evaluation_data import (
+    EvaluationDataError,
+    load_evaluation_labels,
+    load_selected_block_ids,
+    partition_selected_block_ids,
+    write_evaluation_shards,
+)
 from src.modules.inference_bundle import DRAIN_CONFIG_NAME, DRAIN_PARSER_NAME, EMBEDDINGS_NAME
 from src.modules.model_package import MANIFEST_NAME, ModelPackageManifest, unpack_zip_bytes
 
@@ -79,47 +85,21 @@ def load_parity_expected(path: Path) -> ParityExpected:
 
 
 def load_hdfs_block_labels(path: Path) -> dict[str, int]:
-    """Load BlockId → {0,1} labels from the HDFS anomaly CSV."""
+    """Load unique BlockId → {0,1} labels from the HDFS anomaly CSV."""
 
     try:
-        with path.open(newline="", encoding="utf-8") as handle:
-            reader = csv.DictReader(handle)
-            if reader.fieldnames is None:
-                raise ParityError("Labels CSV must include a header row.")
-            columns = {name.lower(): name for name in reader.fieldnames if name}
-            id_column = next(
-                (columns[name] for name in ("blockid", "block_id") if name in columns),
-                None,
-            )
-            label_column = next(
-                (columns[name] for name in ("label", "anomaly", "is_anomaly") if name in columns),
-                None,
-            )
-            if id_column is None or label_column is None:
-                raise ParityError("Labels CSV must include BlockId and Label columns.")
-            mapping: dict[str, int] = {}
-            for row in reader:
-                mapping[str(row[id_column])] = _to_binary_label(row[label_column])
-    except ParityError:
-        raise
-    except OSError as error:
-        raise ParityError("Labels file is missing or unreadable.") from error
-    if not mapping:
-        raise ParityError("Labels CSV does not contain any block rows.")
-    return mapping
+        return load_evaluation_labels(path)
+    except EvaluationDataError as error:
+        raise ParityError(str(error)) from error
 
 
 def load_test_block_ids(path: Path) -> list[str]:
     """Load an ordered test-split block ID list, one identifier per line."""
 
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError as error:
-        raise ParityError("Test block-id file is missing or unreadable.") from error
-    block_ids = [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
-    if not block_ids:
-        raise ParityError("Test block-id file does not contain any identifiers.")
-    return block_ids
+        return load_selected_block_ids(path)
+    except EvaluationDataError as error:
+        raise ParityError(str(error)) from error
 
 
 def verify_artefact_checksums(
@@ -304,73 +284,15 @@ def _strictly_count_selected_block_lines(
     return source_line_count, source_line_count, selected_line_counts
 
 
-def _partition_test_block_ids(
-    *,
-    test_block_ids: Sequence[str],
-    selected_line_counts: Mapping[str, int],
-) -> list[list[str]]:
-    """Partition complete test blocks below both production scorer limits."""
+def _parity_shard_limits() -> tuple[int, int]:
+    """Return source-line and block caps for temporary parity shards."""
 
     from src.modules.hdfs_inference import MAX_BLOCKS, MAX_SOURCE_LINES
 
-    source_line_limit = min(MAX_SOURCE_LINES, PARITY_SHARD_MAX_SOURCE_LINES)
-    block_limit = min(MAX_BLOCKS, PARITY_SHARD_MAX_BLOCKS)
-    partitions: list[list[str]] = []
-    current_partition: list[str] = []
-    current_line_count = 0
-    for block_id in test_block_ids:
-        line_count = selected_line_counts.get(block_id, 0)
-        if line_count == 0:
-            raise ParityError(f"Test block {block_id} has no log lines in the baseline corpus.")
-        if line_count > source_line_limit:
-            raise ParityError(
-                f"Test block {block_id} exceeds the controlled parity source-line limit."
-            )
-        exceeds_block_limit = len(current_partition) >= block_limit
-        exceeds_source_limit = current_line_count + line_count > source_line_limit
-        if current_partition and (exceeds_block_limit or exceeds_source_limit):
-            partitions.append(current_partition)
-            current_partition = []
-            current_line_count = 0
-        current_partition.append(block_id)
-        current_line_count += line_count
-    if current_partition:
-        partitions.append(current_partition)
-    return partitions
-
-
-def _write_test_shards(
-    *,
-    corpus: Path,
-    partitions: Sequence[Sequence[str]],
-    destination: Path,
-) -> list[Path]:
-    """Materialize complete selected-block histories into bounded temporary files."""
-
-    from src.modules.parser.drain_parser import DrainParser
-
-    destination.mkdir(parents=True, exist_ok=True)
-    block_to_shard = {
-        block_id: shard_index
-        for shard_index, partition in enumerate(partitions)
-        for block_id in partition
-    }
-    paths = [destination / f"test-shard-{index:03d}.log" for index in range(len(partitions))]
-    handles = [path.open("w", encoding="utf-8") for path in paths]
-    try:
-        with corpus.open("r", encoding="utf-8", errors="replace") as source:
-            for raw in source:
-                line = raw.rstrip("\n")
-                block_id = DrainParser.extract_hdfs_block_id(line)
-                if block_id is None:
-                    continue
-                shard_index = block_to_shard.get(block_id)
-                if shard_index is not None:
-                    handles[shard_index].write(line + "\n")
-    finally:
-        for handle in handles:
-            handle.close()
-    return paths
+    return (
+        min(MAX_SOURCE_LINES, PARITY_SHARD_MAX_SOURCE_LINES),
+        min(MAX_BLOCKS, PARITY_SHARD_MAX_BLOCKS),
+    )
 
 
 def _score_selected_test_blocks(
@@ -391,15 +313,21 @@ def _score_selected_test_blocks(
         bundle_dir=bundle_dir,
         selected_block_ids=test_block_ids,
     )
-    partitions = _partition_test_block_ids(
-        test_block_ids=test_block_ids,
-        selected_line_counts=selected_line_counts,
-    )
-    shard_paths = _write_test_shards(
-        corpus=corpus,
-        partitions=partitions,
-        destination=destination,
-    )
+    source_line_limit, block_limit = _parity_shard_limits()
+    try:
+        partitions = partition_selected_block_ids(
+            selected_block_ids=test_block_ids,
+            selected_line_counts=selected_line_counts,
+            max_source_lines=source_line_limit,
+            max_blocks=block_limit,
+        )
+        shard_paths = write_evaluation_shards(
+            corpus=corpus,
+            partitions=partitions,
+            destination=destination,
+        )
+    except EvaluationDataError as error:
+        raise ParityError(str(error)) from error
 
     from src.modules.hdfs_inference import score_frozen_hdfs_log
 
@@ -601,12 +529,6 @@ def verify_hdfs_release(
     }
     _write_report(report_path, report)
     return report
-
-
-def _to_binary_label(value: str | int | bool | None) -> int:
-    if isinstance(value, str):
-        return int(value.strip().lower() in {"1", "true", "anomaly", "anomalous"})
-    return int(bool(value))
 
 
 def _write_report(path: Path, report: Mapping[str, Any]) -> None:

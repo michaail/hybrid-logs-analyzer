@@ -455,10 +455,10 @@ def publish_hdfs_evaluation_dataset(
 def _parse_strict_binary_label(value: object, row_number: int) -> int:
     if isinstance(value, bool) or value is None:
         raise EvaluationDataError(f"Labels CSV row {row_number} is not a binary 0 or 1 value.")
-    stripped = str(value).strip()
-    if stripped == "0":
+    stripped = str(value).strip().lower()
+    if stripped in {"0", "normal"}:
         return 0
-    if stripped == "1":
+    if stripped in {"1", "anomaly", "anomalous"}:
         return 1
     raise EvaluationDataError(f"Labels CSV row {row_number} is not a binary 0 or 1 value.")
 

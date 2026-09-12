@@ -384,27 +384,27 @@ workspace-local artifact; prior cache entries may be retained as provenance.
 
 #### Automated
 
-- [x] 1.1 Focused evaluation-data tests pass
-- [x] 1.2 Evaluation-data lint passes
-- [x] 1.3 Evaluation-data type checking passes
+- [x] 1.1 Focused evaluation-data tests pass — 5c5da84
+- [x] 1.2 Evaluation-data lint passes — 5c5da84
+- [x] 1.3 Evaluation-data type checking passes — 5c5da84
 
 #### Manual
 
-- [x] 1.4 Inspect a tiny complete-history manifest and shards
-- [x] 1.5 Verify timestamp warnings retain source order
+- [x] 1.4 Inspect a tiny complete-history manifest and shards — 5c5da84
+- [x] 1.5 Verify timestamp warnings retain source order — 5c5da84
 
 ### Phase 2: Expose and consolidate the controlled workflow
 
 #### Automated
 
-- [ ] 2.1 Evaluation-data and parity integration tests pass
-- [ ] 2.2 Consolidated lint passes
-- [ ] 2.3 Consolidated type checking passes
+- [x] 2.1 Evaluation-data and parity integration tests pass
+- [x] 2.2 Consolidated lint passes
+- [x] 2.3 Consolidated type checking passes
 
 #### Manual
 
-- [ ] 2.4 Verify the explicit CLI artifact cache behavior
-- [ ] 2.5 Verify unchanged golden parity-command behavior
+- [x] 2.4 Verify the explicit CLI artifact cache behavior
+- [x] 2.5 Verify unchanged golden parity-command behavior
 
 ### Phase 3: Record reproducibility evidence and operating guidance
 
