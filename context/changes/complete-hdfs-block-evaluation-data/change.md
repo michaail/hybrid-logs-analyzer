@@ -1,7 +1,7 @@
 ---
 change_id: complete-hdfs-block-evaluation-data
 title: Complete hdfs block evaluation data
-status: implementing
+status: implemented
 created: 2026-09-12
 updated: 2026-09-12
 archived_at: null

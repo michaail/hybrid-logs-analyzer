@@ -410,12 +410,12 @@ workspace-local artifact; prior cache entries may be retained as provenance.
 
 #### Automated
 
-- [x] 3.1 Final focused tests pass
-- [x] 3.2 Final lint passes
-- [x] 3.3 Project type checking passes
+- [x] 3.1 Final focused tests pass — f1ba96e
+- [x] 3.2 Final lint passes — f1ba96e
+- [x] 3.3 Project type checking passes — f1ba96e
 
 #### Manual
 
-- [x] 3.4 Build and inspect the approved full-corpus artifact
-- [x] 3.5 Run and retain successful controlled full-corpus parity evidence
-- [x] 3.6 Review documented boundary from runtime lifecycle completeness
+- [x] 3.4 Build and inspect the approved full-corpus artifact — f1ba96e
+- [x] 3.5 Run and retain successful controlled full-corpus parity evidence — f1ba96e
+- [x] 3.6 Review documented boundary from runtime lifecycle completeness — f1ba96e
