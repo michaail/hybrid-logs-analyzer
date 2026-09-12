@@ -1,4 +1,10 @@
-"""Golden HDFS processing fixture and controlled parity-command tests."""
+"""Golden HDFS processing fixture and controlled parity-command tests.
+
+The labelled 11,167,740-line corpus build and full-release parity command are
+documented manual checks. They are not pytest cases: the source data is
+workspace-local, and ML/native execution is not a default test dependency.
+Golden ``release_gate`` tests stay opt-in via ``pytest -m release_gate``.
+"""
 
 from __future__ import annotations
 
@@ -421,6 +427,8 @@ def test_golden_fixture_fails_when_parser_bytes_change(tmp_path: Path) -> None:
     assert any(item.startswith("PARSER_CHECKSUM") for item in mismatches)
 
 
+# Golden-fixture release_gate tests remain opt-in. The approved 11-million-line
+# corpus is a documented manual release check, not a default pytest dependency.
 @pytest.mark.ml
 @pytest.mark.release_gate
 def test_parity_command_shards_complete_test_blocks_under_service_limits(

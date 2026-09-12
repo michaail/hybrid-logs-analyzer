@@ -233,6 +233,52 @@ def test_loghub_normal_anomaly_labels_are_accepted(tmp_path: Path) -> None:
     assert mapping == {"blk_1": 1, "blk_2": 0}
 
 
+def test_malformed_label_files_and_invalid_shard_limits_are_rejected(tmp_path: Path) -> None:
+    empty = tmp_path / "empty.csv"
+    empty.write_text("", encoding="utf-8")
+    header_only = tmp_path / "header-only.csv"
+    header_only.write_text("BlockId,Label\n", encoding="utf-8")
+    missing_columns = tmp_path / "missing-columns.csv"
+    missing_columns.write_text("id,value\nblk_1,1\n", encoding="utf-8")
+    empty_block_id = tmp_path / "empty-block-id.csv"
+    empty_block_id.write_text("BlockId,Label\n,1\n", encoding="utf-8")
+    corpus = _write_corpus(
+        tmp_path / "corpus.log",
+        [
+            _hdfs_line("081109", "203615", "148", "Receiving block blk_1 src: /10.0.0.1"),
+            _hdfs_line("081109", "203616", "149", "Receiving block blk_1 src: /10.0.0.2"),
+        ],
+    )
+    labels = _write_labels(tmp_path / "labels.csv", [("blk_1", "1")])
+    selected = _write_ids(tmp_path / "ids.txt", ["blk_1"])
+
+    with pytest.raises(EvaluationDataError, match="header row"):
+        load_evaluation_labels(empty)
+    with pytest.raises(EvaluationDataError, match="does not contain any block rows"):
+        load_evaluation_labels(header_only)
+    with pytest.raises(EvaluationDataError, match="BlockId and Label columns"):
+        load_evaluation_labels(missing_columns)
+    with pytest.raises(EvaluationDataError, match="empty BlockId"):
+        load_evaluation_labels(empty_block_id)
+    with pytest.raises(EvaluationDataError, match="Shard limits must be positive"):
+        evaluation_stage_config(
+            corpus=corpus,
+            labels=labels,
+            selected_block_ids=selected,
+            max_source_lines=0,
+            max_blocks=1,
+        )
+    with pytest.raises(EvaluationDataError, match="exceeds the evaluation source-line limit"):
+        materialize_hdfs_evaluation_data(
+            corpus=corpus,
+            labels=labels,
+            selected_block_ids=selected,
+            destination=tmp_path / "out-limit",
+            max_source_lines=1,
+            max_blocks=1,
+        )
+
+
 def test_missing_label_and_duplicate_or_absent_selected_ids_are_rejected(tmp_path: Path) -> None:
     corpus = _write_corpus(
         tmp_path / "corpus.log",
@@ -415,8 +461,26 @@ def test_build_script_rejects_missing_and_invalid_inputs_before_publish(tmp_path
         ]
     )
 
+    empty_ids = tmp_path / "empty-ids.txt"
+    empty_ids.write_text("# comment only\n", encoding="utf-8")
+    empty_selected = module.main(
+        [
+            "--corpus",
+            str(corpus),
+            "--labels",
+            str(labels),
+            "--selected-block-ids",
+            str(empty_ids),
+            "--workspace-root",
+            str(workspace),
+            "--code-root",
+            str(REPO_ROOT),
+        ]
+    )
+
     assert missing == 1
     assert invalid == 1
+    assert empty_selected == 1
     assert not list(workspace.rglob(SUCCESS_FILE))
 
 

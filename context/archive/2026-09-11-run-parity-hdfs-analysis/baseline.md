@@ -1,7 +1,7 @@
 ---
 change_id: run-parity-hdfs-analysis
 status: approved
-updated: 2026-09-11
+updated: 2026-09-12
 ---
 
 # HDFS baseline release
@@ -140,6 +140,46 @@ record is `releases/hdfs/v3/expected.json`; the generated comparison evidence is
 - The exact threshold was `0.1922733336687088`.
 - Test F1 was exactly `0.9320466425412143`; PR-AUC and ROC-AUC deltas were
   `+0.0000007738` and `+0.0000222115`, respectively—both below the `0.01` tolerance.
+
+The same command was re-run on 2026-09-12 after complete-history evaluation data
+started sharing this materialization path. Checksum, exact-threshold, and
+metric-tolerance gates passed again. Comparison evidence remains
+`releases/hdfs/v3/parity-report.json`.
+
+## Complete-history evaluation-data artefact
+
+Built and independently verified on 2026-09-12 from the immutable corpus, labels,
+and held-out IDs above. Completeness is relative to this checksum-pinned corpus
+only. This record does not claim that an arbitrary Operator upload is
+lifecycle-complete; that distinction belongs to S-06 / FR-012.
+
+The controlled command was:
+
+```bash
+python scripts/build_hdfs_evaluation_dataset.py \
+  --corpus data/raw/hdfs/HDFS_full.log \
+  --labels data/raw/hdfs/anomaly_label.csv \
+  --selected-block-ids releases/hdfs/test_block_ids.txt \
+  --workspace-root . \
+  --code-root .
+```
+
+| Field | Value |
+| --- | --- |
+| Workspace-relative artefact | `artifacts/cache/hdfs/evaluation-data/bf2ac7cdc7a73d18c929/` |
+| Manifest SHA-256 | `acdaa26f7f39a78a47e9c46f9dbfca0d83714d8afb15108334ed818c5b771e1f` |
+| `corpus_sha256` | matches Raw HDFS corpus (`e8987f909b97ce975d65f773a4e1eae7aadab455a38db2aa29ed30ae8b96f166`) |
+| `labels_sha256` | matches HDFS labels (`1c711ed6c8848fc3243fb4d092f172f31d128c8a6ec7f26ebba72ab931885ed8`) |
+| `selected_block_ids_sha256` | matches ordered test block IDs (`d5b278a8b4cd4d85421dc3973efcd3b4edba6e43f98a477044096f85e5cfea26`) |
+| Selected block count | `86,260` |
+| Shard count | `17` |
+| Non-empty corpus lines | `11,167,740` |
+| Timestamp warnings | none |
+| Missing selected source histories | none (minimum retained lines per selected ID: `2`) |
+
+Parity scores the same held-out IDs in `87` temporary shards because it caps a
+shard at 50,000 source lines. The durable evaluation artefact uses the production
+100,000-line and 25,000-block limits and does not replace the v3 release archives.
 
 ## Approval
 

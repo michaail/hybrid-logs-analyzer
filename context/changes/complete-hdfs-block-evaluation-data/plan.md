@@ -397,25 +397,25 @@ workspace-local artifact; prior cache entries may be retained as provenance.
 
 #### Automated
 
-- [x] 2.1 Evaluation-data and parity integration tests pass
-- [x] 2.2 Consolidated lint passes
-- [x] 2.3 Consolidated type checking passes
+- [x] 2.1 Evaluation-data and parity integration tests pass — 9fb0edb
+- [x] 2.2 Consolidated lint passes — 9fb0edb
+- [x] 2.3 Consolidated type checking passes — 9fb0edb
 
 #### Manual
 
-- [x] 2.4 Verify the explicit CLI artifact cache behavior
-- [x] 2.5 Verify unchanged golden parity-command behavior
+- [x] 2.4 Verify the explicit CLI artifact cache behavior — 9fb0edb
+- [x] 2.5 Verify unchanged golden parity-command behavior — 9fb0edb
 
 ### Phase 3: Record reproducibility evidence and operating guidance
 
 #### Automated
 
-- [ ] 3.1 Final focused tests pass
-- [ ] 3.2 Final lint passes
-- [ ] 3.3 Project type checking passes
+- [x] 3.1 Final focused tests pass
+- [x] 3.2 Final lint passes
+- [x] 3.3 Project type checking passes
 
 #### Manual
 
-- [ ] 3.4 Build and inspect the approved full-corpus artifact
-- [ ] 3.5 Run and retain successful controlled full-corpus parity evidence
-- [ ] 3.6 Review documented boundary from runtime lifecycle completeness
+- [x] 3.4 Build and inspect the approved full-corpus artifact
+- [x] 3.5 Run and retain successful controlled full-corpus parity evidence
+- [x] 3.6 Review documented boundary from runtime lifecycle completeness
