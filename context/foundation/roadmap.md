@@ -63,7 +63,7 @@ controlled model lifecycle that every later analysis run requires.
 | S-01 | provision-project-accounts | An administrator can provision a project-authorized Operator or Publisher account without public sign-up. | — | FR-001, FR-008 | done |
 | S-02 | publish-hdfs-model-package | A Publisher can upload a complete HDFS-compatible model package, receive a clear rejection when ineligible, and explicitly publish the eligible version. | F-01, F-02, S-01 | US-01, FR-002, FR-003, FR-004, FR-008 | done |
 | S-03 | intake-hdfs-dataset | An Operator can upload or select an HDFS dataset and receive a clear whole-dataset acceptance or rejection result. | F-01, S-01 | US-02, FR-005, FR-008 | done |
-| S-04 | run-parity-hdfs-analysis | An Operator can start asynchronous analysis of an HDFS dataset with a compatible, published same-project model and see a terminal run status. | F-01, F-02, S-02, S-03 | US-02, FR-006, FR-010, FR-011 | in-progress |
+| S-04 | run-parity-hdfs-analysis | An Operator can start asynchronous analysis of an HDFS dataset with a compatible, published same-project model and see a terminal run status. | F-01, F-02, S-02, S-03 | US-02, FR-006, FR-010, FR-011 | done |
 | S-05 | inspect-hdfs-analysis-results | An Operator can inspect traceable detected anomalies and summaries for normal, rejected, and invalid outcomes. | S-04 | US-02, FR-007, FR-008 | proposed |
 | S-06 | separate-provisional-hdfs-results | An Operator can distinguish finalized anomalies from provisional incomplete HDFS block histories. | F-03, S-04, S-05 | US-03, FR-012 | proposed |
 
@@ -200,7 +200,7 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
     Block: yes.
 - **Risk:** Without an agreed comparison baseline, the analysis result cannot be
   accepted as preserving the required notebook behavior.
-- **Status:** in-progress
+- **Status:** done
 
 ### S-05: Inspect HDFS analysis results
 
@@ -286,3 +286,4 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 - **S-01: An administrator can provision a project-authorized Operator or Publisher account without public sign-up.** — Archived 2026-09-10 → `context/archive/2026-09-09-provision-project-accounts/`. Lesson: —.
 - **S-02: A Publisher can upload a complete HDFS-compatible model package, receive a clear rejection when ineligible, and explicitly publish the eligible version.** — Archived 2026-09-10 → `context/archive/2026-09-10-publish-hdfs-model-package/`. Lesson: —.
 - **S-03: An Operator can upload or select an HDFS dataset and receive a clear whole-dataset acceptance or rejection result.** — Archived 2026-09-10 → `context/archive/2026-09-10-intake-hdfs-dataset/`. Lesson: —.
+- **S-04: An Operator can start asynchronous analysis of an HDFS dataset with a compatible, published same-project model and see a terminal run status.** — Archived 2026-09-12 → `context/archive/2026-09-11-run-parity-hdfs-analysis/`. Lesson: —.
