@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from enum import Enum
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from src.api.security import canonical_username
 
@@ -15,8 +16,17 @@ def _canonical_username(value: str) -> str:
     return canonical_username(value)
 
 
+def _finite_number(value: float) -> float:
+    if not math.isfinite(value):
+        raise ValueError("must be a finite number")
+    return value
+
+
 CanonicalUsername = Annotated[str, AfterValidator(_canonical_username)]
 """A login identity validated against the canonical lowercase username contract."""
+
+FiniteNumber = Annotated[float, AfterValidator(_finite_number)]
+"""A JSON number that is not NaN or infinity."""
 
 
 class ProjectRole(str, Enum):
@@ -220,12 +230,84 @@ class AnalysisRunResponse(ApiModel):
     checksum: str | None
 
 
+class ResultSort(str, Enum):
+    """Whitelisted keyset orders for HDFS anomaly result pages."""
+
+    SCORE_DESC = "score_desc"
+    BLOCK_ID_ASC = "block_id_asc"
+
+
+class AnalysisResultsQuery(ApiModel):
+    """Accepted result-page controls for a project-scoped HDFS run."""
+
+    limit: int = Field(default=50, ge=1, le=100)
+    sort: ResultSort = ResultSort.SCORE_DESC
+    block_id_prefix: str | None = Field(default=None, min_length=1)
+    min_score: FiniteNumber | None = None
+    cursor: str | None = Field(default=None, min_length=1)
+
+
+class HdfsSourceLine(ApiModel):
+    """One stored raw log line retained as HDFS block evidence."""
+
+    line_number: int | None
+    raw: str
+
+
+class HdfsAnomalyContext(ApiModel):
+    """Bounded source evidence projected from a stored anomaly context."""
+
+    matched_line_count: int = Field(default=0, ge=0)
+    source_lines: list[HdfsSourceLine] = Field(default_factory=list)
+
+
+class HdfsAnomalyResult(ApiModel):
+    """One detected HDFS block anomaly with a compatibility record alias."""
+
+    block_id: str
+    record_reference: str
+    anomaly_score: float | None = None
+    anomaly_level: str | None = None
+    decision_threshold: float | None = None
+    context: HdfsAnomalyContext = Field(default_factory=HdfsAnomalyContext)
+
+    @model_validator(mode="after")
+    def _block_id_matches_record_reference(self) -> HdfsAnomalyResult:
+        if self.block_id != self.record_reference:
+            raise ValueError("block_id must equal record_reference")
+        return self
+
+
+class AnalysisResultSummary(ApiModel):
+    """Run-wide outcome counts; independent of the current result page."""
+
+    anomaly_count: int = Field(ge=0)
+    normal_count: int = Field(ge=0)
+    rejected_records: int = Field(ge=0)
+    invalid_records: int = Field(ge=0)
+
+
+class AnalysisResultTrace(ApiModel):
+    """Same-project model, dataset, and bundle provenance for a result page."""
+
+    model_identifier: str
+    version: str
+    model_version_id: UUID
+    pipeline_run_id: str
+    dataset_checksum: str | None = None
+    artifact_checksum: str | None = None
+    preprocessing_bundle: PreprocessingBundleIdentity | None = None
+
+
 class AnalysisResultsResponse(ApiModel):
-    """Forward-compatible anomaly result contract."""
+    """Typed, paginated HDFS anomaly result contract."""
 
     run: AnalysisRunResponse
-    summary: dict[str, int]
-    anomalies: list[dict[str, Any]]
+    summary: AnalysisResultSummary
+    trace: AnalysisResultTrace
+    anomalies: list[HdfsAnomalyResult]
+    next_cursor: str | None = None
+    query: AnalysisResultsQuery
 
 
 class AuditEventResponse(ApiModel):

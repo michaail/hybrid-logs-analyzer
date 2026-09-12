@@ -16,12 +16,14 @@ SHARED_STATE_VERSION = "002_shared_durable_runtime_state"
 PACKAGE_ADMISSION_VERSION = "003_model_package_admission"
 OBJECT_CHECKSUM_VERSION = "004_model_object_checksum"
 PREPROCESSING_BUNDLE_VERSION = "005_preprocessing_bundles"
+RESULT_INSPECTION_INDEXES_VERSION = "006_result_inspection_indexes"
 _MIGRATION_ORDER = (
     INITIAL_SCHEMA_VERSION,
     SHARED_STATE_VERSION,
     PACKAGE_ADMISSION_VERSION,
     OBJECT_CHECKSUM_VERSION,
     PREPROCESSING_BUNDLE_VERSION,
+    RESULT_INSPECTION_INDEXES_VERSION,
 )
 
 _INITIAL_SCHEMA_STATEMENTS: tuple[str, ...] = (
@@ -223,6 +225,16 @@ _PREPROCESSING_BUNDLE_MODEL_COLUMN = (
     "ALTER TABLE model_versions ADD COLUMN preprocessing_bundle_id TEXT "
     "REFERENCES preprocessing_bundles(id)"
 )
+_RESULT_INSPECTION_INDEX_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE INDEX IF NOT EXISTS idx_anomaly_results_run_score_desc
+    ON anomaly_results (analysis_run_id, anomaly_score, record_reference, id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_anomaly_results_run_block_id
+    ON anomaly_results (analysis_run_id, record_reference, id)
+    """,
+)
 
 _PACKAGE_ADMISSION_STATEMENTS: tuple[str, ...] = (
     """
@@ -300,6 +312,11 @@ def apply_migrations(database: ApiDatabase, *, target: str | None = None) -> Non
                 and PREPROCESSING_BUNDLE_VERSION not in applied_versions
             ):
                 _apply_preprocessing_bundles(database, connection)
+            if (
+                _should_apply(RESULT_INSPECTION_INDEXES_VERSION, target)
+                and RESULT_INSPECTION_INDEXES_VERSION not in _read_applied_versions(connection)
+            ):
+                _apply_result_inspection_indexes(connection)
             return
 
     if (
@@ -332,6 +349,14 @@ def apply_migrations(database: ApiDatabase, *, target: str | None = None) -> Non
         with database.session() as connection:
             _apply_preprocessing_bundles(database, connection)
 
+    if (
+        not database.uses_postgresql
+        and _should_apply(RESULT_INSPECTION_INDEXES_VERSION, target)
+        and RESULT_INSPECTION_INDEXES_VERSION not in _current_applied_versions(database)
+    ):
+        with database.session() as connection:
+            _apply_result_inspection_indexes(connection)
+
 
 def main() -> None:
     """Run pending migrations using the configured runtime database URL."""
@@ -354,6 +379,12 @@ def _apply_preprocessing_bundles(database: ApiDatabase, connection: Any) -> None
     if "preprocessing_bundle_id" not in _table_columns(database, connection, "model_versions"):
         connection.execute(_PREPROCESSING_BUNDLE_MODEL_COLUMN)
     _record_migration(connection, PREPROCESSING_BUNDLE_VERSION)
+
+
+def _apply_result_inspection_indexes(connection: _Executor) -> None:
+    for statement in _RESULT_INSPECTION_INDEX_STATEMENTS:
+        connection.execute(statement)
+    _record_migration(connection, RESULT_INSPECTION_INDEXES_VERSION)
 
 
 def _apply_object_checksum_postgres(connection: _Executor) -> None:

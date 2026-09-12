@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
@@ -19,12 +20,18 @@ from starlette.responses import Response
 from src.api.schemas import (
     AccountActivationUpdate,
     AccountSummary,
+    AnalysisResultSummary,
+    AnalysisResultTrace,
+    AnalysisResultsQuery,
     AnalysisResultsResponse,
     AnalysisRunCreate,
     AnalysisRunResponse,
     AnalysisRunStatus,
     AuditEventResponse,
     DatasetResponse,
+    HdfsAnomalyContext,
+    HdfsAnomalyResult,
+    HdfsSourceLine,
     LoginRequest,
     MembershipCreate,
     MembershipResponse,
@@ -44,7 +51,7 @@ from src.api.inference_dispatch import dispatch_analysis_run
 from src.api.object_store import build_object_store, dataset_object_prefix
 from src.api.security import create_access_token, decode_access_token, hash_password, verify_password
 from src.api.settings import ApiSettings
-from src.api.storage import ApiDatabase, DatabaseIntegrityError
+from src.api.storage import AnomalyResultPageQuery, ApiDatabase, DatabaseIntegrityError, ResultCursorError
 from src.api.validation import (
     MAX_HDFS_UPLOAD_BYTES,
     ValidationError,
@@ -604,25 +611,41 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     def get_analysis_results(
         project_id: UUID,
         analysis_run_id: UUID,
+        results_query: Annotated[AnalysisResultsQuery, Query()],
         user: CurrentUser = Depends(get_current_user),
     ) -> AnalysisResultsResponse:
-        """Return anomaly result schema and summaries without executing untrusted models."""
+        """Return one typed page of HDFS anomalies without executing untrusted models."""
         require_project_role(project_id, user, {ProjectRole.OPERATOR})
         run = database.get_analysis_run(analysis_run_id)
         if run is None or run["project_id"] != str(project_id):
             raise _not_found("Analysis run")
+        model = database.get_model_version(UUID(str(run["model_version_id"])))
+        if model is None or str(model["project_id"]) != str(project_id):
+            raise _not_found("Analysis run")
         response = _analysis_run_from_store(run)
-        anomalies = [_anomaly_response(item) for item in database.list_anomaly_results(analysis_run_id)]
-        if run["results_summary_json"]:
-            summary = json.loads(str(run["results_summary_json"]))
-        else:
-            summary = json.loads(
-                _stored_results_summary(response.status, response.validation_report or {}, len(anomalies))
+        try:
+            page = database.list_anomaly_result_page(
+                analysis_run_id,
+                AnomalyResultPageQuery(
+                    limit=results_query.limit,
+                    sort=results_query.sort.value,
+                    block_id_prefix=results_query.block_id_prefix,
+                    min_score=results_query.min_score,
+                    cursor=results_query.cursor,
+                ),
             )
+        except ResultCursorError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Result cursor is invalid.",
+            ) from None
         return AnalysisResultsResponse(
             run=response,
-            summary=summary,
-            anomalies=anomalies,
+            summary=_analysis_result_summary(run, response),
+            trace=_analysis_result_trace(run, model),
+            anomalies=[_anomaly_response(item) for item in page.rows],
+            next_cursor=page.next_cursor,
+            query=results_query,
         )
 
     @app.get(
@@ -888,14 +911,92 @@ def _dataset_response(row: Any) -> DatasetResponse:
     )
 
 
-def _anomaly_response(row: Any) -> dict[str, Any]:
-    return {
-        "record_reference": str(row["record_reference"]),
-        "anomaly_score": row["anomaly_score"],
-        "anomaly_level": row["anomaly_level"],
-        "decision_threshold": row["decision_threshold"],
-        "context": json.loads(str(row["context_json"])),
-    }
+def _anomaly_response(row: Any) -> HdfsAnomalyResult:
+    try:
+        stored_context = json.loads(str(row["context_json"]))
+    except json.JSONDecodeError:
+        stored_context = {}
+    block_id = str(row["record_reference"])
+    level = row["anomaly_level"]
+    return HdfsAnomalyResult(
+        block_id=block_id,
+        record_reference=block_id,
+        anomaly_score=_optional_finite_float(row["anomaly_score"]),
+        anomaly_level=str(level) if isinstance(level, str) else None,
+        decision_threshold=_optional_finite_float(row["decision_threshold"]),
+        context=_hdfs_anomaly_context(stored_context),
+    )
+
+
+def _analysis_result_summary(run: Any, response: AnalysisRunResponse) -> AnalysisResultSummary:
+    if run["results_summary_json"]:
+        payload = json.loads(str(run["results_summary_json"]))
+    else:
+        payload = json.loads(
+            _stored_results_summary(response.status, response.validation_report or {}, 0)
+        )
+    return AnalysisResultSummary.model_validate(payload)
+
+
+def _analysis_result_trace(run: Any, model: Any) -> AnalysisResultTrace:
+    artifact = model.get("artifact_sha256")
+    dataset_checksum = run.get("dataset_checksum")
+    return AnalysisResultTrace(
+        model_identifier=str(model["model_identifier"]),
+        version=str(model["version"]),
+        model_version_id=UUID(str(model["id"])),
+        pipeline_run_id=str(model["pipeline_run_id"]),
+        dataset_checksum=str(dataset_checksum) if dataset_checksum else None,
+        artifact_checksum=str(artifact) if artifact else None,
+        preprocessing_bundle=(
+            PreprocessingBundleIdentity(
+                identifier=str(model["preprocessing_bundle_identifier"]),
+                version=str(model["preprocessing_bundle_version"]),
+                digest=str(model["preprocessing_bundle_digest"]),
+            )
+            if model.get("preprocessing_bundle_identifier")
+            else None
+        ),
+    )
+
+
+def _hdfs_anomaly_context(value: Any) -> HdfsAnomalyContext:
+    if not isinstance(value, dict):
+        return HdfsAnomalyContext()
+    matched = value.get("matched_line_count", 0)
+    if not isinstance(matched, int) or isinstance(matched, bool) or matched < 0:
+        matched = 0
+    lines: list[HdfsSourceLine] = []
+    raw_lines = value.get("source_lines")
+    if isinstance(raw_lines, list):
+        for item in raw_lines:
+            projected = _hdfs_source_line(item)
+            if projected is not None:
+                lines.append(projected)
+    return HdfsAnomalyContext(matched_line_count=matched, source_lines=lines)
+
+
+def _hdfs_source_line(item: Any) -> HdfsSourceLine | None:
+    if not isinstance(item, dict) or not isinstance(item.get("raw"), str):
+        return None
+    line_number = item.get("line_number")
+    if line_number is not None and (
+        not isinstance(line_number, int) or isinstance(line_number, bool)
+    ):
+        line_number = None
+    return HdfsSourceLine(line_number=line_number, raw=str(item["raw"]))
+
+
+def _optional_finite_float(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
 
 
 def _audit_response(row: Any) -> AuditEventResponse:

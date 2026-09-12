@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import math
 import sqlite3
 from collections.abc import Generator, Iterable, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,6 +33,29 @@ class DatasetPointerError(ValueError):
 
 class RunStatusConflict(RuntimeError):
     """Raised when a compare-and-swap analysis-run transition does not apply."""
+
+
+class ResultCursorError(ValueError):
+    """Raised when a result-page cursor is malformed or does not match the query."""
+
+
+@dataclass(frozen=True)
+class AnomalyResultPageQuery:
+    """Whitelisted filters and keyset controls for one anomaly result page."""
+
+    limit: int
+    sort: str
+    block_id_prefix: str | None = None
+    min_score: float | None = None
+    cursor: str | None = None
+
+
+@dataclass(frozen=True)
+class AnomalyResultPage:
+    """One deterministic page of anomaly rows and an optional continuation cursor."""
+
+    rows: list[DatabaseRow]
+    next_cursor: str | None
 
 
 _STORAGE_KINDS = frozenset({"workspace", "object"})
@@ -1037,6 +1063,46 @@ class ApiDatabase:
             (str(run_id),),
         )
 
+    def list_anomaly_result_page(
+        self,
+        run_id: UUID,
+        query: AnomalyResultPageQuery,
+    ) -> AnomalyResultPage:
+        """Return one keyset page of anomaly rows for a single analysis run."""
+        if query.sort not in _RESULT_SORTS:
+            raise ValueError(f"Unsupported result sort {query.sort!r}.")
+        if query.limit < 1 or query.limit > 100:
+            raise ValueError("Result page limit must be between 1 and 100.")
+        if query.min_score is not None and not math.isfinite(query.min_score):
+            raise ValueError("Minimum score must be a finite number.")
+
+        filters = ["analysis_run_id = ?"]
+        parameters: list[object] = [str(run_id)]
+        if query.block_id_prefix is not None:
+            filters.append("record_reference LIKE ? ESCAPE '\\'")
+            parameters.append(_escape_like_prefix(query.block_id_prefix) + "%")
+        if query.min_score is not None:
+            filters.append("anomaly_score IS NOT NULL AND anomaly_score >= ?")
+            parameters.append(query.min_score)
+
+        order_sql, keyset_sql, keyset_parameters = _result_page_keyset(query)
+        parameters.extend(keyset_parameters)
+        parameters.append(query.limit + 1)
+        sql = (
+            "SELECT * FROM anomaly_results WHERE "
+            + " AND ".join(filters)
+            + keyset_sql
+            + " "
+            + order_sql
+            + " LIMIT ?"
+        )
+        rows = self._all(sql, tuple(parameters))
+        next_cursor: str | None = None
+        if len(rows) > query.limit:
+            next_cursor = _encode_result_cursor(rows[query.limit - 1], query)
+            rows = rows[: query.limit]
+        return AnomalyResultPage(rows=rows, next_cursor=next_cursor)
+
     def list_running_analysis_run_ids(self) -> list[UUID]:
         """Return ids of analysis runs currently claimed as running."""
 
@@ -1198,6 +1264,149 @@ def _sqlite_path_from_url(database_url: str) -> Path:
     if not database_path or database_path == "/":
         raise RuntimeError("SQLite database URL must include a database path.")
     return Path(database_path).resolve()
+
+
+_RESULT_SORTS = frozenset({"score_desc", "block_id_asc"})
+_SCORE_DESC_ORDER = (
+    "ORDER BY CASE WHEN anomaly_score IS NULL THEN 1 ELSE 0 END ASC, "
+    "anomaly_score DESC, record_reference ASC, id ASC"
+)
+_BLOCK_ID_ASC_ORDER = "ORDER BY record_reference ASC, id ASC"
+_SCORE_DESC_AFTER_SCORED = (
+    " AND (anomaly_score IS NULL OR anomaly_score < ? "
+    "OR (anomaly_score = ? AND record_reference > ?) "
+    "OR (anomaly_score = ? AND record_reference = ? AND id > ?))"
+)
+_SCORE_DESC_AFTER_NULL = (
+    " AND anomaly_score IS NULL AND ("
+    "record_reference > ? OR (record_reference = ? AND id > ?))"
+)
+_BLOCK_ID_AFTER = (
+    " AND (record_reference > ? OR (record_reference = ? AND id > ?))"
+)
+_CURSOR_VERSION = 1
+
+
+@dataclass(frozen=True)
+class _CursorKey:
+    record_reference: str
+    row_id: str
+    score_is_null: bool = False
+    score: float | None = None
+
+
+def _escape_like_prefix(value: str) -> str:
+    """Treat a block-id prefix as a literal so `_` and `%` cannot wildcard-match."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _result_page_keyset(query: AnomalyResultPageQuery) -> tuple[str, str, list[object]]:
+    """Return a whitelisted ORDER BY, keyset predicate, and bound keyset values."""
+    if query.sort == "block_id_asc":
+        if query.cursor is None:
+            return _BLOCK_ID_ASC_ORDER, "", []
+        key = _decode_result_cursor(query.cursor, query)
+        return (
+            _BLOCK_ID_ASC_ORDER,
+            _BLOCK_ID_AFTER,
+            [key.record_reference, key.record_reference, key.row_id],
+        )
+    if query.cursor is None:
+        return _SCORE_DESC_ORDER, "", []
+    key = _decode_result_cursor(query.cursor, query)
+    if key.score_is_null:
+        return (
+            _SCORE_DESC_ORDER,
+            _SCORE_DESC_AFTER_NULL,
+            [key.record_reference, key.record_reference, key.row_id],
+        )
+    score = key.score
+    return (
+        _SCORE_DESC_ORDER,
+        _SCORE_DESC_AFTER_SCORED,
+        [score, score, key.record_reference, score, key.record_reference, key.row_id],
+    )
+
+
+def _encode_result_cursor(row: DatabaseRow, query: AnomalyResultPageQuery) -> str:
+    payload: dict[str, Any] = {
+        "block_id_prefix": query.block_id_prefix,
+        "id": str(row["id"]),
+        "min_score": query.min_score,
+        "record_reference": str(row["record_reference"]),
+        "sort": query.sort,
+        "v": _CURSOR_VERSION,
+    }
+    if query.sort == "score_desc":
+        score = row["anomaly_score"]
+        payload["score"] = None if score is None else float(score)
+        payload["score_is_null"] = score is None
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_result_cursor(cursor: str, query: AnomalyResultPageQuery) -> _CursorKey:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+    except (ValueError, json.JSONDecodeError, UnicodeError) as error:
+        raise ResultCursorError("Result cursor is invalid.") from error
+    if not isinstance(payload, dict):
+        raise ResultCursorError("Result cursor is invalid.")
+    expected_keys = {
+        "block_id_prefix",
+        "id",
+        "min_score",
+        "record_reference",
+        "sort",
+        "v",
+    }
+    if query.sort == "score_desc":
+        expected_keys.update({"score", "score_is_null"})
+    if set(payload) != expected_keys:
+        raise ResultCursorError("Result cursor is invalid.")
+    if payload.get("v") != _CURSOR_VERSION or payload.get("sort") != query.sort:
+        raise ResultCursorError("Result cursor is invalid.")
+    if payload.get("block_id_prefix") != query.block_id_prefix:
+        raise ResultCursorError("Result cursor is invalid.")
+    if payload.get("min_score") != query.min_score:
+        raise ResultCursorError("Result cursor is invalid.")
+    record_reference = payload.get("record_reference")
+    row_id = payload.get("id")
+    if not isinstance(record_reference, str) or not record_reference:
+        raise ResultCursorError("Result cursor is invalid.")
+    if not isinstance(row_id, str):
+        raise ResultCursorError("Result cursor is invalid.")
+    try:
+        UUID(row_id)
+    except ValueError as error:
+        raise ResultCursorError("Result cursor is invalid.") from error
+    if query.sort != "score_desc":
+        return _CursorKey(record_reference=record_reference, row_id=row_id)
+    score_is_null = payload.get("score_is_null")
+    if not isinstance(score_is_null, bool):
+        raise ResultCursorError("Result cursor is invalid.")
+    score = payload.get("score")
+    if score_is_null:
+        if score is not None:
+            raise ResultCursorError("Result cursor is invalid.")
+        return _CursorKey(
+            record_reference=record_reference,
+            row_id=row_id,
+            score_is_null=True,
+            score=None,
+        )
+    if not isinstance(score, (int, float)) or isinstance(score, bool):
+        raise ResultCursorError("Result cursor is invalid.")
+    numeric_score = float(score)
+    if not math.isfinite(numeric_score):
+        raise ResultCursorError("Result cursor is invalid.")
+    return _CursorKey(
+        record_reference=record_reference,
+        row_id=row_id,
+        score_is_null=False,
+        score=numeric_score,
+    )
 
 
 def _normalized_checksum(storage_kind: str, checksum: str | None) -> str | None:

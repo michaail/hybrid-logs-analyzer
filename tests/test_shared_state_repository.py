@@ -10,9 +10,11 @@ from uuid import UUID
 import pytest
 
 from src.api.storage import (
+    AnomalyResultPageQuery,
     ApiDatabase,
     DatabaseIntegrityError,
     DatasetPointerError,
+    ResultCursorError,
     RunStatusConflict,
     utc_now,
 )
@@ -582,3 +584,197 @@ def test_inference_execution_lookup_and_system_audit(tmp_path: Path) -> None:
         and event["actor_user_id"] is None
     ]
     assert len(system_events) == 2
+
+
+_ID_A = "00000000-0000-4000-8000-00000000000a"
+_ID_B = "00000000-0000-4000-8000-00000000000b"
+_ID_C = "00000000-0000-4000-8000-00000000000c"
+_ID_D = "00000000-0000-4000-8000-00000000000d"
+_ID_M = "00000000-0000-4000-8000-00000000000e"
+_ID_Z = "00000000-0000-4000-8000-00000000000f"
+_ID_A2 = "00000000-0000-4000-8000-000000000010"
+
+
+def _anomaly_row(
+    block_id: str,
+    score: float | None,
+    row_id: str,
+    *,
+    context: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        "id": row_id,
+        "record_reference": block_id,
+        "anomaly_score": score,
+        "anomaly_level": None if score is None else "anomaly",
+        "decision_threshold": 0.5,
+        "context": context or {},
+    }
+
+
+def _complete_anomalies(
+    database: ApiDatabase,
+    run_id: UUID,
+    user_id: UUID,
+    anomalies: list[dict[str, object]],
+    *,
+    normal_count: int = 3,
+) -> None:
+    database.transition_analysis_run(
+        run_id,
+        expected_status="queued",
+        next_status="running",
+        actor_user_id=user_id,
+    )
+    database.transition_analysis_run(
+        run_id,
+        expected_status="running",
+        next_status="completed",
+        actor_user_id=user_id,
+        results_summary_json=json.dumps(
+            {
+                "anomaly_count": len(anomalies),
+                "normal_count": normal_count,
+                "rejected_records": 0,
+                "invalid_records": 0,
+            },
+            sort_keys=True,
+        ),
+        anomaly_results=anomalies,
+    )
+
+
+def _page_rows(
+    database: ApiDatabase,
+    run_id: UUID,
+    *,
+    limit: int,
+    sort: str,
+    block_id_prefix: str | None = None,
+    min_score: float | None = None,
+    cursor: str | None = None,
+) -> tuple[list[str], str | None]:
+    page = database.list_anomaly_result_page(
+        run_id,
+        AnomalyResultPageQuery(
+            limit=limit,
+            sort=sort,
+            block_id_prefix=block_id_prefix,
+            min_score=min_score,
+            cursor=cursor,
+        ),
+    )
+    return [str(row["id"]) for row in page.rows], page.next_cursor
+
+
+def _walk_pages(
+    database: ApiDatabase,
+    run_id: UUID,
+    *,
+    limit: int,
+    sort: str,
+    block_id_prefix: str | None = None,
+    min_score: float | None = None,
+) -> list[str]:
+    seen: list[str] = []
+    cursor: str | None = None
+    used_cursors: set[str] = set()
+    while True:
+        ids, next_cursor = _page_rows(
+            database,
+            run_id,
+            limit=limit,
+            sort=sort,
+            block_id_prefix=block_id_prefix,
+            min_score=min_score,
+            cursor=cursor,
+        )
+        seen.extend(ids)
+        if next_cursor is None:
+            return seen
+        assert next_cursor not in used_cursors
+        used_cursors.add(next_cursor)
+        cursor = next_cursor
+
+
+def _seeded_anomaly_run(tmp_path: Path) -> tuple[ApiDatabase, UUID]:
+    database = _database(tmp_path)
+    project_id, user_id, model_id = _seed_model(database)
+    run_id = _queued_run(database, project_id, user_id, model_id)
+    _complete_anomalies(
+        database,
+        run_id,
+        user_id,
+        [
+            _anomaly_row("blk_c", 0.9, _ID_C),
+            _anomaly_row("blk_a", 0.9, _ID_A),
+            _anomaly_row("blk_a", 0.9, _ID_A2),
+            _anomaly_row("blk_b", 0.9, _ID_B),
+            _anomaly_row("blk_d", 0.4, _ID_D),
+            _anomaly_row("blkA1", 0.95, _ID_M),
+            _anomaly_row("blk_z", None, _ID_Z),
+        ],
+    )
+    return database, run_id
+
+
+def test_result_pages_are_stable_across_equal_scores_and_nulls(tmp_path: Path) -> None:
+    database, run_id = _seeded_anomaly_run(tmp_path)
+    score_order = [_ID_M, _ID_A, _ID_A2, _ID_B, _ID_C, _ID_D, _ID_Z]
+    assert _walk_pages(database, run_id, limit=2, sort="score_desc") == score_order
+    assert _walk_pages(database, run_id, limit=3, sort="score_desc") == score_order
+    block_order = [_ID_M, _ID_A, _ID_A2, _ID_B, _ID_C, _ID_D, _ID_Z]
+    assert _walk_pages(database, run_id, limit=2, sort="block_id_asc") == block_order
+
+
+def test_result_page_filters_and_cursor_validation(tmp_path: Path) -> None:
+    database, run_id = _seeded_anomaly_run(tmp_path)
+    prefix_ids, prefix_cursor = _page_rows(
+        database, run_id, limit=2, sort="score_desc", block_id_prefix="blk_"
+    )
+    assert prefix_ids == [_ID_A, _ID_A2]
+    assert prefix_cursor is not None
+    remaining, last_cursor = _page_rows(
+        database,
+        run_id,
+        limit=10,
+        sort="score_desc",
+        block_id_prefix="blk_",
+        cursor=prefix_cursor,
+    )
+    assert remaining == [_ID_B, _ID_C, _ID_D, _ID_Z]
+    assert last_cursor is None
+
+    min_ids, _next_cursor = _page_rows(
+        database, run_id, limit=10, sort="score_desc", min_score=0.9
+    )
+    assert min_ids == [_ID_M, _ID_A, _ID_A2, _ID_B, _ID_C]
+
+    first, next_cursor = _page_rows(database, run_id, limit=2, sort="score_desc")
+    assert first == [_ID_M, _ID_A]
+    assert next_cursor is not None
+    with pytest.raises(ResultCursorError):
+        _page_rows(
+            database,
+            run_id,
+            limit=2,
+            sort="block_id_asc",
+            cursor=next_cursor,
+        )
+    with pytest.raises(ResultCursorError):
+        _page_rows(
+            database,
+            run_id,
+            limit=2,
+            sort="score_desc",
+            min_score=0.9,
+            cursor=next_cursor,
+        )
+    with pytest.raises(ResultCursorError):
+        _page_rows(database, run_id, limit=2, sort="score_desc", cursor="not-a-cursor")
+    empty = database.list_anomaly_result_page(
+        run_id,
+        AnomalyResultPageQuery(limit=10, sort="block_id_asc", block_id_prefix="missing"),
+    )
+    assert empty.rows == []
+    assert empty.next_cursor is None

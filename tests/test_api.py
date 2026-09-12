@@ -1098,6 +1098,38 @@ def test_openapi_exposes_administration_lifecycle_without_legacy_user_create(
     assert "get" in paths[results_path]
     assert "post" not in paths[results_path]
     assert "patch" not in paths[results_path]
+    results_get = paths[results_path]["get"]
+    result_params = {item["name"] for item in results_get.get("parameters", []) if item.get("in") == "query"}
+    assert {"limit", "sort", "block_id_prefix", "min_score", "cursor"} <= result_params
+    result_schema = schema["components"]["schemas"]["AnalysisResultsResponse"]
+    assert result_schema.get("additionalProperties") is False
+    assert {
+        "run",
+        "summary",
+        "trace",
+        "anomalies",
+        "query",
+    } <= set(result_schema.get("required", []))
+    assert "next_cursor" in result_schema["properties"]
+    anomaly_schema = schema["components"]["schemas"]["HdfsAnomalyResult"]
+    assert {"block_id", "record_reference", "context"} <= set(anomaly_schema["properties"])
+    summary_schema = schema["components"]["schemas"]["AnalysisResultSummary"]
+    assert {
+        "anomaly_count",
+        "normal_count",
+        "rejected_records",
+        "invalid_records",
+    } <= set(summary_schema["properties"])
+    trace_schema = schema["components"]["schemas"]["AnalysisResultTrace"]
+    assert {
+        "model_identifier",
+        "version",
+        "model_version_id",
+        "pipeline_run_id",
+        "dataset_checksum",
+        "artifact_checksum",
+        "preprocessing_bundle",
+    } <= set(trace_schema["properties"])
     run_item = "/projects/{project_id}/analysis-runs/{analysis_run_id}"
     assert "patch" not in paths.get(run_item, {})
     assert "post" not in paths.get(run_item, {})
@@ -1495,3 +1527,209 @@ def test_exhausted_dispatch_preserves_queued_run(
         assert fetched.json()["error_code"] is None
         assert fetched.json()["completed_at"] is None
         assert calls["n"] == 2
+
+
+def _queued_v2_run(
+    api: ApiFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, dict[str, str], dict[str, Any], dict[str, Any], str]:
+    monkeypatch.setattr("src.api.main.dispatch_analysis_run", lambda *args, **kwargs: None)
+    client = api.client
+    administrator = _login(client, "admin")
+    project = _create_project(client, administrator, "incident-results")
+    operator = _provision_project_account(
+        client, administrator, "operator-results", str(project["id"]), "operator"
+    )
+    _provision_project_account(
+        client, administrator, "publisher-results", str(project["id"]), "publisher"
+    )
+    publisher_headers = _login(client, "publisher-results")
+    operator_headers = _login(client, "operator-results")
+    package_zip, bundle_zip = _v2_zips(api.workspace)
+    registration = _register(client, publisher_headers, project["id"], package_zip, bundle_zip)
+    assert registration.status_code == 201, registration.text
+    publication = client.post(
+        f"/projects/{project['id']}/models/{registration.json()['id']}/publish",
+        headers=publisher_headers,
+    )
+    assert publication.status_code == 200, publication.text
+    uploaded = _upload_log(client, operator_headers, project["id"])
+    analysis = client.post(
+        f"/projects/{project['id']}/analysis-runs",
+        headers=operator_headers,
+        json={
+            "model_version_id": registration.json()["id"],
+            "dataset_id": uploaded.json()["id"],
+        },
+    )
+    assert analysis.status_code == 202, analysis.text
+    return client, operator_headers, project, registration.json(), str(operator["id"])
+
+
+def _complete_run_results(
+    api: ApiFixture,
+    run_id: str,
+    operator_id: str,
+    anomalies: list[dict[str, Any]],
+    *,
+    normal_count: int = 4,
+) -> None:
+    database = ApiDatabase(api.settings.database_url)
+    identifier = UUID(run_id)
+    actor = UUID(operator_id)
+    database.transition_analysis_run(
+        identifier,
+        expected_status="queued",
+        next_status="running",
+        actor_user_id=actor,
+    )
+    database.transition_analysis_run(
+        identifier,
+        expected_status="running",
+        next_status="completed",
+        actor_user_id=actor,
+        results_summary_json=json.dumps(
+            {
+                "anomaly_count": len(anomalies),
+                "normal_count": normal_count,
+                "rejected_records": 0,
+                "invalid_records": 0,
+            },
+            sort_keys=True,
+        ),
+        anomaly_results=anomalies,
+    )
+
+
+def test_result_pages_are_typed_project_scoped_and_keep_run_wide_summaries(
+    api: ApiFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, headers, project, model, operator_id = _queued_v2_run(api, monkeypatch)
+    run_id = client.get(
+        f"/projects/{project['id']}/analysis-runs",
+        headers=headers,
+    ).json()[0]["id"]
+    assert (
+        client.get(
+            f"/projects/{project['id']}/analysis-runs/{run_id}/results"
+        ).status_code
+        == 401
+    )
+    source_context = {
+        "matched_line_count": 37,
+        "window": "ignored",
+        "source_lines": [
+            {"line_number": 12, "raw": "<script>blk_a</script>"},
+            {"line_number": 18, "raw": "Receiving block blk_a"},
+        ],
+    }
+    _complete_run_results(
+        api,
+        run_id,
+        operator_id,
+        [
+            {
+                "id": "00000000-0000-4000-8000-00000000000a",
+                "record_reference": "blk_a",
+                "anomaly_score": 0.91,
+                "anomaly_level": "anomaly",
+                "decision_threshold": 0.5,
+                "context": source_context,
+            },
+            {
+                "id": "00000000-0000-4000-8000-00000000000b",
+                "record_reference": "blk_b",
+                "anomaly_score": 0.91,
+                "anomaly_level": "anomaly",
+                "decision_threshold": 0.5,
+                "context": {},
+            },
+            {
+                "id": "00000000-0000-4000-8000-00000000000c",
+                "record_reference": "blk_c",
+                "anomaly_score": 0.4,
+                "anomaly_level": "anomaly",
+                "decision_threshold": 0.5,
+                "context": {"matched_line_count": 1, "source_lines": []},
+            },
+        ],
+        normal_count=5,
+    )
+    first = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/results",
+        headers=headers,
+        params={"limit": 2, "sort": "score_desc"},
+    )
+    assert first.status_code == 200, first.text
+    payload = first.json()
+    assert payload["summary"] == {
+        "anomaly_count": 3,
+        "normal_count": 5,
+        "rejected_records": 0,
+        "invalid_records": 0,
+    }
+    assert payload["query"]["limit"] == 2
+    assert payload["query"]["sort"] == "score_desc"
+    assert payload["next_cursor"]
+    assert [item["block_id"] for item in payload["anomalies"]] == ["blk_a", "blk_b"]
+    assert payload["anomalies"][0]["block_id"] == payload["anomalies"][0]["record_reference"]
+    assert payload["anomalies"][0]["context"] == {
+        "matched_line_count": 37,
+        "source_lines": [
+            {"line_number": 12, "raw": "<script>blk_a</script>"},
+            {"line_number": 18, "raw": "Receiving block blk_a"},
+        ],
+    }
+    assert payload["anomalies"][1]["context"] == {"matched_line_count": 0, "source_lines": []}
+    assert payload["trace"]["model_identifier"] == model["model_identifier"]
+    assert payload["trace"]["version"] == model["version"]
+    assert payload["trace"]["model_version_id"] == model["id"]
+    assert payload["trace"]["pipeline_run_id"] == model["pipeline_run_id"]
+    assert payload["trace"]["artifact_checksum"] == model["artifact_sha256"]
+    assert payload["trace"]["preprocessing_bundle"] == model["preprocessing_bundle"]
+
+    second = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/results",
+        headers=headers,
+        params={"limit": 2, "sort": "score_desc", "cursor": payload["next_cursor"]},
+    )
+    assert second.status_code == 200, second.text
+    assert [item["block_id"] for item in second.json()["anomalies"]] == ["blk_c"]
+    assert second.json()["next_cursor"] is None
+    assert second.json()["summary"]["anomaly_count"] == 3
+
+    filtered = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/results",
+        headers=headers,
+        params={"min_score": 0.9, "block_id_prefix": "blk_a"},
+    )
+    assert filtered.status_code == 200, filtered.text
+    assert [item["block_id"] for item in filtered.json()["anomalies"]] == ["blk_a"]
+    assert filtered.json()["summary"]["anomaly_count"] == 3
+    assert filtered.json()["summary"]["normal_count"] == 5
+
+    mismatched = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/results",
+        headers=headers,
+        params={"sort": "block_id_asc", "cursor": payload["next_cursor"]},
+    )
+    assert mismatched.status_code == 422
+    unknown = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/results",
+        headers=headers,
+        params={"limit": 2, "unknown": "1"},
+    )
+    assert unknown.status_code == 422
+    too_large = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/results",
+        headers=headers,
+        params={"limit": 101},
+    )
+    assert too_large.status_code == 422
+    infinite = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/results",
+        headers=headers,
+        params={"min_score": "inf"},
+    )
+    assert infinite.status_code == 422

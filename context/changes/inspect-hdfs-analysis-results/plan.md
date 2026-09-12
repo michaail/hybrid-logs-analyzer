@@ -395,14 +395,14 @@ legacy-order rule.
 
 #### Automated
 
-- [ ] 1.1 Apply and verify the forward-only result-inspection index migration
-- [ ] 1.2 Cover deterministic repository paging, filtering, and cursor validation
-- [ ] 1.3 Cover typed result API contracts, summaries, and authorization
-- [ ] 1.4 Run focused Python linting, type checking, and tests
+- [x] 1.1 Apply and verify the forward-only result-inspection index migration
+- [x] 1.2 Cover deterministic repository paging, filtering, and cursor validation
+- [x] 1.3 Cover typed result API contracts, summaries, and authorization
+- [x] 1.4 Run focused Python linting, type checking, and tests
 
 #### Manual
 
-- [ ] 1.5 Inspect consecutive filtered API result pages and project-scoped provenance
+- [x] 1.5 Inspect consecutive filtered API result pages and project-scoped provenance
 
 ### Phase 2: Build the Operator result-inspection experience
 
