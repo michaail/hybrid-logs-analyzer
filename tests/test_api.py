@@ -1532,6 +1532,8 @@ def test_exhausted_dispatch_preserves_queued_run(
 def _queued_v2_run(
     api: ApiFixture,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    log_content: bytes = VALID_HDFS_LOG,
 ) -> tuple[TestClient, dict[str, str], dict[str, Any], dict[str, Any], str]:
     monkeypatch.setattr("src.api.main.dispatch_analysis_run", lambda *args, **kwargs: None)
     client = api.client
@@ -1553,7 +1555,7 @@ def _queued_v2_run(
         headers=publisher_headers,
     )
     assert publication.status_code == 200, publication.text
-    uploaded = _upload_log(client, operator_headers, project["id"])
+    uploaded = _upload_log(client, operator_headers, project["id"], content=log_content)
     analysis = client.post(
         f"/projects/{project['id']}/analysis-runs",
         headers=operator_headers,
@@ -1733,3 +1735,64 @@ def test_result_pages_are_typed_project_scoped_and_keep_run_wide_summaries(
         params={"min_score": "inf"},
     )
     assert infinite.status_code == 422
+
+
+def _hdfs_block_log(block_id: str, count: int) -> bytes:
+    lines = [
+        (
+            f"081109 {203615 + index:06d} {148 + index} INFO dfs.DataNode$DataXceiver: "
+            f"Receiving block {block_id} src: /10.0.0.1:50010 dest: /10.0.0.2:50010"
+        )
+        for index in range(count)
+    ]
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def test_result_pages_expand_capped_source_lines_from_the_dataset(
+    api: ApiFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log = _hdfs_block_log("blk_123", 23)
+    client, headers, project, _model, operator_id = _queued_v2_run(
+        api,
+        monkeypatch,
+        log_content=log,
+    )
+    run_id = client.get(
+        f"/projects/{project['id']}/analysis-runs",
+        headers=headers,
+    ).json()[0]["id"]
+    _complete_run_results(
+        api,
+        run_id,
+        operator_id,
+        [
+            {
+                "id": "00000000-0000-4000-8000-000000000021",
+                "record_reference": "blk_123",
+                "anomaly_score": 0.91,
+                "anomaly_level": "anomaly",
+                "decision_threshold": 0.5,
+                "context": {
+                    "matched_line_count": 23,
+                    "source_lines": [
+                        {"line_number": index + 1, "raw": f"capped-{index}"}
+                        for index in range(20)
+                    ],
+                },
+            }
+        ],
+    )
+    payload = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/results",
+        headers=headers,
+    )
+    assert payload.status_code == 200, payload.text
+    context = payload.json()["anomalies"][0]["context"]
+    assert context["matched_line_count"] == 23
+    assert len(context["source_lines"]) == 23
+    assert context["source_lines"][0]["line_number"] == 1
+    assert context["source_lines"][-1]["line_number"] == 23
+    assert "blk_123" in context["source_lines"][-1]["raw"]
+    assert context["source_lines"][0]["raw"].startswith("081109 203615")
+

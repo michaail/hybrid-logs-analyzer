@@ -395,26 +395,26 @@ legacy-order rule.
 
 #### Automated
 
-- [x] 1.1 Apply and verify the forward-only result-inspection index migration
-- [x] 1.2 Cover deterministic repository paging, filtering, and cursor validation
-- [x] 1.3 Cover typed result API contracts, summaries, and authorization
-- [x] 1.4 Run focused Python linting, type checking, and tests
+- [x] 1.1 Apply and verify the forward-only result-inspection index migration — 9096960
+- [x] 1.2 Cover deterministic repository paging, filtering, and cursor validation — 9096960
+- [x] 1.3 Cover typed result API contracts, summaries, and authorization — 9096960
+- [x] 1.4 Run focused Python linting, type checking, and tests — 9096960
 
 #### Manual
 
-- [x] 1.5 Inspect consecutive filtered API result pages and project-scoped provenance
+- [x] 1.5 Inspect consecutive filtered API result pages and project-scoped provenance — 9096960
 
 ### Phase 2: Build the Operator result-inspection experience
 
 #### Automated
 
-- [ ] 2.1 Pass frontend linting, TypeScript checking, and production build
-- [ ] 2.2 Compile the dialog against typed result context without unsafe raw HTML
+- [x] 2.1 Pass frontend linting, TypeScript checking, and production build
+- [x] 2.2 Compile the dialog against typed result context without unsafe raw HTML
 
 #### Manual
 
-- [ ] 2.3 Verify completed-run identity, provenance, scored context, and source-line labels
-- [ ] 2.4 Verify filters, ordering, pagination, empty, in-progress, failed, and responsive states
+- [x] 2.3 Verify completed-run identity, provenance, scored context, and source-line labels
+- [x] 2.4 Verify filters, ordering, pagination, empty, in-progress, failed, and responsive states
 
 ### Phase 3: Lock in behavior and operating guidance
 
