@@ -86,6 +86,7 @@ class PackageArchitecture(PackageModel):
     node_transformation: Literal["mlp", "linear"]
     edge_mean: list[float] | None = None
     edge_std: list[float] | None = None
+    feature_contract: Literal["notebook_raw_v1", "stabilized_v2"] = "stabilized_v2"
 
     @model_validator(mode="after")
     def _paired_normalization(self) -> PackageArchitecture:

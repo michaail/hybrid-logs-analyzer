@@ -178,6 +178,7 @@ def test_exporter_accepts_notebook_checkpoint_and_nested_metrics(tmp_path: Path)
     assert inspected.model_manifest.metrics.model_dump()["test_f1"] == 0.9320466425412143
     assert inspected.model_manifest.architecture.hidden_dim == 2
     assert inspected.model_manifest.architecture.node_dim == 2
+    assert inspected.model_manifest.architecture.feature_contract == "notebook_raw_v1"
     assert inspected.model_manifest.scoring.alpha == 1.0
 
 

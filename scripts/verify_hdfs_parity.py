@@ -14,12 +14,9 @@ import argparse
 import sys
 from pathlib import Path
 
-from src.modules.hdfs_parity import (
-    load_parity_expected,
-    load_test_block_ids,
-    verify_hdfs_release,
-)
-
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -69,10 +66,18 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from src.modules.hdfs_parity import (
+        load_parity_expected,
+        load_test_block_ids,
+        sha256_file,
+        verify_hdfs_release,
+    )
+
     args = _parse_args(argv)
     expected = load_parity_expected(args.expected)
     report_path = args.report or (args.expected.parent / "parity-report.json")
     test_block_ids = load_test_block_ids(args.test_block_ids) if args.test_block_ids else None
+    test_block_ids_sha256 = sha256_file(args.test_block_ids) if args.test_block_ids else None
     report = verify_hdfs_release(
         model_package=args.model_package,
         preprocessing_bundle=args.preprocessing_bundle,
@@ -81,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         expected=expected,
         report_path=report_path,
         test_block_ids=test_block_ids,
+        test_block_ids_sha256=test_block_ids_sha256,
     )
     status = "passed" if report["passed"] else "failed"
     print(f"HDFS parity {status}. Report: {report_path}")

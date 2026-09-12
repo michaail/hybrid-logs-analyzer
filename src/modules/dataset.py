@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+HdfsFeatureContract = Literal["notebook_raw_v1", "stabilized_v2"]
 
 
 class MissingClusterEmbedding(ValueError):
@@ -139,6 +140,7 @@ def build_pyg_dataset(
     dataset: str = "bgl",
     missing_embedding: Literal["zero", "fail"] = "zero",
     on_graph_error: Literal["skip", "fail"] = "skip",
+    hdfs_feature_contract: HdfsFeatureContract = "stabilized_v2",
 ) -> list:
     """Convert sequences to a list of :class:`torch_geometric.data.Data` objects.
 
@@ -155,6 +157,10 @@ def build_pyg_dataset(
     dataset : str
         ``"bgl"`` (uses ``unix_ts`` + ``window_id``) or
         ``"hdfs"`` (uses ``timestamp`` + ``block_id``).
+    hdfs_feature_contract : str
+        HDFS feature encoding declared by the model package. ``"notebook_raw_v1"``
+        preserves the approved Colab baseline; ``"stabilized_v2"`` uses the
+        current log-scaled feature construction.
 
     Returns
     -------
@@ -188,6 +194,7 @@ def build_pyg_dataset(
                 use_edge_features=use_edge_features,
                 dataset=dataset,
                 missing_embedding=missing_embedding,
+                hdfs_feature_contract=hdfs_feature_contract,
             )
             all_data.append(data)
         except MissingClusterEmbedding:
@@ -297,6 +304,7 @@ def _seq_to_pyg(
     use_edge_features: bool,
     dataset: str,
     missing_embedding: Literal["zero", "fail"] = "zero",
+    hdfs_feature_contract: HdfsFeatureContract = "stabilized_v2",
 ):
     """Convert a single sequence DataFrame to a PyG Data object."""
     import torch
@@ -336,11 +344,18 @@ def _seq_to_pyg(
         pos = np.array(node_positions[cid])
 
         node_feats[idx, :embed_dim] = emb
-        # log1p-scale count features to compress dynamic range
-        node_feats[idx, embed_dim + 0] = float(np.log1p(node_count[cid]))
-        node_feats[idx, embed_dim + 1] = float(np.log1p(len(node_params[cid])))
-        node_feats[idx, embed_dim + 2] = float(np.log1p(abs(np.mean(nums)))) if nums else 0.0
-        node_feats[idx, embed_dim + 3] = float(np.log1p(abs(np.max(nums)))) if nums else 0.0
+        if dataset.lower() == "hdfs" and hdfs_feature_contract == "notebook_raw_v1":
+            node_feats[idx, embed_dim + 0] = float(node_count[cid])
+            node_feats[idx, embed_dim + 1] = float(len(node_params[cid]))
+            node_feats[idx, embed_dim + 2] = float(np.mean(nums)) if nums else 0.0
+            node_feats[idx, embed_dim + 3] = float(np.max(nums)) if nums else 0.0
+        else:
+            node_feats[idx, embed_dim + 0] = float(np.log1p(node_count[cid]))
+            node_feats[idx, embed_dim + 1] = float(np.log1p(len(node_params[cid])))
+            node_feats[idx, embed_dim + 2] = (
+                float(np.log1p(abs(np.mean(nums)))) if nums else 0.0
+            )
+            node_feats[idx, embed_dim + 3] = float(np.log1p(abs(np.max(nums)))) if nums else 0.0
         node_feats[idx, embed_dim + 4] = float(pos.min())
         node_feats[idx, embed_dim + 5] = float(pos.max())
         node_feats[idx, embed_dim + 6] = float(pos.mean())
@@ -364,9 +379,12 @@ def _seq_to_pyg(
         t_src, t_dst = ts[i], ts[i + 1]
         if t_src is not None and t_dst is not None:
             try:
-                delta = float(t_dst) - float(t_src)
+                if dataset.lower() == "hdfs" and hdfs_feature_contract == "notebook_raw_v1":
+                    delta = (t_dst - t_src).total_seconds()
+                else:
+                    delta = float(t_dst) - float(t_src)
                 edge_deltas[(src, dst)].append(delta)
-            except (TypeError, ValueError):
+            except (AttributeError, TypeError, ValueError):
                 if (src, dst) not in edge_deltas:
                     edge_deltas[(src, dst)]
         elif (src, dst) not in edge_deltas:
@@ -380,20 +398,36 @@ def _seq_to_pyg(
 
         if use_edge_features:
             ef = np.zeros(edge_dim, dtype=np.float32)
-            ef[0] = float(np.log1p(len(s_pos)))
-            if deltas:
-                arr = np.clip(np.array(deltas, dtype=np.float64), 0.0, None)
-                ef[1] = float(np.log1p(arr.min()))
-                ef[2] = float(np.log1p(np.percentile(arr, 25)))
-                ef[3] = float(np.log1p(np.median(arr)))
-                ef[4] = float(np.log1p(np.percentile(arr, 75)))
-                ef[5] = float(np.log1p(arr.max()))
-                ef[6] = float(np.log1p(arr.std()))
+            if dataset.lower() == "hdfs" and hdfs_feature_contract == "notebook_raw_v1":
+                ef[0] = float(len(s_pos))
+                if deltas:
+                    arr = np.array(deltas, dtype=np.float64)
+                    ef[1] = float(arr.min())
+                    ef[2] = float(np.percentile(arr, 25))
+                    ef[3] = float(np.median(arr))
+                    ef[4] = float(np.percentile(arr, 75))
+                    ef[5] = float(arr.max())
+                    ef[6] = float(arr.std())
+                else:
+                    ef[1:7] = [-1, -1, -1, -1, -1, 0]
+            else:
+                ef[0] = float(np.log1p(len(s_pos)))
+                if deltas:
+                    arr = np.clip(np.array(deltas, dtype=np.float64), 0.0, None)
+                    ef[1] = float(np.log1p(arr.min()))
+                    ef[2] = float(np.log1p(np.percentile(arr, 25)))
+                    ef[3] = float(np.log1p(np.median(arr)))
+                    ef[4] = float(np.log1p(np.percentile(arr, 75)))
+                    ef[5] = float(np.log1p(arr.max()))
+                    ef[6] = float(np.log1p(arr.std()))
             ef[7] = float(s_pos.mean())
             ef[8] = float(d_pos.mean())
             ef[9] = float((d_pos - s_pos).mean())
         else:
-            ef = np.array([float(np.log1p(len(s_pos)))], dtype=np.float32)
+            if dataset.lower() == "hdfs" and hdfs_feature_contract == "notebook_raw_v1":
+                ef = np.array([float(len(s_pos))], dtype=np.float32)
+            else:
+                ef = np.array([float(np.log1p(len(s_pos)))], dtype=np.float32)
 
         src_list.append(cid_to_idx[src])
         dst_list.append(cid_to_idx[dst])

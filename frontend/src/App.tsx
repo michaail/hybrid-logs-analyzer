@@ -232,11 +232,14 @@ export default function App() {
     }
   }
 
-  async function registerModel(packageFile: File): Promise<void> {
+  async function registerModel(
+    packageFile: File,
+    preprocessingBundleFile: File | null,
+  ): Promise<void> {
     if (!selectedProject) {
       return;
     }
-    const created = await api.registerModel(selectedProject.id, packageFile);
+    const created = await api.registerModel(selectedProject.id, packageFile, preprocessingBundleFile);
     await refreshProjectData(selectedProject.id);
     setNotice(`${created.model_identifier} ${created.version} was registered as eligible.`);
   }
@@ -1235,9 +1238,10 @@ function ModelRegistrationDialog({
 }: {
   projectName: string;
   onClose: () => void;
-  onRegister: (packageFile: File) => Promise<void>;
+  onRegister: (packageFile: File, preprocessingBundleFile: File | null) => Promise<void>;
 }): JSX.Element {
   const [packageFile, setPackageFile] = useState<File | null>(null);
+  const [preprocessingBundleFile, setPreprocessingBundleFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -1250,7 +1254,7 @@ function ModelRegistrationDialog({
     setError(null);
     setIsSubmitting(true);
     try {
-      await onRegister(packageFile);
+      await onRegister(packageFile, preprocessingBundleFile);
       onClose();
     } catch (submissionError) {
       setError(messageFor(submissionError));
@@ -1281,6 +1285,17 @@ function ModelRegistrationDialog({
           />
           <span className="file-field-name">
             {packageFile ? packageFile.name : "No ZIP selected"}
+          </span>
+        </label>
+        <label className="file-field">
+          Preprocessing-bundle ZIP (required for v2)
+          <input
+            accept=".zip,application/zip,application/x-zip-compressed"
+            onChange={(event) => setPreprocessingBundleFile(event.target.files?.[0] ?? null)}
+            type="file"
+          />
+          <span className="file-field-name">
+            {preprocessingBundleFile ? preprocessingBundleFile.name : "No bundle ZIP selected"}
           </span>
         </label>
         <div className="dialog-actions">

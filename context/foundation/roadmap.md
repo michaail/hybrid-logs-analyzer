@@ -3,7 +3,7 @@ project: "Log Anomaly Detection System"
 version: 1
 status: draft
 created: 2026-09-09
-updated: 2026-09-11
+updated: 2026-09-12
 prd_version: 1
 main_goal: speed
 top_blocker: decisions
@@ -25,12 +25,14 @@ milestone_status: open
 - **Intent:** Deliver the first protected workflow in which a Publisher can make an
   HDFS-compatible pretrained model available and an Operator can use it to analyze
   HDFS logs. It establishes the traceability and project boundaries needed for the
-  workflow without adding training or additional log sources.
+  workflow without adding training or additional log sources. Finalized anomaly
+  results remain separate from provisional results when a block history is incomplete.
 - **Source materials:** `context/foundation/prd.md` (v1); technical-stack contract
   used as supplementary context.
 - **Done when:** every F-NN and S-NN below is `done`, and a Publisher can publish an
-  eligible HDFS model that an authorized Operator can use to inspect traceable results.
-- **Scope anchors:** US-01, US-02; FR-001–FR-008, FR-010, FR-011.
+  eligible HDFS model that an authorized Operator can use to inspect traceable,
+  finalized results without provisional block histories cluttering anomalies.
+- **Scope anchors:** US-01, US-02, US-03; FR-001–FR-008, FR-010–FR-013.
 
 ## Vision recap
 
@@ -39,6 +41,8 @@ pretrained anomaly-detection model or analyze new logs. This milestone turns the
 proven HDFS analysis path into a repeatable web workflow while keeping notebooks
 available for research and comparison. The workflow must preserve agreed notebook
 evaluation results, isolate every project, and make model and run actions traceable.
+Incomplete HDFS block histories must remain provisional rather than becoming final
+anomaly decisions.
 
 ## North star
 
@@ -55,11 +59,13 @@ controlled model lifecycle that every later analysis run requires.
 | --- | --- | --- | --- | --- | --- |
 | F-01 | shared-durable-runtime-state | (foundation) Model, run, and result records have a minimal shared, durable ownership and version boundary for the deployed workflow. | — | FR-006, FR-008 | done |
 | F-02 | trusted-model-package-contract | (foundation) A declared, non-executable model-package contract is checked before a model can enter the workflow; it does not run the model itself. | — | FR-002, FR-003, FR-004, FR-008 | done |
+| F-03 | complete-hdfs-block-evaluation-data | (foundation) Complete HDFS block histories are available as reproducible evaluation inputs. | — | FR-013 | blocked |
 | S-01 | provision-project-accounts | An administrator can provision a project-authorized Operator or Publisher account without public sign-up. | — | FR-001, FR-008 | done |
 | S-02 | publish-hdfs-model-package | A Publisher can upload a complete HDFS-compatible model package, receive a clear rejection when ineligible, and explicitly publish the eligible version. | F-01, F-02, S-01 | US-01, FR-002, FR-003, FR-004, FR-008 | done |
 | S-03 | intake-hdfs-dataset | An Operator can upload or select an HDFS dataset and receive a clear whole-dataset acceptance or rejection result. | F-01, S-01 | US-02, FR-005, FR-008 | done |
 | S-04 | run-parity-hdfs-analysis | An Operator can start asynchronous analysis of an HDFS dataset with a compatible, published same-project model and see a terminal run status. | F-01, F-02, S-02, S-03 | US-02, FR-006, FR-010, FR-011 | in-progress |
 | S-05 | inspect-hdfs-analysis-results | An Operator can inspect traceable detected anomalies and summaries for normal, rejected, and invalid outcomes. | S-04 | US-02, FR-007, FR-008 | proposed |
+| S-06 | separate-provisional-hdfs-results | An Operator can distinguish finalized anomalies from provisional incomplete HDFS block histories. | F-03, S-04, S-05 | US-03, FR-012 | proposed |
 
 ## Streams
 
@@ -72,6 +78,7 @@ across parallel tracks.
 | A | Durable analysis flow | `F-01` → `S-03` → `S-04` → `S-05` | Joins Stream B at `S-04`; keeps the operator path focused on the launch goal. |
 | B | Trusted model availability | `F-02` → `S-02` | Joins Stream A at `S-04`; resolves the model-entry decision before use. |
 | C | Account access | `S-01` | Enables the protected roles consumed by Streams A and B. |
+| D | Complete-history assurance | `F-03` → `S-06` | Joins Stream A at `S-05`; prevents incomplete block histories from becoming final anomaly decisions. |
 
 ## Baseline
 
@@ -122,6 +129,22 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
   deserialize untrusted model code.
 - **Status:** done
 
+### F-03: Complete HDFS block evaluation data
+
+- **Outcome:** (foundation) Complete HDFS block histories are available as reproducible evaluation inputs.
+- **Change ID:** complete-hdfs-block-evaluation-data
+- **PRD refs:** FR-013
+- **Unlocks:** S-06; complete-history verification for HDFS analysis results
+- **Prerequisites:** —
+- **Parallel with:** S-04
+- **Blockers:** —
+- **Unknowns:**
+  - What deterministic evidence establishes a complete HDFS block history? — Owner: user.
+    Block: yes.
+- **Risk:** A weak completeness rule can either suppress short genuine anomalies or allow
+  incomplete normal histories to create false anomaly decisions.
+- **Status:** blocked
+
 ## Slices
 
 ### S-01: Provision project accounts
@@ -168,6 +191,7 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 - **Outcome:** An Operator can start asynchronous analysis of an HDFS dataset with a compatible, published same-project model and see a terminal run status.
 - **Change ID:** run-parity-hdfs-analysis
 - **PRD refs:** US-02, FR-006, FR-010, FR-011
+- **Notes:** Does not implement US-03 / FR-012 / FR-013; those belong to F-03 / S-06.
 - **Prerequisites:** F-01, F-02, S-02, S-03
 - **Parallel with:** —
 - **Blockers:** —
@@ -191,17 +215,33 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
   project's runs, models, or data.
 - **Status:** proposed
 
+### S-06: Separate provisional HDFS results
+
+- **Outcome:** An Operator can distinguish finalized anomalies from provisional incomplete
+  HDFS block histories.
+- **Change ID:** separate-provisional-hdfs-results
+- **PRD refs:** US-03, FR-012
+- **Prerequisites:** F-03, S-04, S-05
+- **Parallel with:** —
+- **Blockers:** —
+- **Unknowns:** —
+- **Risk:** Provisional block context must remain visible without presenting its score as a
+  final anomaly decision or including it in finalized result counts.
+- **Status:** proposed
+
 ## Backlog Handoff
 
 | Roadmap ID | Change ID | Suggested issue title | Ready for `/10x-plan` | Notes |
 | --- | --- | --- | --- | --- |
 | F-01 | shared-durable-runtime-state | Establish shared durable runtime state | yes | Directly unlocks the selected model-publication slice. |
 | F-02 | trusted-model-package-contract | Define the trusted model-package contract | yes | Artifact weight is a pretrained PyTorch `.pt` file. |
+| F-03 | complete-hdfs-block-evaluation-data | Create complete HDFS block evaluation data | no | Blocked by the completeness-policy decision. |
 | S-01 | provision-project-accounts | Provision project-authorized accounts | yes | Keep administrator-provisioned accounts; no public sign-up. |
 | S-02 | publish-hdfs-model-package | Publish an HDFS-compatible model package | no | Depends on F-01, F-02, and S-01. |
 | S-03 | intake-hdfs-dataset | Intake and validate an HDFS dataset | no | Depends on F-01 and S-01. |
 | S-04 | run-parity-hdfs-analysis | Run parity-preserving HDFS analysis | no | Depends on the selected model and dataset paths plus the parity baseline. |
 | S-05 | inspect-hdfs-analysis-results | Inspect traceable HDFS results | no | Depends on S-04. |
+| S-06 | separate-provisional-hdfs-results | Separate provisional HDFS results | no | Depends on complete-history evaluation data and existing result presentation. |
 
 ## Open Roadmap Questions
 
@@ -217,6 +257,8 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 4. **Which notebook and configuration form the agreed parity baseline? (resolved 2026-09-09)** — Owner:
    user. Block: S-04. - This will be provided in due course as the baseline models needs to be trained first
 5. **What is the current user scale of the notebook system? (resolved 2026-09-09)** — One user, same as admin, owner of the solution and infrastructure
+6. **What deterministic evidence establishes that an HDFS block history is complete?** — Owner:
+   user. Block: F-03, S-06.
 
 ## Parked
 

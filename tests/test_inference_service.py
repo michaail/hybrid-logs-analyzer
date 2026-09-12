@@ -257,6 +257,7 @@ def _seed_queued_job(
                 "format": PACKAGE_FORMAT_V2,
                 "architecture": architecture,
                 "scoring": package_manifest["scoring"],
+                "preprocessing_bundle": package_manifest["preprocessing_bundle"],
             },
             sort_keys=True,
         ),
@@ -371,3 +372,137 @@ def test_checksum_mismatch_fails_before_load(tmp_path: Path) -> None:
     failed = database.get_analysis_run(run_id)
     assert failed is not None
     assert failed["error_code"] == "MODEL_LOAD_FAILED"
+
+
+@pytest.mark.ml
+def test_manifest_bundle_binding_mismatch_fails_before_load(tmp_path: Path) -> None:
+    client, run_id, database = _seed_queued_job(tmp_path)
+    job = database.get_inference_execution(run_id)
+    assert job is not None
+    store = FilesystemObjectStore(_settings(tmp_path).object_store_root)
+    manifest_key = f"{job['model_package_reference']}/{MANIFEST_NAME}"
+    manifest = json.loads(store.get(manifest_key))
+    manifest["preprocessing_bundle"]["identifier"] = "substituted-bundle"
+    store.put(manifest_key, json.dumps(manifest).encode("utf-8"))
+
+    executed = client.post(f"/internal/analysis-runs/{run_id}/execute", headers=_auth())
+
+    assert executed.status_code == 200, executed.text
+    assert executed.json()["status"] == "failed"
+    failed = database.get_analysis_run(run_id)
+    assert failed is not None
+    assert failed["error_code"] == "MODEL_LOAD_FAILED"
+
+
+def _queued_run_record(database: ApiDatabase) -> UUID:
+    project = database.create_project("stale-running")
+    user = database.create_user(
+        username="operator",
+        password_hash="x",
+        is_administrator=False,
+    )
+    model = database.create_model_version(
+        project_id=UUID(str(project["id"])),
+        model_identifier="attribute-gae",
+        version="stale",
+        pipeline_run_id="baseline",
+        artifact_reference="outputs/hdfs/baseline/attribute_gae.pt",
+        package_reference="packages/hdfs/attribute-gae-v1",
+        artifact_sha256="0" * 64,
+        metrics_json="{}",
+        metadata_json="{}",
+        external_evaluation_evidence="evidence",
+        actor_user_id=UUID(str(user["id"])),
+    )
+    dataset = database.upsert_dataset(
+        project_id=UUID(str(project["id"])),
+        storage_kind="workspace",
+        object_reference="data/stored-hdfs.log",
+        checksum=None,
+        actor_user_id=UUID(str(user["id"])),
+    )
+    run = database.create_analysis_run(
+        project_id=UUID(str(project["id"])),
+        model_version_id=UUID(str(model["id"])),
+        requested_by_user_id=UUID(str(user["id"])),
+        log_reference="data/stored-hdfs.log",
+        status="queued",
+        validation_report_json="{}",
+        error_code=None,
+        completed_at=None,
+        actor_user_id=UUID(str(user["id"])),
+        dataset_id=UUID(str(dataset["id"])),
+    )
+    return UUID(str(run["id"]))
+
+
+def _claim_running(database: ApiDatabase, run_id: UUID) -> None:
+    database.transition_analysis_run(
+        run_id,
+        expected_status="queued",
+        next_status="running",
+        actor_user_id=None,
+    )
+
+
+def _backdate_running_audit(database: ApiDatabase, run_id: UUID) -> None:
+    with database.session() as connection:
+        connection.execute(
+            """
+            UPDATE audit_events
+            SET created_at = ?
+            WHERE resource_type = ? AND resource_id = ? AND action = ?
+            """,
+            (
+                "2000-01-01T00:00:00+00:00",
+                "analysis_run",
+                str(run_id),
+                "analysis.running",
+            ),
+        )
+
+
+def test_stale_running_execute_fails_without_scoring(tmp_path: Path) -> None:
+    client, _settings, database = _client(tmp_path)
+    run_id = _queued_run_record(database)
+    _claim_running(database, run_id)
+    _backdate_running_audit(database, run_id)
+
+    executed = client.post(f"/internal/analysis-runs/{run_id}/execute", headers=_auth())
+
+    assert executed.status_code == 200, executed.text
+    assert executed.json()["status"] == "failed"
+    failed = database.get_analysis_run(run_id)
+    assert failed is not None
+    assert failed["error_code"] == "INFERENCE_FAILED"
+    assert "could not complete" in str(failed["validation_report_json"])
+
+
+def test_fresh_running_execute_is_noop(tmp_path: Path) -> None:
+    client, _settings, database = _client(tmp_path)
+    run_id = _queued_run_record(database)
+    _claim_running(database, run_id)
+
+    executed = client.post(f"/internal/analysis-runs/{run_id}/execute", headers=_auth())
+
+    assert executed.status_code == 200, executed.text
+    assert executed.json()["status"] == "running"
+    current = database.get_analysis_run(run_id)
+    assert current is not None
+    assert current["status"] == "running"
+    assert current["error_code"] is None
+
+
+def test_health_reclaims_stale_running_runs(tmp_path: Path) -> None:
+    client, _settings, database = _client(tmp_path)
+    run_id = _queued_run_record(database)
+    _claim_running(database, run_id)
+    _backdate_running_audit(database, run_id)
+
+    health = client.get("/health")
+
+    assert health.status_code == 200
+    failed = database.get_analysis_run(run_id)
+    assert failed is not None
+    assert failed["status"] == "failed"
+    assert failed["error_code"] == "INFERENCE_FAILED"

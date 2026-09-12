@@ -22,6 +22,9 @@ from src.modules.model_package import MANIFEST_NAME, ModelPackageManifest, unpac
 
 METRIC_TOLERANCE = 0.01
 METRIC_NAMES = ("test_f1", "test_pr_auc", "test_roc_auc")
+PARITY_SHARD_MAX_BLOCKS = 1_000
+PARITY_SHARD_MAX_SOURCE_LINES = 50_000
+PARITY_SCORE_BATCH_SIZE = 128
 
 
 class ParityError(ValueError):
@@ -47,13 +50,19 @@ class ParityExpected(BaseModel):
     checksums: dict[str, str]
     metrics: ParityMetrics
     test_block_ids: list[str] | None = None
+    test_block_ids_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    test_block_count: int | None = Field(default=None, gt=0)
     metric_tolerance: float = Field(default=METRIC_TOLERANCE, gt=0)
 
 
 def sha256_file(path: Path) -> str:
     """Return the SHA-256 hex digest of a regular file."""
 
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def load_parity_expected(path: Path) -> ParityExpected:
@@ -258,6 +267,203 @@ def write_zip(source_dir: Path, destination: Path) -> None:
                 archive.write(path, arcname=path.name)
 
 
+def _strictly_count_selected_block_lines(
+    *,
+    corpus: Path,
+    bundle_dir: Path,
+    selected_block_ids: Sequence[str],
+) -> tuple[int, int, dict[str, int]]:
+    """Validate all non-empty source lines and count records for selected blocks."""
+
+    from src.modules.parser.drain_parser import DrainParser
+
+    selected = set(selected_block_ids)
+    parser_path = bundle_dir / DRAIN_PARSER_NAME
+    config_path = bundle_dir / DRAIN_CONFIG_NAME
+    try:
+        parser = DrainParser.load(str(parser_path), config_path=str(config_path))
+    except Exception as error:
+        raise ParityError("Unable to load the frozen Drain parser for full-corpus validation.") from error
+
+    source_line_count = 0
+    selected_line_counts = {block_id: 0 for block_id in selected_block_ids}
+    with corpus.open("r", encoding="utf-8", errors="replace") as handle:
+        for line_number, raw in enumerate(handle, start=1):
+            line = raw.rstrip("\n")
+            if not line:
+                continue
+            source_line_count += 1
+            content = parser._preprocess_line(line, parser._HEADER_TOKENS)
+            if parser.miner.match(content) is None:
+                raise ParityError(
+                    f"Frozen parser did not match baseline corpus line {line_number}."
+                )
+            block_id = parser.extract_hdfs_block_id(line)
+            if block_id is not None and block_id in selected:
+                selected_line_counts[block_id] += 1
+    return source_line_count, source_line_count, selected_line_counts
+
+
+def _partition_test_block_ids(
+    *,
+    test_block_ids: Sequence[str],
+    selected_line_counts: Mapping[str, int],
+) -> list[list[str]]:
+    """Partition complete test blocks below both production scorer limits."""
+
+    from src.modules.hdfs_inference import MAX_BLOCKS, MAX_SOURCE_LINES
+
+    source_line_limit = min(MAX_SOURCE_LINES, PARITY_SHARD_MAX_SOURCE_LINES)
+    block_limit = min(MAX_BLOCKS, PARITY_SHARD_MAX_BLOCKS)
+    partitions: list[list[str]] = []
+    current_partition: list[str] = []
+    current_line_count = 0
+    for block_id in test_block_ids:
+        line_count = selected_line_counts.get(block_id, 0)
+        if line_count == 0:
+            raise ParityError(f"Test block {block_id} has no log lines in the baseline corpus.")
+        if line_count > source_line_limit:
+            raise ParityError(
+                f"Test block {block_id} exceeds the controlled parity source-line limit."
+            )
+        exceeds_block_limit = len(current_partition) >= block_limit
+        exceeds_source_limit = current_line_count + line_count > source_line_limit
+        if current_partition and (exceeds_block_limit or exceeds_source_limit):
+            partitions.append(current_partition)
+            current_partition = []
+            current_line_count = 0
+        current_partition.append(block_id)
+        current_line_count += line_count
+    if current_partition:
+        partitions.append(current_partition)
+    return partitions
+
+
+def _write_test_shards(
+    *,
+    corpus: Path,
+    partitions: Sequence[Sequence[str]],
+    destination: Path,
+) -> list[Path]:
+    """Materialize complete selected-block histories into bounded temporary files."""
+
+    from src.modules.parser.drain_parser import DrainParser
+
+    destination.mkdir(parents=True, exist_ok=True)
+    block_to_shard = {
+        block_id: shard_index
+        for shard_index, partition in enumerate(partitions)
+        for block_id in partition
+    }
+    paths = [destination / f"test-shard-{index:03d}.log" for index in range(len(partitions))]
+    handles = [path.open("w", encoding="utf-8") for path in paths]
+    try:
+        with corpus.open("r", encoding="utf-8", errors="replace") as source:
+            for raw in source:
+                line = raw.rstrip("\n")
+                block_id = DrainParser.extract_hdfs_block_id(line)
+                if block_id is None:
+                    continue
+                shard_index = block_to_shard.get(block_id)
+                if shard_index is not None:
+                    handles[shard_index].write(line + "\n")
+    finally:
+        for handle in handles:
+            handle.close()
+    return paths
+
+
+def _score_selected_test_blocks(
+    *,
+    corpus: Path,
+    manifest: ModelPackageManifest,
+    bundle_dir: Path,
+    artifact_path: Path,
+    test_block_ids: Sequence[str],
+    destination: Path,
+) -> tuple[dict[str, float], dict[str, int]]:
+    """Strictly validate a full corpus and score its complete test blocks in shards."""
+
+    if len(test_block_ids) != len(set(test_block_ids)):
+        raise ParityError("The parity test-block ID list contains duplicates.")
+    source_line_count, annotated_line_count, selected_line_counts = _strictly_count_selected_block_lines(
+        corpus=corpus,
+        bundle_dir=bundle_dir,
+        selected_block_ids=test_block_ids,
+    )
+    partitions = _partition_test_block_ids(
+        test_block_ids=test_block_ids,
+        selected_line_counts=selected_line_counts,
+    )
+    shard_paths = _write_test_shards(
+        corpus=corpus,
+        partitions=partitions,
+        destination=destination,
+    )
+
+    from src.modules.hdfs_inference import score_frozen_hdfs_log
+
+    scores_by_block: dict[str, float] = {}
+    for shard_path in shard_paths:
+        scored = score_frozen_hdfs_log(
+            manifest=manifest,
+            bundle_dir=bundle_dir,
+            log_path=shard_path,
+            artifact_path=artifact_path,
+            batch_size=PARITY_SCORE_BATCH_SIZE,
+        )
+        for block in scored.blocks:
+            if block.block_id not in selected_line_counts:
+                raise ParityError(f"Parity shard scored unexpected block {block.block_id}.")
+            if block.block_id in scores_by_block:
+                raise ParityError(f"Parity shard scored block {block.block_id} more than once.")
+            scores_by_block[block.block_id] = block.score
+    missing_scored_blocks = [block_id for block_id in test_block_ids if block_id not in scores_by_block]
+    if missing_scored_blocks:
+        raise ParityError(
+            f"{len(missing_scored_blocks)} selected test blocks were not scored by the release."
+        )
+    return scores_by_block, {
+        "source_line_count": source_line_count,
+        "annotated_line_count": annotated_line_count,
+        "n_shards": len(shard_paths),
+    }
+
+
+def _verify_test_split(
+    *,
+    expected: ParityExpected,
+    test_block_ids: Sequence[str] | None,
+    test_block_ids_sha256: str | None,
+) -> tuple[dict[str, Any], bool]:
+    """Verify the supplied split's declared order, count, and optional digest."""
+
+    actual_count = None if test_block_ids is None else len(test_block_ids)
+    expected_ids = expected.test_block_ids
+    expected_count = expected.test_block_count
+    expected_checksum = expected.test_block_ids_sha256
+    content_matches = expected_ids is None or test_block_ids is None or list(test_block_ids) == expected_ids
+    count_matches = expected_count is None or actual_count == expected_count
+    checksum_matches = expected_checksum is None or test_block_ids_sha256 == expected_checksum
+    evidence = {
+        "content": {
+            "enforced": expected_ids is not None,
+            "matched": content_matches,
+        },
+        "count": {
+            "expected": expected_count,
+            "actual": actual_count,
+            "matched": count_matches,
+        },
+        "checksum": {
+            "expected": expected_checksum,
+            "actual": test_block_ids_sha256,
+            "matched": checksum_matches,
+        },
+    }
+    return evidence, content_matches and count_matches and checksum_matches
+
+
 def verify_hdfs_release(
     *,
     model_package: Path,
@@ -267,6 +473,7 @@ def verify_hdfs_release(
     expected: ParityExpected,
     report_path: Path,
     test_block_ids: Sequence[str] | None = None,
+    test_block_ids_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Verify checksums, exact threshold, and metric deltas; write a comparison report."""
 
@@ -281,6 +488,12 @@ def verify_hdfs_release(
     failures: list[str] = []
     inference: dict[str, Any] | None = None
     gate: dict[str, Any] | None = None
+    selected_test_ids = list(test_block_ids) if test_block_ids is not None else expected.test_block_ids
+    test_split, test_split_ok = _verify_test_split(
+        expected=expected,
+        test_block_ids=selected_test_ids,
+        test_block_ids_sha256=test_block_ids_sha256,
+    )
     checksums = verify_artefact_checksums(files, expected.checksums)
     try:
         with tempfile.TemporaryDirectory(prefix="hdfs-parity-") as tmp:
@@ -303,30 +516,58 @@ def verify_hdfs_release(
                 failures.extend(
                     f"checksums.{name}" for name, entry in checksums.items() if not entry["matched"]
                 )
-            if checksums_ok:
+            if checksums_ok and test_split_ok:
                 manifest = ModelPackageManifest.model_validate(
                     json.loads((package_dir / MANIFEST_NAME).read_text(encoding="utf-8"))
                 )
-                scored = score_frozen_hdfs_log(
-                    manifest=manifest,
-                    bundle_dir=bundle_dir,
-                    log_path=corpus,
-                    artifact_path=package_dir / "model.pt",
-                )
                 label_map = load_hdfs_block_labels(labels)
+                if selected_test_ids:
+                    scores_by_block, parity_metadata = _score_selected_test_blocks(
+                        corpus=corpus,
+                        manifest=manifest,
+                        bundle_dir=bundle_dir,
+                        artifact_path=package_dir / "model.pt",
+                        test_block_ids=selected_test_ids,
+                        destination=Path(tmp) / "test-shards",
+                    )
+                    scored_block_ids = list(scores_by_block)
+                    scored_values = list(scores_by_block.values())
+                    threshold = float(manifest.metrics.best_threshold)
+                    inference_metadata: dict[str, Any] = {
+                        "n_scored_blocks": len(scores_by_block),
+                        "n_shards": parity_metadata["n_shards"],
+                        "source_line_count": parity_metadata["source_line_count"],
+                        "annotated_line_count": parity_metadata["annotated_line_count"],
+                    }
+                else:
+                    scored = score_frozen_hdfs_log(
+                        manifest=manifest,
+                        bundle_dir=bundle_dir,
+                        log_path=corpus,
+                        artifact_path=package_dir / "model.pt",
+                    )
+                    scored_block_ids = [block.block_id for block in scored.blocks]
+                    scored_values = [block.score for block in scored.blocks]
+                    threshold = scored.threshold
+                    inference_metadata = {
+                        "n_scored_blocks": len(scored.blocks),
+                        "n_shards": 1,
+                        "source_line_count": scored.source_line_count,
+                        "annotated_line_count": scored.annotated_line_count,
+                    }
                 selected, y_true, y_score = align_test_scores(
-                    block_ids=[block.block_id for block in scored.blocks],
-                    scores=[block.score for block in scored.blocks],
+                    block_ids=scored_block_ids,
+                    scores=scored_values,
                     labels=label_map,
-                    test_block_ids=test_block_ids or expected.test_block_ids,
+                    test_block_ids=selected_test_ids,
                 )
                 actual_metrics = compute_detection_metrics(
-                    y_true, y_score, scored.threshold
+                    y_true, y_score, threshold
                 )
                 gate = evaluate_metric_gate(
                     expected.metrics,
                     actual_metrics,
-                    scored.threshold,
+                    threshold,
                     tolerance=expected.metric_tolerance,
                 )
                 if not gate["threshold"]["equal"]:
@@ -335,19 +576,23 @@ def verify_hdfs_release(
                     if not payload["within_tolerance"]:
                         failures.append(f"metrics.{name}")
                 inference = {
-                    "n_scored_blocks": len(scored.blocks),
+                    **inference_metadata,
                     "n_test_blocks": len(selected),
-                    "threshold": scored.threshold,
+                    "threshold": threshold,
                     "metrics": actual_metrics,
                 }
+            elif checksums_ok:
+                for name, payload in test_split.items():
+                    if not payload["matched"]:
+                        failures.append(f"test_block_ids.{name}")
     except (ParityError, HdfsInferenceError) as error:
         failures.append("parity_input")
-        checksums = verify_artefact_checksums(files, expected.checksums)
         inference = {"error": str(error)}
 
     report = {
         "passed": not failures,
         "checksums": checksums,
+        "test_block_ids": test_split,
         "threshold": None if gate is None else gate["threshold"],
         "metrics": None if gate is None else gate["metrics"],
         "tolerance": expected.metric_tolerance,

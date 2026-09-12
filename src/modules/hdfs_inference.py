@@ -27,6 +27,8 @@ SCORE_ATOL = 1.0e-5
 SCORE_RTOL = 1.0e-5
 MAX_CONTEXT_LINES = 20
 MAX_RAW_CHARS = 500
+MAX_SOURCE_LINES = 100_000
+MAX_BLOCKS = 25_000
 
 
 class HdfsInferenceError(RuntimeError):
@@ -105,8 +107,15 @@ def score_frozen_hdfs_log(
     bundle_dir: Path,
     log_path: Path,
     artifact_path: Path,
+    batch_size: int = 1,
 ) -> FrozenHdfsInferenceResult:
     """Annotate, graph, and score a raw HDFS log from materialized v2 artefacts."""
+
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive.")
+    source_line_count = _count_nonempty_lines(log_path)
+    if source_line_count > MAX_SOURCE_LINES:
+        raise HdfsInferenceError("INFERENCE_FAILED", cause="source line limit exceeded")
 
     from src.modules.dataset import MissingClusterEmbedding, build_pyg_dataset
     from src.modules.models.gae import AttributeAwareGAE, compute_anomaly_scores
@@ -128,9 +137,10 @@ def score_frozen_hdfs_log(
     except Exception as error:
         raise HdfsInferenceError("PARSER_FAILED", cause=type(error).__name__) from error
 
-    source_line_count = _count_nonempty_lines(log_path)
     annotated_line_count = 0 if annotated.empty else int(len(annotated))
     sequences = build_sequences(annotated, "hdfs") if not annotated.empty else {}
+    if len(sequences) > MAX_BLOCKS:
+        raise HdfsInferenceError("INFERENCE_FAILED", cause="block limit exceeded")
     embeddings = load_frozen_embeddings(embeddings_path)
     embed_width = next(iter(embeddings.values())).shape[0] if embeddings else 0
     expected_node_dim = embed_width + NODE_FEATURE_EXTRA_DIM
@@ -150,6 +160,7 @@ def score_frozen_hdfs_log(
                 dataset="hdfs",
                 missing_embedding="fail",
                 on_graph_error="fail",
+                hdfs_feature_contract=manifest.architecture.feature_contract,
             )
         except MissingClusterEmbedding:
             raise
@@ -186,7 +197,7 @@ def score_frozen_hdfs_log(
     block_ids = list(sequences.keys())
     if graphs:
         try:
-            loader = DataLoader(graphs, batch_size=1, shuffle=False)
+            loader = DataLoader(graphs, batch_size=batch_size, shuffle=False)
             scores, _labels = compute_anomaly_scores(
                 model,
                 loader,

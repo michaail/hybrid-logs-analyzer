@@ -30,6 +30,11 @@ sequencing:
     window_minutes: 20
     step_minutes: 10
 
+inference_release:
+  # This selected run was trained by 5_PrepareDataset.ipynb, before the
+  # stabilized log-scaled graph features were introduced.
+  feature_contract: notebook_raw_v1
+
 ablation:
   llm_enrichment_enabled: true
   enrichment_model_size: large

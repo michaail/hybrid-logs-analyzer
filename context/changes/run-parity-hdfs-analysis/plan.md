@@ -582,7 +582,7 @@ before staging; never roll back a deployed schema by destructive SQL.
 
 #### Manual
 
-- [x] 1.3 Record and approve the supplied trained baseline provenance, checksums, threshold, and core metrics — 8e59962
+- [x] 1.3 Record and approve the supplied trained baseline provenance, checksums, threshold, and core metrics — 2026-09-12; commit/runtime unrecovered-by-exception
 
 ### Phase 2: Bind and admit immutable preprocessing bundles
 
@@ -625,8 +625,8 @@ before staging; never roll back a deployed schema by destructive SQL.
 
 - [x] 5.1 Golden HDFS fixture detects parsing, graph, score, ordering, and threshold drift — f2ac4b8
 - [x] 5.2 Full parity command rejects checksum, threshold, and core metric deltas beyond tolerance — f2ac4b8
-- [x] 5.3 Ruff, mypy, focused tests, and the native full-baseline gate pass — f2ac4b8
+- [x] 5.3 Ruff, mypy, focused tests, and the native full-baseline gate pass — 2026-09-12; `releases/hdfs/v3/parity-report.json`
 
 #### Manual
 
-- [x] 5.4 Review and approve the controlled baseline comparison report before claiming FR-011 — f2ac4b8
+- [x] 5.4 Review and approve the controlled baseline comparison report before claiming FR-011 — 2026-09-12; metric-gate approval of `releases/hdfs/v3/parity-report.json` (commit/runtime unrecovered)

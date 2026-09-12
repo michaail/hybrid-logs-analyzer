@@ -422,7 +422,8 @@ artifact. Install `requirements-model-validator.txt` only for that isolated proc
 from the validator file.
 
 Publishers register with `POST /projects/{project_id}/models` as multipart ZIP and explicitly
-publish an eligible version. Operators admit a UTF-8 HDFS log with
+publish an eligible version. V1 uses the `package` field only; v2 also requires its companion
+`preprocessing_bundle` ZIP in the same request. Operators admit a UTF-8 HDFS log with
 `POST /projects/{project_id}/datasets` (multipart field `log`, 32 MiB cap). A valid file
 becomes a new `storage_kind=object` dataset with a SHA-256 checksum. Invalid, empty,
 oversize, or non-UTF-8 payloads return 422 with a validation report, persist no object, and
@@ -445,7 +446,8 @@ and never imports PyTorch. Do not SHA-256 Operator HDFS logs at analyze time.
 S-04 analysis loads a frozen Drain3 FilePersistence snapshot with the bundle `drain.ini`
 via `DrainParser.load`, then calls `annotate_file` only. It does not fit Drain, re-enrich
 templates, or put parser files in the GAE package. Unmatched admitted lines fail the run
-with `UNMATCHED_TEMPLATE`.
+with `UNMATCHED_TEMPLATE`. To bound the finite private service, inference rejects inputs with
+more than 100,000 non-empty lines or 25,000 HDFS blocks before graph scoring.
 
 Processing drift is checked by the versioned golden fixture in
 `tests/fixtures/hdfs_inference_release/` (parser matches, ordered `block_id`s, graph
@@ -454,7 +456,9 @@ comparisons use absolute/relative tolerances of `1e-5`; block order, source line
 references, parser checksums, and the decision threshold are exact.
 
 Labelled FR-011 verification is a controlled release gate, not a browser upload and not
-part of default CI. Supply the exported v2 ZIP pair, the labelled corpus, and an
+part of default CI. It validates every source line against the frozen parser, then scores
+complete held-out block histories in bounded temporary shards without relaxing private
+service limits. Supply the exported release ZIP pair, the labelled corpus, and an
 immutable expected JSON (checksums plus test F1 / PR-AUC / ROC-AUC / threshold). The
 command writes `parity-report.json` beside that record and does not modify it. Exit
 status is nonzero when a checksum mismatches, the threshold changes, or a core metric
@@ -462,13 +466,13 @@ moves by more than 0.01:
 
 ```bash
 python scripts/verify_hdfs_parity.py \
-  --model-package releases/hdfs/attribute-gae-v2.zip \
-  --preprocessing-bundle releases/hdfs/attribute-gae-preprocessing-v2.zip \
+  --model-package releases/hdfs/attribute-gae-v3.zip \
+  --preprocessing-bundle releases/hdfs/attribute-gae-preprocessing-v3.zip \
   --corpus data/raw/hdfs/HDFS_full.log \
   --labels data/raw/hdfs/anomaly_label.csv \
-  --expected path/to/expected.json \
-  --report releases/hdfs/parity-report.json \
-  --test-block-ids path/to/test_block_ids.txt
+  --expected releases/hdfs/v3/expected.json \
+  --report releases/hdfs/v3/parity-report.json \
+  --test-block-ids releases/hdfs/test_block_ids.txt
 ```
 
 `--test-block-ids` is required for the selected baseline's held-out split. Omit it only

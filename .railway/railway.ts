@@ -1,4 +1,4 @@
-import { bucket, defineRailway, postgres, preserve, project, ref, service } from "railway/iac";
+import { bucket, defineRailway, postgres, project, ref, service } from "railway/iac";
 
 // Immutable Bucket region. Must match the staging project used by web and PostgreSQL.
 const STAGING_BUCKET_REGION = "ams" as const;
@@ -33,7 +33,7 @@ export default defineRailway((ctx) => {
       API_JWT_TTL_MINUTES: "30",
       API_TRUSTED_WORKSPACE_ROOT: "workspace",
       INFERENCE_SERVICE_URL: INFERENCE_PRIVATE_URL,
-      INFERENCE_INTERNAL_TOKEN: preserve(),
+      INFERENCE_INTERNAL_TOKEN: ctx.shared.INFERENCE_INTERNAL_TOKEN,
       ...sharedStore,
     },
   });
@@ -50,7 +50,7 @@ export default defineRailway((ctx) => {
       sleepApplication: true,
     },
     env: {
-      INFERENCE_INTERNAL_TOKEN: preserve(),
+      INFERENCE_INTERNAL_TOKEN: ctx.shared.INFERENCE_INTERNAL_TOKEN,
       ...sharedStore,
     },
   });

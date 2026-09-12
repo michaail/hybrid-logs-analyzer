@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -11,6 +12,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from src.api.object_store import build_object_store
 from src.api.storage import ApiDatabase
 from src.inference_service.settings import InferenceSettings
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(settings: InferenceSettings | None = None) -> FastAPI:
@@ -45,6 +48,15 @@ def create_app(settings: InferenceSettings | None = None) -> FastAPI:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database is unavailable.",
             )
+        try:
+            from src.inference_service.runner import reclaim_stale_running_runs
+
+            reclaim_stale_running_runs(
+                database,
+                stale_running_seconds=resolved.stale_running_seconds,
+            )
+        except Exception:
+            logger.exception("Failed to reclaim stale running analysis runs")
         return {"status": "ok"}
 
     @app.post(
@@ -59,7 +71,12 @@ def create_app(settings: InferenceSettings | None = None) -> FastAPI:
 
         from src.inference_service.runner import execute_analysis_run
 
-        result = execute_analysis_run(run_id, database, object_store)
+        result = execute_analysis_run(
+            run_id,
+            database,
+            object_store,
+            stale_running_seconds=resolved.stale_running_seconds,
+        )
         if not result.get("found"):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

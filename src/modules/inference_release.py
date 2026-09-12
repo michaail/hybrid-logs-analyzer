@@ -145,7 +145,7 @@ def export_hdfs_inference_release(
     )
     bundle_manifest_bytes = _json_bytes(bundle_manifest.model_dump(mode="json"))
 
-    architecture = _architecture_from_checkpoint(checkpoint)
+    architecture = _architecture_from_checkpoint(checkpoint, config)
     scoring = _scoring_from_checkpoint(checkpoint, config)
     metrics = PackageMetrics.model_validate(metrics_payload)
     evidence_bytes = _json_bytes(
@@ -437,8 +437,16 @@ def _as_float_list(value: Any) -> list[float] | None:
     raise TypeError("expected a sequence of floats")
 
 
-def _architecture_from_checkpoint(checkpoint: Mapping[str, Any]) -> PackageArchitecture:
+def _architecture_from_checkpoint(
+    checkpoint: Mapping[str, Any], config: Mapping[str, Any]
+) -> PackageArchitecture:
     settings = _training_settings(checkpoint)
+    release_config = config.get("inference_release", {})
+    feature_contract = (
+        release_config.get("feature_contract", "stabilized_v2")
+        if isinstance(release_config, Mapping)
+        else "stabilized_v2"
+    )
     try:
         return PackageArchitecture.model_validate(
             {
@@ -454,6 +462,7 @@ def _architecture_from_checkpoint(checkpoint: Mapping[str, Any]) -> PackageArchi
                 ),
                 "edge_mean": _as_float_list(checkpoint.get("edge_mean")),
                 "edge_std": _as_float_list(checkpoint.get("edge_std")),
+                "feature_contract": feature_contract,
             }
         )
     except Exception as error:

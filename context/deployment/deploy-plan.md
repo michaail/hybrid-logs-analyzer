@@ -37,8 +37,9 @@ Boundaries that remain in this release:
   the database and Bucket credentials by reference, runs migrations before the web deployment,
   starts Uvicorn on Railway's `PORT`, and probes `/health`. `web` uses `Dockerfile`;
   `inference` uses `Dockerfile.inference` and may sleep when idle. `INFERENCE_SERVICE_URL`
-  points at the private DNS name `http://inference.railway.internal:8080`. Non-staging apply
-  still throws.
+  points at the private DNS name `http://inference.railway.internal:8080`. Both services
+  reference one pre-created, environment-level `INFERENCE_INTERNAL_TOKEN` shared variable.
+  Non-staging apply still throws.
 - `src/api/migrations.py` applies versioned, idempotent schema migrations. PostgreSQL migrations
   hold an advisory transaction lock so concurrent deploys cannot race; the web process and
   administrator bootstrap command never create the schema at startup.
@@ -75,6 +76,10 @@ logs are admitted as uploads and stored as object-kind rows.
 
 ## Service variable contract
 
+Before applying this IaC, create one high-entropy sealed Railway **shared environment variable**
+named `INFERENCE_INTERNAL_TOKEN`. The IaC references it as `ctx.shared.INFERENCE_INTERNAL_TOKEN`
+for both services; do not create separate service-scoped copies.
+
 Set these variables on `web` before deployment:
 
 - `DATABASE_URL`: a Railway variable reference to the PostgreSQL service's `DATABASE_URL`.
@@ -89,13 +94,10 @@ Set these variables on `web` before deployment:
   never be copied into the React build.
 - `INFERENCE_SERVICE_URL`: private URL `http://inference.railway.internal:8080` as declared
   in IaC.
-- `INFERENCE_INTERNAL_TOKEN`: the same high-entropy invocation token as `inference`. IaC
-  preserves an existing value; set it once on both services.
 
 Set these variables on `inference` (never on the frontend build):
 
 - `DATABASE_URL` and the Bucket credentials, by the same Railway references as `web`.
-- `INFERENCE_INTERNAL_TOKEN`: identical to `web`.
 - Do not set `API_JWT_SECRET` on `inference`.
 
 Do not set `API_DATABASE_PATH`, `AZURE_OPENAI_*`, or model credentials on this release. The
@@ -120,9 +122,6 @@ railway config plan
 railway config apply
 railway variable set API_JWT_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" --service web
 railway variable set API_JWT_TTL_MINUTES=30 --service web
-INFERENCE_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
-railway variable set INFERENCE_INTERNAL_TOKEN="$INFERENCE_TOKEN" --service web
-railway variable set INFERENCE_INTERNAL_TOKEN="$INFERENCE_TOKEN" --service inference
 ```
 
 Use Node 22 or later for the IaC dependency. `railway config plan` is read-only. `railway config
@@ -184,6 +183,8 @@ Then sign in through the same-origin UI and confirm all of these conditions:
   another project's records.
 - A Publisher can upload a complete HDFS package ZIP, receive `eligible` or a structured 422,
   and explicitly publish an eligible version. Operators cannot register or publish.
+  `drain_parser.bin` is deserialized only in the private inference process after that
+  Publisher admission and checksum verification.
 - An Operator can upload a UTF-8 HDFS log, receive an accepted object-kind dataset or a
   structured 422, and start analysis by selecting that `dataset_id`.
 - A published inference-ready v2 model queues a run (`202 queued`). Observe a staging

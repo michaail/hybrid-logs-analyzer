@@ -11,6 +11,7 @@ frontend/dist/
 # Generated datasets, models, and experiment artifacts
 data/
 artifacts/
+artifacts_colab/
 models/hdfs/
 models/bgl/
 outputs/

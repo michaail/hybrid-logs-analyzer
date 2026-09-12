@@ -1037,6 +1037,30 @@ class ApiDatabase:
             (str(run_id),),
         )
 
+    def list_running_analysis_run_ids(self) -> list[UUID]:
+        """Return ids of analysis runs currently claimed as running."""
+
+        rows = self._all(
+            "SELECT id FROM analysis_runs WHERE status = ? ORDER BY created_at",
+            ("running",),
+        )
+        return [UUID(str(row["id"])) for row in rows]
+
+    def latest_analysis_running_at(self, run_id: UUID) -> str | None:
+        """Return the newest analysis.running audit timestamp for this run, if any."""
+
+        row = self._one(
+            """
+            SELECT created_at FROM audit_events
+            WHERE resource_type = ? AND resource_id = ? AND action = ?
+            ORDER BY created_at DESC
+            """,
+            ("analysis_run", str(run_id), "analysis.running"),
+        )
+        if row is None:
+            return None
+        return str(row["created_at"])
+
     def add_audit_event(
         self,
         *,

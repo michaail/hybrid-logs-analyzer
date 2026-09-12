@@ -6,21 +6,22 @@ import hashlib
 import json
 import logging
 import tempfile
-from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 from src.api.object_store import ObjectStore
 from src.api.storage import ApiDatabase, DatabaseRow, RunStatusConflict
-from src.inference_service.errors import SAFE_MESSAGES, InferenceExecutionError
+from src.inference_service.errors import InferenceExecutionError
+from src.inference_service.settings import DEFAULT_STALE_RUNNING_SECONDS
 from src.modules.inference_bundle import (
     DRAIN_CONFIG_NAME,
     DRAIN_PARSER_NAME,
     EMBEDDINGS_NAME,
     bundle_digest,
 )
-from src.modules.model_package import MANIFEST_NAME, ModelPackageManifest
+from src.modules.model_package import MANIFEST_NAME, ModelPackageManifest, PackageArchitecture
 from src.modules.parser.drain_parser import UnmatchedLogLine
 
 logger = logging.getLogger(__name__)
@@ -30,14 +31,23 @@ def execute_analysis_run(
     run_id: UUID,
     database: ApiDatabase,
     object_store: ObjectStore,
+    *,
+    stale_running_seconds: int = DEFAULT_STALE_RUNNING_SECONDS,
 ) -> dict[str, Any]:
     """Claim a queued run, score it, and persist a terminal outcome."""
 
     job = database.get_inference_execution(run_id)
     if job is None:
         return {"found": False}
-    if str(job["status"]) != "queued":
-        return {"found": True, "status": str(job["status"]), "id": str(job["id"])}
+    status = str(job["status"])
+    if status != "queued":
+        if status == "running":
+            _reclaim_stale_run(database, run_id, stale_running_seconds)
+            current = database.get_analysis_run(run_id)
+            if current is None:
+                return {"found": False}
+            return {"found": True, "status": str(current["status"]), "id": str(current["id"])}
+        return {"found": True, "status": status, "id": str(job["id"])}
     try:
         database.transition_analysis_run(
             run_id,
@@ -96,6 +106,54 @@ def _fail_run(database: ApiDatabase, run_id: UUID, error: InferenceExecutionErro
         logger.warning("Could not mark run %s as failed after %s", run_id, error.code)
 
 
+def reclaim_stale_running_runs(
+    database: ApiDatabase,
+    *,
+    stale_running_seconds: int = DEFAULT_STALE_RUNNING_SECONDS,
+) -> int:
+    """Fail running claims whose analysis.running audit is older than the threshold."""
+
+    reclaimed = 0
+    for run_id in database.list_running_analysis_run_ids():
+        if _reclaim_stale_run(database, run_id, stale_running_seconds):
+            reclaimed += 1
+    return reclaimed
+
+
+def _reclaim_stale_run(
+    database: ApiDatabase,
+    run_id: UUID,
+    stale_running_seconds: int,
+) -> bool:
+    if not _is_stale_running(database, run_id, stale_running_seconds):
+        return False
+    logger.warning("Reclaiming stale running analysis run %s", run_id)
+    _fail_run(
+        database,
+        run_id,
+        InferenceExecutionError("INFERENCE_FAILED", cause="stale running claim"),
+    )
+    return True
+
+
+def _is_stale_running(
+    database: ApiDatabase,
+    run_id: UUID,
+    stale_running_seconds: int,
+) -> bool:
+    started_at = database.latest_analysis_running_at(run_id)
+    if started_at is None:
+        return True
+    try:
+        started = datetime.fromisoformat(started_at)
+    except ValueError:
+        return True
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - started.astimezone(timezone.utc)
+    return age >= timedelta(seconds=stale_running_seconds)
+
+
 def _score_job(
     job: DatabaseRow,
     object_store: ObjectStore,
@@ -122,6 +180,7 @@ def _score_job(
         try:
             _materialize_prefix(object_store, package_ref, package_dir, (MANIFEST_NAME,))
             manifest = _load_package_manifest(package_dir)
+            _verify_persisted_model_binding(job, manifest)
             _materialize_prefix(
                 object_store,
                 package_ref,
@@ -159,6 +218,7 @@ def _score_job(
         _verify_package_checksums(package_dir, manifest)
         _verify_bundle_checksums(bundle_dir, str(job["bundle_manifest_checksum"]))
         artifact = package_dir / manifest.files.artifact
+        _verify_artifact_checksum(artifact, str(job["model_artifact_sha256"]))
         try:
             return _infer_from_materialized(manifest, bundle_dir, log_path, artifact)
         except InferenceExecutionError:
@@ -261,6 +321,53 @@ def _verify_package_checksums(package_dir: Path, manifest: ModelPackageManifest)
             )
 
 
+def _verify_persisted_model_binding(job: DatabaseRow, manifest: ModelPackageManifest) -> None:
+    """Ensure inference-relevant manifest fields match the admitted database record."""
+
+    try:
+        package_reference = str(job["model_package_reference"]).rstrip("/")
+        artifact_reference = str(job["model_artifact_reference"])
+        expected_artifact = artifact_reference.removeprefix(f"{package_reference}/")
+        metadata = json.loads(str(job["model_metadata_json"]))
+        metrics = json.loads(str(job["model_metrics_json"]))
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise InferenceExecutionError("MODEL_LOAD_FAILED", cause="invalid persisted model metadata") from error
+    if not isinstance(metadata, dict) or not isinstance(metrics, dict):
+        raise InferenceExecutionError("MODEL_LOAD_FAILED", cause="invalid persisted model metadata")
+    try:
+        persisted_architecture = PackageArchitecture.model_validate(
+            metadata.get("architecture")
+        ).model_dump()
+    except Exception as error:
+        raise InferenceExecutionError(
+            "MODEL_LOAD_FAILED", cause="invalid persisted model architecture"
+        ) from error
+
+    expected_bundle = {
+        "identifier": str(job.get("bundle_identifier") or ""),
+        "version": str(job.get("bundle_version") or ""),
+        "digest": str(job.get("bundle_manifest_checksum") or ""),
+    }
+    actual_bundle = (
+        manifest.preprocessing_bundle.model_dump() if manifest.preprocessing_bundle is not None else None
+    )
+    if (
+        expected_artifact == artifact_reference
+        or manifest.files.artifact != expected_artifact
+        or manifest.format != metadata.get("format")
+        or manifest.architecture.model_dump() != persisted_architecture
+        or manifest.scoring.model_dump() != metadata.get("scoring")
+        or manifest.metrics.model_dump() != metrics
+        or actual_bundle != expected_bundle
+    ):
+        raise InferenceExecutionError("MODEL_LOAD_FAILED", cause="manifest differs from admitted metadata")
+
+
+def _verify_artifact_checksum(artifact: Path, expected_checksum: str) -> None:
+    if hashlib.sha256(artifact.read_bytes()).hexdigest() != expected_checksum:
+        raise InferenceExecutionError("MODEL_LOAD_FAILED", cause="artifact differs from admitted checksum")
+
+
 def _verify_bundle_checksums(bundle_dir: Path, expected_digest: str) -> None:
     try:
         payload = json.loads((bundle_dir / MANIFEST_NAME).read_text(encoding="utf-8"))
@@ -285,9 +392,3 @@ def _verify_bundle_checksums(bundle_dir: Path, expected_digest: str) -> None:
             "PREPROCESSING_BUNDLE_UNAVAILABLE",
             cause=type(error).__name__,
         ) from error
-
-
-def public_error_codes() -> Mapping[str, str]:
-    """Return the stable Operator-visible inference error messages."""
-
-    return dict(SAFE_MESSAGES)

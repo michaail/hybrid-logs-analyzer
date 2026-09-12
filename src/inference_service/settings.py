@@ -8,6 +8,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+DEFAULT_STALE_RUNNING_SECONDS = 1800
+
 
 @dataclass(frozen=True)
 class InferenceSettings:
@@ -22,6 +24,7 @@ class InferenceSettings:
     object_store_access_key_id: str | None = None
     object_store_secret_access_key: str | None = None
     object_store_region: str = "auto"
+    stale_running_seconds: int = DEFAULT_STALE_RUNNING_SECONDS
 
     @property
     def uses_bucket_object_store(self) -> bool:
@@ -63,6 +66,7 @@ class InferenceSettings:
             object_store_access_key_id=access_key,
             object_store_secret_access_key=secret_key,
             object_store_region=_optional_env("API_OBJECT_STORE_REGION") or "auto",
+            stale_running_seconds=_stale_running_seconds(),
         )
 
 
@@ -90,6 +94,19 @@ def _bucket_credentials() -> tuple[str | None, str | None, str | None, str | Non
             "API_OBJECT_STORE_ACCESS_KEY_ID, and API_OBJECT_STORE_SECRET_ACCESS_KEY."
         )
     return endpoint, bucket, access_key, secret_key
+
+
+def _stale_running_seconds() -> int:
+    raw = os.environ.get("INFERENCE_STALE_RUNNING_SECONDS", "").strip()
+    if not raw:
+        return DEFAULT_STALE_RUNNING_SECONDS
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise RuntimeError("INFERENCE_STALE_RUNNING_SECONDS must be a positive integer.") from error
+    if value <= 0:
+        raise RuntimeError("INFERENCE_STALE_RUNNING_SECONDS must be a positive integer.")
+    return value
 
 
 def _optional_env(name: str) -> str | None:
