@@ -102,6 +102,20 @@ def test_network_errors_are_logged_without_secrets(
     assert "Bearer" not in combined
 
 
+def test_exhausted_transient_http_is_a_failure(tmp_path: Path) -> None:
+    calls = {"n": 0}
+
+    def post(url: str, headers: Mapping[str, str], connect: float, read: float) -> int:
+        del url, headers, connect, read
+        calls["n"] += 1
+        return 503
+
+    outcome = dispatch_analysis_run(uuid4(), _settings(tmp_path), post=post, sleep=lambda _: None)
+    assert outcome == DispatchOutcome.failed()
+    assert outcome.error_code == INFERENCE_DISPATCH_FAILED
+    assert calls["n"] == 3
+
+
 def test_unauthorized_response_is_not_retried(tmp_path: Path) -> None:
     calls = {"n": 0}
 

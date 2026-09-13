@@ -1566,7 +1566,22 @@ def test_exhausted_dispatch_marks_queued_run_failed(
         assert payload["error_code"] == INFERENCE_DISPATCH_FAILED
         assert payload["completed_at"] is not None
         assert payload["validation_report"] == {"execution": INFERENCE_DISPATCH_FAILED_MESSAGE}
+        assert "dispatch-test-token" not in fetched.text
+        assert "http://inference.test" not in fetched.text
         assert calls["n"] == 2
+        audit_events = client.get(
+            f"/projects/{project_id}/audit-events",
+            headers=_login(client, "admin"),
+        )
+        assert audit_events.status_code == 200
+        failed_audits = [
+            event
+            for event in audit_events.json()
+            if event["action"] == "analysis.failed" and event["resource_id"] == payload["id"]
+        ]
+        assert len(failed_audits) == 1
+        assert failed_audits[0]["actor_user_id"] is None
+        assert failed_audits[0]["details"]["error_code"] == INFERENCE_DISPATCH_FAILED
 
 
 def _queued_v2_run(

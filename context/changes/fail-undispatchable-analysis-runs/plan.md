@@ -335,25 +335,25 @@ modifying historical state.
 
 #### Automated
 
-- [x] 1.1 Implement typed dispatch outcomes and safe `INFERENCE_DISPATCH_FAILED` classification
-- [x] 1.2 Terminalize failed dispatches through guarded `queued → failed` API transition
-- [x] 1.3 Verify focused API, dispatcher, repository, Ruff, and mypy checks
+- [x] 1.1 Implement typed dispatch outcomes and safe `INFERENCE_DISPATCH_FAILED` classification — 5cf57d5
+- [x] 1.2 Terminalize failed dispatches through guarded `queued → failed` API transition — 5cf57d5
+- [x] 1.3 Verify focused API, dispatcher, repository, Ruff, and mypy checks — 5cf57d5
 
 #### Manual
 
-- [x] 1.4 Confirm unreachable private inference produces a safe terminal failed run
+- [x] 1.4 Confirm unreachable private inference produces a safe terminal failed run — 5cf57d5
 
 ### Phase 2: Regression and boundary coverage
 
 #### Automated
 
-- [ ] 2.1 Convert the exhausted-dispatch test into the pre-claim failure regression oracle
-- [ ] 2.2 Cover dispatch outcomes and guarded queued-to-failed repository semantics
-- [ ] 2.3 Verify public API remains non-ML and focused test suites pass
+- [x] 2.1 Convert the exhausted-dispatch test into the pre-claim failure regression oracle
+- [x] 2.2 Cover dispatch outcomes and guarded queued-to-failed repository semantics
+- [x] 2.3 Verify public API remains non-ML and focused test suites pass
 
 #### Manual
 
-- [ ] 2.4 Review ownership boundaries between dispatch and post-claim inference failures
+- [x] 2.4 Review ownership boundaries between dispatch and post-claim inference failures
 
 ### Phase 3: Documentation alignment
 
