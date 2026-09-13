@@ -6,15 +6,27 @@ import hashlib
 import json
 import logging
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from src.api.object_store import ObjectStore
-from src.api.storage import ApiDatabase, DatabaseRow, RunStatusConflict
-from src.inference_service.errors import InferenceExecutionError
+from src.api.object_store import (
+    ObjectStore,
+    hdfs_reference_catalog_selected_ids_key,
+    normalize_object_store_key,
+)
+from src.api.storage import (
+    PROVISIONAL_REASON_NOT_IN_CATALOG,
+    ApiDatabase,
+    DatabaseRow,
+    RunStatusConflict,
+)
+from src.inference_service.errors import InferenceExecutionError, map_completeness_catalog_error
 from src.inference_service.settings import DEFAULT_STALE_RUNNING_SECONDS
+from src.modules.hdfs_completeness import CompletenessCatalogError, HdfsReferenceCatalog
+from src.modules.hdfs_evaluation_data import SELECTED_IDS_NAME
 from src.modules.inference_bundle import (
     DRAIN_CONFIG_NAME,
     DRAIN_PARSER_NAME,
@@ -27,12 +39,27 @@ from src.modules.parser.drain_parser import UnmatchedLogLine
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class _CompletedInference:
+    """Atomic completed-run payload produced from one pinned-catalog scoring pass."""
+
+    summary: dict[str, int]
+    anomalies: list[dict[str, Any]]
+    provisional: list[dict[str, Any]]
+    unassigned_context_line_count: int
+    classification_policy: str
+    classification_catalog_sha256: str
+
+
 def execute_analysis_run(
     run_id: UUID,
     database: ApiDatabase,
     object_store: ObjectStore,
     *,
     stale_running_seconds: int = DEFAULT_STALE_RUNNING_SECONDS,
+    hdfs_completeness_manifest_sha256: str,
+    hdfs_completeness_manifest: Path | None = None,
+    hdfs_completeness_manifest_object_key: str | None = None,
 ) -> dict[str, Any]:
     """Claim a queued run, score it, and persist a terminal outcome."""
 
@@ -61,14 +88,25 @@ def execute_analysis_run(
             return {"found": False}
         return {"found": True, "status": str(current["status"]), "id": str(current["id"])}
     try:
-        summary, anomalies = _score_job(job, object_store)
+        outcome = _score_job(
+            job,
+            object_store,
+            catalog_manifest=hdfs_completeness_manifest,
+            catalog_manifest_object_key=hdfs_completeness_manifest_object_key,
+            catalog_manifest_sha256=hdfs_completeness_manifest_sha256,
+        )
         database.transition_analysis_run(
             run_id,
             expected_status="running",
             next_status="completed",
             actor_user_id=None,
-            results_summary_json=json.dumps(summary, sort_keys=True),
-            anomaly_results=anomalies,
+            results_summary_json=json.dumps(outcome.summary, sort_keys=True),
+            anomaly_results=outcome.anomalies,
+            provisional_results=outcome.provisional,
+            provisional_count=len(outcome.provisional),
+            unassigned_context_line_count=outcome.unassigned_context_line_count,
+            classification_policy=outcome.classification_policy,
+            classification_catalog_sha256=outcome.classification_catalog_sha256,
         )
     except InferenceExecutionError as error:
         logger.exception(
@@ -157,7 +195,17 @@ def _is_stale_running(
 def _score_job(
     job: DatabaseRow,
     object_store: ObjectStore,
-) -> tuple[dict[str, int], list[dict[str, Any]]]:
+    *,
+    catalog_manifest: Path | None,
+    catalog_manifest_object_key: str | None,
+    catalog_manifest_sha256: str,
+) -> _CompletedInference:
+    catalog = load_pinned_catalog(
+        object_store,
+        manifest_path=catalog_manifest,
+        manifest_object_key=catalog_manifest_object_key,
+        expected_sha256=catalog_manifest_sha256,
+    )
     if str(job.get("model_status")) != "published":
         raise InferenceExecutionError("INFERENCE_FAILED", cause="model is not published")
     bundle_prefix = job.get("bundle_object_prefix")
@@ -220,7 +268,15 @@ def _score_job(
         artifact = package_dir / manifest.files.artifact
         _verify_artifact_checksum(artifact, str(job["model_artifact_sha256"]))
         try:
-            return _infer_from_materialized(manifest, bundle_dir, log_path, artifact)
+            return _infer_from_materialized(
+                manifest,
+                bundle_dir,
+                log_path,
+                artifact,
+                scoring_block_ids=catalog.selected_block_ids,
+                classification_policy=catalog.policy_id,
+                classification_catalog_sha256=catalog.manifest_sha256,
+            )
         except InferenceExecutionError:
             raise
         except UnmatchedLogLine as error:
@@ -244,7 +300,11 @@ def _infer_from_materialized(
     bundle_dir: Path,
     log_path: Path,
     artifact: Path,
-) -> tuple[dict[str, int], list[dict[str, Any]]]:
+    *,
+    scoring_block_ids: frozenset[str],
+    classification_policy: str,
+    classification_catalog_sha256: str,
+) -> _CompletedInference:
     from src.modules.dataset import MissingClusterEmbedding
     from src.modules.hdfs_inference import HdfsInferenceError, score_frozen_hdfs_log
 
@@ -254,6 +314,7 @@ def _infer_from_materialized(
             bundle_dir=bundle_dir,
             log_path=log_path,
             artifact_path=artifact,
+            scoring_block_ids=scoring_block_ids,
         )
     except UnmatchedLogLine:
         raise
@@ -270,25 +331,130 @@ def _infer_from_materialized(
             "anomaly_score": block.score,
             "anomaly_level": "anomaly",
             "decision_threshold": result.threshold,
-            "context": {
-                "matched_line_count": block.matched_line_count,
-                "source_lines": [
-                    {"line_number": line.line_number, "raw": line.raw} for line in block.source_lines
-                ],
-            },
+            "context": _source_context(block.matched_line_count, block.source_lines),
         }
         for block in result.blocks
         if block.decision
     ]
-    return (
+    provisional = [
         {
+            "record_reference": block.block_id,
+            "reason_code": PROVISIONAL_REASON_NOT_IN_CATALOG,
+            "context": _source_context(block.matched_line_count, block.source_lines),
+        }
+        for block in result.provisional_blocks
+    ]
+    return _CompletedInference(
+        summary={
             "anomaly_count": len(anomalies),
             "normal_count": len(result.blocks) - len(anomalies),
             "rejected_records": 0,
             "invalid_records": 0,
         },
-        anomalies,
+        anomalies=anomalies,
+        provisional=provisional,
+        unassigned_context_line_count=result.unassigned_context_line_count,
+        classification_policy=classification_policy,
+        classification_catalog_sha256=classification_catalog_sha256,
     )
+
+
+def verify_pinned_catalog(
+    object_store: ObjectStore,
+    *,
+    manifest_path: Path | None,
+    manifest_object_key: str | None,
+    expected_sha256: str,
+) -> None:
+    """Load the pinned catalog so readiness checks fail closed without scoring."""
+
+    load_pinned_catalog(
+        object_store,
+        manifest_path=manifest_path,
+        manifest_object_key=manifest_object_key,
+        expected_sha256=expected_sha256,
+    )
+
+
+def load_pinned_catalog(
+    object_store: ObjectStore,
+    *,
+    manifest_path: Path | None,
+    manifest_object_key: str | None,
+    expected_sha256: str,
+) -> HdfsReferenceCatalog:
+    """Materialize an object-store catalog if needed, then validate the F-03 pin."""
+
+    if manifest_path is not None:
+        return _load_pinned_catalog(manifest_path, expected_sha256)
+    if not manifest_object_key:
+        raise map_completeness_catalog_error(
+            CompletenessCatalogError(
+                "The HDFS reference catalog configuration is invalid.",
+                reason="invalid_catalog_location",
+            )
+        )
+    try:
+        with tempfile.TemporaryDirectory(prefix="hdfs-catalog-") as tmp:
+            materialized = _materialize_catalog_from_object_store(
+                object_store,
+                manifest_object_key,
+                Path(tmp),
+            )
+            return _load_pinned_catalog(materialized, expected_sha256)
+    except CompletenessCatalogError as error:
+        raise map_completeness_catalog_error(error) from error
+
+
+def _materialize_catalog_from_object_store(
+    object_store: ObjectStore,
+    manifest_key: str,
+    destination: Path,
+) -> Path:
+    try:
+        key = normalize_object_store_key(manifest_key)
+        manifest_bytes = object_store.get(key)
+    except (OSError, ValueError, FileNotFoundError) as error:
+        raise CompletenessCatalogError(
+            "The HDFS reference catalog is missing or unreadable.",
+            reason="manifest_missing",
+        ) from error
+    selected_key = hdfs_reference_catalog_selected_ids_key(key)
+    try:
+        selected_bytes = object_store.get(selected_key)
+    except (OSError, ValueError, FileNotFoundError) as error:
+        raise CompletenessCatalogError(
+            "The HDFS reference catalog selected-block file is missing or unreadable.",
+            reason="selected_ids_missing",
+        ) from error
+    manifest_path = destination / "manifest.json"
+    selected_path = destination / SELECTED_IDS_NAME
+    manifest_path.write_bytes(manifest_bytes)
+    selected_path.write_bytes(selected_bytes)
+    return manifest_path
+
+
+def _load_pinned_catalog(manifest_path: Path, expected_sha256: str) -> HdfsReferenceCatalog:
+    from src.modules.hdfs_completeness import load_hdfs_reference_catalog
+
+    try:
+        return load_hdfs_reference_catalog(
+            manifest_path,
+            expected_manifest_sha256=expected_sha256,
+        )
+    except CompletenessCatalogError as error:
+        raise map_completeness_catalog_error(error) from error
+    except Exception as error:
+        raise map_completeness_catalog_error(error) from error
+
+
+def _source_context(matched_line_count: int, source_lines: Any) -> dict[str, Any]:
+    return {
+        "matched_line_count": matched_line_count,
+        "source_lines": [
+            {"line_number": line.line_number, "raw": line.raw} for line in source_lines
+        ],
+    }
 
 
 def _materialize_prefix(

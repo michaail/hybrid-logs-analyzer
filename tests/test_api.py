@@ -1119,6 +1119,8 @@ def test_openapi_exposes_administration_lifecycle_without_legacy_user_create(
         "normal_count",
         "rejected_records",
         "invalid_records",
+        "provisional_count",
+        "unassigned_context_line_count",
     } <= set(summary_schema["properties"])
     trace_schema = schema["components"]["schemas"]["AnalysisResultTrace"]
     assert {
@@ -1129,7 +1131,35 @@ def test_openapi_exposes_administration_lifecycle_without_legacy_user_create(
         "dataset_checksum",
         "artifact_checksum",
         "preprocessing_bundle",
+        "classification_policy",
+        "classification_catalog_sha256",
     } <= set(trace_schema["properties"])
+    provisional_path = "/projects/{project_id}/analysis-runs/{analysis_run_id}/provisional-results"
+    assert "get" in paths[provisional_path]
+    assert "post" not in paths[provisional_path]
+    assert "patch" not in paths[provisional_path]
+    provisional_get = paths[provisional_path]["get"]
+    provisional_params = {
+        item["name"] for item in provisional_get.get("parameters", []) if item.get("in") == "query"
+    }
+    assert {"limit", "block_id_prefix", "cursor"} <= provisional_params
+    assert "min_score" not in provisional_params
+    assert "sort" not in provisional_params
+    provisional_schema = schema["components"]["schemas"]["ProvisionalResultsResponse"]
+    assert provisional_schema.get("additionalProperties") is False
+    assert {"items", "query"} <= set(provisional_schema.get("required", []))
+    assert "next_cursor" in provisional_schema["properties"]
+    provisional_item = schema["components"]["schemas"]["HdfsProvisionalResult"]
+    assert {
+        "block_id",
+        "record_reference",
+        "reason_code",
+        "reason",
+        "context",
+    } <= set(provisional_item["properties"])
+    assert "anomaly_score" not in provisional_item["properties"]
+    assert "decision_threshold" not in provisional_item["properties"]
+    assert "anomaly_level" not in provisional_item["properties"]
     run_item = "/projects/{project_id}/analysis-runs/{analysis_run_id}"
     assert "patch" not in paths.get(run_item, {})
     assert "post" not in paths.get(run_item, {})
@@ -1469,6 +1499,8 @@ def test_published_v2_model_queues_and_schedules_dispatch(
         "normal_count": 0,
         "rejected_records": 0,
         "invalid_records": 0,
+        "provisional_count": 0,
+        "unassigned_context_line_count": 0,
     }
 
 
@@ -1575,6 +1607,10 @@ def _complete_run_results(
     anomalies: list[dict[str, Any]],
     *,
     normal_count: int = 4,
+    provisional_results: list[dict[str, Any]] | None = None,
+    unassigned_context_line_count: int = 0,
+    classification_policy: str | None = None,
+    classification_catalog_sha256: str | None = None,
 ) -> None:
     database = ApiDatabase(api.settings.database_url)
     identifier = UUID(run_id)
@@ -1600,6 +1636,10 @@ def _complete_run_results(
             sort_keys=True,
         ),
         anomaly_results=anomalies,
+        provisional_results=provisional_results,
+        unassigned_context_line_count=unassigned_context_line_count,
+        classification_policy=classification_policy,
+        classification_catalog_sha256=classification_catalog_sha256,
     )
 
 
@@ -1670,6 +1710,8 @@ def test_result_pages_are_typed_project_scoped_and_keep_run_wide_summaries(
         "normal_count": 5,
         "rejected_records": 0,
         "invalid_records": 0,
+        "provisional_count": 0,
+        "unassigned_context_line_count": 0,
     }
     assert payload["query"]["limit"] == 2
     assert payload["query"]["sort"] == "score_desc"
@@ -1771,6 +1813,8 @@ def test_result_pages_expose_empty_queued_and_failed_run_states(
         "normal_count": 0,
         "rejected_records": 0,
         "invalid_records": 0,
+        "provisional_count": 0,
+        "unassigned_context_line_count": 0,
     }
 
     database = ApiDatabase(api.settings.database_url)
@@ -1795,6 +1839,193 @@ def test_result_pages_expose_empty_queued_and_failed_run_states(
     assert failed.json()["run"]["status"] == "failed"
     assert failed.json()["anomalies"] == []
     assert failed.json()["summary"] == queued.json()["summary"]
+
+
+def test_provisional_pages_are_typed_project_scoped_and_exclude_scores(
+    api: ApiFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, headers, project, _model, operator_id = _queued_v2_run(api, monkeypatch)
+    run_id = client.get(
+        f"/projects/{project['id']}/analysis-runs",
+        headers=headers,
+    ).json()[0]["id"]
+    catalog_digest = "ab" * 32
+    _complete_run_results(
+        api,
+        run_id,
+        operator_id,
+        [
+            {
+                "record_reference": "blk_a",
+                "anomaly_score": 0.91,
+                "anomaly_level": "anomaly",
+                "decision_threshold": 0.5,
+                "context": {"matched_line_count": 2, "source_lines": []},
+            },
+            {
+                "record_reference": "blk_b",
+                "anomaly_score": 0.8,
+                "anomaly_level": "anomaly",
+                "decision_threshold": 0.5,
+                "context": {},
+            },
+        ],
+        normal_count=1,
+        provisional_results=[
+            {
+                "id": "00000000-0000-4000-8000-0000000000c1",
+                "record_reference": "blk_p1",
+                "reason_code": "not_in_reference_catalog",
+                "context": {
+                    "matched_line_count": 3,
+                    "source_lines": [{"line_number": 4, "raw": "Receiving block blk_p1"}],
+                },
+            },
+            {
+                "id": "00000000-0000-4000-8000-0000000000c2",
+                "record_reference": "blk_p2",
+                "reason_code": "not_in_reference_catalog",
+                "context": {"matched_line_count": 1, "source_lines": []},
+            },
+        ],
+        unassigned_context_line_count=2,
+        classification_policy="hdfs_reference_membership_v1",
+        classification_catalog_sha256=catalog_digest,
+    )
+    results = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/results",
+        headers=headers,
+    )
+    assert results.status_code == 200, results.text
+    summary = results.json()["summary"]
+    assert summary["anomaly_count"] == 2
+    assert summary["normal_count"] == 1
+    assert summary["provisional_count"] == 2
+    assert summary["unassigned_context_line_count"] == 2
+    assert results.json()["trace"]["classification_policy"] == "hdfs_reference_membership_v1"
+    assert results.json()["trace"]["classification_catalog_sha256"] == catalog_digest
+    assert {item["block_id"] for item in results.json()["anomalies"]} == {"blk_a", "blk_b"}
+
+    unauthenticated = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/provisional-results"
+    )
+    assert unauthenticated.status_code == 401
+
+    first = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/provisional-results",
+        headers=headers,
+        params={"limit": 1},
+    )
+    assert first.status_code == 200, first.text
+    payload = first.json()
+    assert payload["query"]["limit"] == 1
+    assert payload["next_cursor"]
+    assert [item["block_id"] for item in payload["items"]] == ["blk_p1"]
+    item = payload["items"][0]
+    assert item["record_reference"] == "blk_p1"
+    assert item["reason_code"] == "not_in_reference_catalog"
+    assert "pinned reference catalog" in item["reason"]
+    assert "anomaly_score" not in item
+    assert "decision_threshold" not in item
+    assert "anomaly_level" not in item
+    assert item["context"] == {
+        "matched_line_count": 3,
+        "source_lines": [{"line_number": 4, "raw": "Receiving block blk_p1"}],
+    }
+
+    filtered = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/provisional-results",
+        headers=headers,
+        params={"block_id_prefix": "blk_p2"},
+    )
+    assert filtered.status_code == 200, filtered.text
+    assert [item["block_id"] for item in filtered.json()["items"]] == ["blk_p2"]
+    assert filtered.json()["next_cursor"] is None
+
+    second = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/provisional-results",
+        headers=headers,
+        params={"limit": 1, "cursor": payload["next_cursor"]},
+    )
+    assert second.status_code == 200, second.text
+    assert [item["block_id"] for item in second.json()["items"]] == ["blk_p2"]
+    assert second.json()["next_cursor"] is None
+
+    anomaly_cursor = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/results",
+        headers=headers,
+        params={"limit": 1},
+    ).json()["next_cursor"]
+    crossed = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/provisional-results",
+        headers=headers,
+        params={"cursor": anomaly_cursor},
+    )
+    assert crossed.status_code == 422
+    unknown = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/provisional-results",
+        headers=headers,
+        params={"min_score": 0.9},
+    )
+    assert unknown.status_code == 422
+
+    administrator = _login(client, "admin")
+    other_project = _create_project(client, administrator, "incident-other-provisional")
+    _provision_project_account(
+        client, administrator, "other-provisional-operator", str(other_project["id"]), "operator"
+    )
+    foreign = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/provisional-results",
+        headers=_login(client, "other-provisional-operator"),
+        params={"cursor": payload["next_cursor"]},
+    )
+    assert foreign.status_code == 404
+    swapped = client.get(
+        f"/projects/{other_project['id']}/analysis-runs/{run_id}/provisional-results",
+        headers=headers,
+    )
+    assert swapped.status_code == 404
+
+
+def test_provisional_pages_are_empty_for_queued_and_failed_runs(
+    api: ApiFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, headers, project, _model, operator_id = _queued_v2_run(api, monkeypatch)
+    run_id = client.get(
+        f"/projects/{project['id']}/analysis-runs",
+        headers=headers,
+    ).json()[0]["id"]
+    queued = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/provisional-results",
+        headers=headers,
+    )
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["items"] == []
+    assert queued.json()["next_cursor"] is None
+
+    database = ApiDatabase(api.settings.database_url)
+    database.transition_analysis_run(
+        UUID(run_id),
+        expected_status="queued",
+        next_status="running",
+        actor_user_id=UUID(operator_id),
+    )
+    database.transition_analysis_run(
+        UUID(run_id),
+        expected_status="running",
+        next_status="failed",
+        actor_user_id=UUID(operator_id),
+        error_code="INFERENCE_FAILED",
+    )
+    failed = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/provisional-results",
+        headers=headers,
+    )
+    assert failed.status_code == 200, failed.text
+    assert failed.json()["items"] == []
+    assert failed.json()["next_cursor"] is None
 
 
 def _hdfs_block_log(block_id: str, count: int) -> bytes:
@@ -1854,4 +2085,71 @@ def test_result_pages_keep_capped_stored_source_lines(
     assert context["source_lines"][0]["line_number"] == 1
     assert context["source_lines"][-1]["line_number"] == 20
     assert context["source_lines"][0]["raw"] == "capped-0"
+
+
+def test_typed_schemas_reject_provisional_scores_and_negative_counts() -> None:
+    from pydantic import ValidationError as PydanticValidationError
+
+    from src.api.schemas import (
+        AnalysisResultSummary,
+        AnalysisResultTrace,
+        HdfsProvisionalResult,
+        ProvisionalResultsQuery,
+    )
+
+    valid_summary = {
+        "anomaly_count": 0,
+        "normal_count": 0,
+        "rejected_records": 0,
+        "invalid_records": 0,
+    }
+    with pytest.raises(PydanticValidationError):
+        AnalysisResultSummary.model_validate({**valid_summary, "provisional_count": -1})
+    with pytest.raises(PydanticValidationError):
+        AnalysisResultSummary.model_validate(
+            {**valid_summary, "unassigned_context_line_count": -1}
+        )
+    with pytest.raises(PydanticValidationError):
+        HdfsProvisionalResult.model_validate(
+            {
+                "block_id": "blk_1",
+                "record_reference": "blk_1",
+                "reason_code": "not_in_reference_catalog",
+                "reason": "This block is not in the pinned reference catalog.",
+                "anomaly_score": 0.91,
+            }
+        )
+    with pytest.raises(PydanticValidationError):
+        HdfsProvisionalResult.model_validate(
+            {
+                "block_id": "blk_1",
+                "record_reference": "blk_1",
+                "reason_code": "not_in_reference_catalog",
+                "reason": "This block is not in the pinned reference catalog.",
+                "decision_threshold": 0.5,
+            }
+        )
+    with pytest.raises(PydanticValidationError):
+        ProvisionalResultsQuery.model_validate({"min_score": 0.5})
+    with pytest.raises(PydanticValidationError):
+        AnalysisResultTrace.model_validate(
+            {
+                "model_identifier": "attribute-gae",
+                "version": "v1",
+                "model_version_id": "00000000-0000-4000-8000-000000000001",
+                "pipeline_run_id": "run",
+                "classification_catalog_sha256": "not-a-digest",
+            }
+        )
+    accepted = HdfsProvisionalResult.model_validate(
+        {
+            "block_id": "blk_1",
+            "record_reference": "blk_1",
+            "reason_code": "not_in_reference_catalog",
+            "reason": "This block is not in the pinned reference catalog.",
+            "context": {"matched_line_count": 1, "source_lines": []},
+        }
+    )
+    assert not hasattr(accepted, "anomaly_score")
+    assert "anomaly_score" not in accepted.model_dump()
 

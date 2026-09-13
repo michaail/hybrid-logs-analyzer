@@ -57,6 +57,23 @@ def create_app(settings: InferenceSettings | None = None) -> FastAPI:
             )
         except Exception:
             logger.exception("Failed to reclaim stale running analysis runs")
+        try:
+            from src.inference_service.runner import verify_pinned_catalog
+
+            verify_pinned_catalog(
+                object_store,
+                manifest_path=resolved.hdfs_completeness_manifest,
+                manifest_object_key=resolved.hdfs_completeness_manifest_object_key,
+                expected_sha256=resolved.hdfs_completeness_manifest_sha256,
+            )
+        except Exception:
+            logger.exception("Pinned HDFS reference catalog failed verification")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "The pinned HDFS reference catalog is unavailable or failed verification."
+                ),
+            ) from None
         return {"status": "ok"}
 
     @app.post(
@@ -76,6 +93,11 @@ def create_app(settings: InferenceSettings | None = None) -> FastAPI:
             database,
             object_store,
             stale_running_seconds=resolved.stale_running_seconds,
+            hdfs_completeness_manifest_sha256=resolved.hdfs_completeness_manifest_sha256,
+            hdfs_completeness_manifest=resolved.hdfs_completeness_manifest,
+            hdfs_completeness_manifest_object_key=(
+                resolved.hdfs_completeness_manifest_object_key
+            ),
         )
         if not result.get("found"):
             raise HTTPException(

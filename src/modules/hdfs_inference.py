@@ -11,7 +11,7 @@ import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import AbstractSet, Any
 
 from src.modules.inference_bundle import (
     DRAIN_CONFIG_NAME,
@@ -65,6 +65,15 @@ class BlockInferenceSnapshot:
 
 
 @dataclass(frozen=True)
+class ProvisionalBlockSnapshot:
+    """Unscored block history retained as bounded source evidence."""
+
+    block_id: str
+    matched_line_count: int
+    source_lines: tuple[SourceLine, ...]
+
+
+@dataclass(frozen=True)
 class FrozenHdfsInferenceResult:
     """Complete processing trace for a raw HDFS log and a trusted v2 release."""
 
@@ -76,6 +85,8 @@ class FrozenHdfsInferenceResult:
     source_line_count: int
     annotated_line_count: int
     blocks: tuple[BlockInferenceSnapshot, ...]
+    provisional_blocks: tuple[ProvisionalBlockSnapshot, ...] = ()
+    unassigned_context_line_count: int = 0
 
     def as_snapshot(self) -> dict[str, Any]:
         """JSON-serialisable processing oracle used by the golden fixture."""
@@ -108,8 +119,14 @@ def score_frozen_hdfs_log(
     log_path: Path,
     artifact_path: Path,
     batch_size: int = 1,
+    scoring_block_ids: AbstractSet[str] | None = None,
 ) -> FrozenHdfsInferenceResult:
-    """Annotate, graph, and score a raw HDFS log from materialized v2 artefacts."""
+    """Annotate, graph, and score a raw HDFS log from materialized v2 artefacts.
+
+    ``scoring_block_ids=None`` keeps the historical all-block scoring path used by
+    notebooks and parity. The private inference service always supplies the pinned
+    catalog set so non-member histories stay unscored.
+    """
 
     if batch_size <= 0:
         raise ValueError("batch_size must be positive.")
@@ -117,14 +134,8 @@ def score_frozen_hdfs_log(
     if source_line_count > MAX_SOURCE_LINES:
         raise HdfsInferenceError("INFERENCE_FAILED", cause="source line limit exceeded")
 
-    from src.modules.dataset import MissingClusterEmbedding, build_pyg_dataset
-    from src.modules.models.gae import AttributeAwareGAE, compute_anomaly_scores
     from src.modules.parser.drain_parser import DrainParser, UnmatchedLogLine
     from src.modules.sequencer import build_sequences
-    from torch_geometric.loader import DataLoader
-
-    import numpy as np
-    import torch
 
     parser_path = bundle_dir / DRAIN_PARSER_NAME
     config_path = bundle_dir / DRAIN_CONFIG_NAME
@@ -138,9 +149,65 @@ def score_frozen_hdfs_log(
         raise HdfsInferenceError("PARSER_FAILED", cause=type(error).__name__) from error
 
     annotated_line_count = 0 if annotated.empty else int(len(annotated))
+    unassigned_context_line_count = _count_unassigned_context_lines(annotated)
     sequences = build_sequences(annotated, "hdfs") if not annotated.empty else {}
     if len(sequences) > MAX_BLOCKS:
         raise HdfsInferenceError("INFERENCE_FAILED", cause="block limit exceeded")
+    scored_sequences, provisional_sequences = _partition_sequences(
+        sequences, scoring_block_ids
+    )
+    threshold = float(manifest.metrics.best_threshold)
+    if scoring_block_ids is None or scored_sequences:
+        blocks = _score_selected_sequences(
+            manifest=manifest,
+            scored_sequences=scored_sequences,
+            embeddings_path=embeddings_path,
+            artifact_path=artifact_path,
+            batch_size=batch_size,
+            threshold=threshold,
+        )
+    else:
+        blocks = []
+    provisional_blocks = tuple(
+        ProvisionalBlockSnapshot(
+            block_id=str(block_id),
+            matched_line_count=int(len(frame)),
+            source_lines=_source_lines(frame),
+        )
+        for block_id, frame in provisional_sequences.items()
+    )
+    return FrozenHdfsInferenceResult(
+        threshold=threshold,
+        parser_checksum=_sha256_file(parser_path),
+        drain_config_checksum=_sha256_file(config_path),
+        embeddings_checksum=_sha256_file(embeddings_path),
+        artifact_checksum=_sha256_file(artifact_path),
+        source_line_count=source_line_count,
+        annotated_line_count=annotated_line_count,
+        blocks=tuple(blocks),
+        provisional_blocks=provisional_blocks,
+        unassigned_context_line_count=unassigned_context_line_count,
+    )
+
+
+def _score_selected_sequences(
+    *,
+    manifest: ModelPackageManifest,
+    scored_sequences: dict[Any, Any],
+    embeddings_path: Path,
+    artifact_path: Path,
+    batch_size: int,
+    threshold: float,
+) -> list[BlockInferenceSnapshot]:
+    """Build graphs and scores only for the selected HDFS sequences."""
+
+    from src.modules.dataset import MissingClusterEmbedding, build_pyg_dataset
+    from src.modules.models.gae import AttributeAwareGAE, compute_anomaly_scores
+    from torch_geometric.loader import DataLoader
+
+    import numpy as np
+    import torch
+
     embeddings = load_frozen_embeddings(embeddings_path)
     embed_width = next(iter(embeddings.values())).shape[0] if embeddings else 0
     expected_node_dim = embed_width + NODE_FEATURE_EXTRA_DIM
@@ -150,11 +217,11 @@ def score_frozen_hdfs_log(
             cause="embedding width does not match architecture.node_dim",
         )
     use_edge_features = manifest.architecture.edge_dim > 1
-    if sequences:
+    if scored_sequences:
         try:
             graphs = build_pyg_dataset(
-                sequences,
-                {block_id: 0 for block_id in sequences},
+                scored_sequences,
+                {block_id: 0 for block_id in scored_sequences},
                 embeddings,
                 use_edge_features=use_edge_features,
                 dataset="hdfs",
@@ -193,8 +260,7 @@ def score_frozen_hdfs_log(
     except Exception as error:
         raise HdfsInferenceError("MODEL_LOAD_FAILED", cause=type(error).__name__) from error
 
-    threshold = float(manifest.metrics.best_threshold)
-    block_ids = list(sequences.keys())
+    block_ids = list(scored_sequences.keys())
     if graphs:
         try:
             loader = DataLoader(graphs, batch_size=batch_size, shuffle=False)
@@ -232,20 +298,39 @@ def score_frozen_hdfs_log(
                 edge_index=edge_index,
                 node_features=_feature_matrix(graph.x),
                 edge_features=_feature_matrix(getattr(graph, "edge_attr", None)),
-                matched_line_count=int(len(sequences[block_id])),
-                source_lines=_source_lines(sequences[block_id]),
+                matched_line_count=int(len(scored_sequences[block_id])),
+                source_lines=_source_lines(scored_sequences[block_id]),
             )
         )
-    return FrozenHdfsInferenceResult(
-        threshold=threshold,
-        parser_checksum=_sha256_file(parser_path),
-        drain_config_checksum=_sha256_file(config_path),
-        embeddings_checksum=_sha256_file(embeddings_path),
-        artifact_checksum=_sha256_file(artifact_path),
-        source_line_count=source_line_count,
-        annotated_line_count=annotated_line_count,
-        blocks=tuple(blocks),
-    )
+    return blocks
+
+
+def _partition_sequences(
+    sequences: Mapping[Any, Any],
+    scoring_block_ids: AbstractSet[str] | None,
+) -> tuple[dict[Any, Any], dict[Any, Any]]:
+    """Split grouped HDFS sequences into scored versus provisional histories."""
+
+    if scoring_block_ids is None:
+        return dict(sequences), {}
+    scored: dict[Any, Any] = {}
+    provisional: dict[Any, Any] = {}
+    for block_id, frame in sequences.items():
+        if str(block_id) in scoring_block_ids:
+            scored[block_id] = frame
+        else:
+            provisional[block_id] = frame
+    return scored, provisional
+
+
+def _count_unassigned_context_lines(annotated: Any) -> int:
+    """Count parser-matched rows whose HDFS block identifier is missing."""
+
+    if annotated is None or getattr(annotated, "empty", True):
+        return 0
+    if "block_id" not in getattr(annotated, "columns", ()):
+        return 0
+    return int(annotated["block_id"].isna().sum())
 
 
 def load_frozen_embeddings(path: Path) -> dict[int, Any]:

@@ -9,10 +9,13 @@ import {
   AuditEvent,
   Dataset,
   HdfsAnomalyContext,
+  HdfsProvisionalContext,
+  HdfsProvisionalResult,
   Membership,
   ModelVersion,
   Project,
   ProjectRole,
+  ProvisionalResults,
   ResultSort,
   User,
 } from "./api";
@@ -20,6 +23,7 @@ import {
 type View = "models" | "runs" | "administration";
 
 const tokenStorageKey = "logscope.access-token";
+const RESULTS_PAGE_SIZE = 20;
 const api = new ApiClient();
 
 export default function App() {
@@ -1514,6 +1518,17 @@ function ResultsDialog({
   const [error, setError] = useState<string | null>(null);
   const [filterError, setFilterError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [panel, setPanel] = useState<"anomalies" | "provisional">("anomalies");
+  const [provisionalDraftPrefix, setProvisionalDraftPrefix] = useState("");
+  const [provisionalAppliedPrefix, setProvisionalAppliedPrefix] = useState<string | null>(null);
+  const [provisionalCursor, setProvisionalCursor] = useState<string | null>(null);
+  const [provisionalPreviousCursors, setProvisionalPreviousCursors] = useState<Array<string | null>>(
+    [],
+  );
+  const [provisionalResults, setProvisionalResults] = useState<ProvisionalResults | null>(null);
+  const [provisionalError, setProvisionalError] = useState<string | null>(null);
+  const [provisionalFilterError, setProvisionalFilterError] = useState<string | null>(null);
+  const [isProvisionalLoading, setIsProvisionalLoading] = useState(false);
   const onUnauthorizedRef = useRef(onUnauthorized);
   onUnauthorizedRef.current = onUnauthorized;
 
@@ -1524,6 +1539,7 @@ function ResultsDialog({
 
     void api
       .getAnalysisResults(projectId, runId, {
+        limit: RESULTS_PAGE_SIZE,
         sort,
         block_id_prefix: appliedPrefix,
         min_score: appliedMinScore,
@@ -1554,6 +1570,46 @@ function ResultsDialog({
       cancelled = true;
     };
   }, [appliedMinScore, appliedPrefix, cursor, projectId, runId, sort]);
+
+  useEffect(() => {
+    if (panel !== "provisional") {
+      return;
+    }
+    let cancelled = false;
+    setIsProvisionalLoading(true);
+    setProvisionalError(null);
+
+    void api
+      .getProvisionalResults(projectId, runId, {
+        limit: RESULTS_PAGE_SIZE,
+        block_id_prefix: provisionalAppliedPrefix,
+        cursor: provisionalCursor,
+      })
+      .then((page) => {
+        if (!cancelled) {
+          setProvisionalResults(page);
+        }
+      })
+      .catch((requestError: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        if (requestError instanceof ApiError && requestError.status === 401) {
+          onUnauthorizedRef.current(requestError);
+          return;
+        }
+        setProvisionalError(messageFor(requestError));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsProvisionalLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [panel, projectId, provisionalAppliedPrefix, provisionalCursor, runId]);
 
   function resetPaging(): void {
     setCursor(null);
@@ -1608,6 +1664,45 @@ function ResultsDialog({
     setCursor(results.next_cursor);
   }
 
+  function resetProvisionalPaging(): void {
+    setProvisionalCursor(null);
+    setProvisionalPreviousCursors([]);
+  }
+
+  function applyProvisionalFilters(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const prefix = provisionalDraftPrefix.trim();
+    setProvisionalFilterError(null);
+    setProvisionalAppliedPrefix(prefix.length > 0 ? prefix : null);
+    resetProvisionalPaging();
+  }
+
+  function resetProvisionalFilters(): void {
+    setProvisionalDraftPrefix("");
+    setProvisionalFilterError(null);
+    setProvisionalAppliedPrefix(null);
+    resetProvisionalPaging();
+  }
+
+  function goProvisionalPrevious(): void {
+    if (isProvisionalLoading || provisionalPreviousCursors.length === 0) {
+      return;
+    }
+    const previous = provisionalPreviousCursors[provisionalPreviousCursors.length - 1] ?? null;
+    setIsProvisionalLoading(true);
+    setProvisionalPreviousCursors((history) => history.slice(0, -1));
+    setProvisionalCursor(previous);
+  }
+
+  function goProvisionalNext(): void {
+    if (isProvisionalLoading || !provisionalResults?.next_cursor) {
+      return;
+    }
+    setIsProvisionalLoading(true);
+    setProvisionalPreviousCursors((history) => [...history, provisionalCursor]);
+    setProvisionalCursor(provisionalResults.next_cursor);
+  }
+
   const run = results?.run;
   const summary = results?.summary;
   const trace = results?.trace;
@@ -1615,18 +1710,27 @@ function ResultsDialog({
   const showInspectionControls =
     run?.status === "completed" && summary !== undefined && summary.anomaly_count > 0;
   const inspectionMessage = results
-    ? resultInspectionMessage(results.run, results.summary.anomaly_count, results.anomalies.length, filtersActive)
+    ? resultInspectionMessage(results.run, results.summary, results.anomalies.length, filtersActive)
     : null;
   const validationExamples = run?.validation_report?.examples ?? [];
+  const busy = isLoading || (panel === "provisional" && isProvisionalLoading);
 
   return (
     <Dialog className="dialog-wide" title="Analysis outcome" onClose={onClose}>
-      <div aria-busy={isLoading} className="results-dialog">
+      <div aria-busy={busy} className="results-dialog">
         {error && <Banner tone="error" message={error} onDismiss={() => setError(null)} />}
+        {provisionalError && (
+          <Banner tone="error" message={provisionalError} onDismiss={() => setProvisionalError(null)} />
+        )}
         {isLoading && !results && <p className="muted">Loading analysis results…</p>}
         {isLoading && results && (
           <p aria-live="polite" className="muted">
             Updating this page of results…
+          </p>
+        )}
+        {panel === "provisional" && isProvisionalLoading && (
+          <p aria-live="polite" className="muted">
+            {provisionalResults ? "Updating provisional histories…" : "Loading provisional histories…"}
           </p>
         )}
 
@@ -1635,32 +1739,35 @@ function ResultsDialog({
             <div className="results-header">
               <div>
                 <span className="summary-label">HDFS analysis run</span>
-                <h3>{run.log_reference}</h3>
-                {run.dataset_id && <p className="muted">Dataset {run.dataset_id}</p>}
+                <h3>
+                  {fileNameFromReference(run.log_reference)} · {formatDateTime(run.created_at)}
+                </h3>
               </div>
               <StatusBadge status={run.status} />
             </div>
 
             <dl className="results-identity">
               <div>
-                <dt>Run ID</dt>
-                <dd className="technical-id">{run.id}</dd>
-              </div>
-              <div>
                 <dt>Model</dt>
-                <dd>
-                  {trace.model_identifier} · {trace.version}
-                </dd>
+                <dd>{trace.model_identifier}</dd>
               </div>
               <div>
-                <dt>Model version ID</dt>
-                <dd className="technical-id">{trace.model_version_id}</dd>
+                <dt>Model version</dt>
+                <dd>{trace.version}</dd>
               </div>
             </dl>
 
             <details className="results-disclosure">
               <summary>More provenance</summary>
               <dl className="results-provenance">
+                <div>
+                  <dt>Analysis run ID</dt>
+                  <dd className="technical-id">{run.id}</dd>
+                </div>
+                <div>
+                  <dt>Model version ID</dt>
+                  <dd className="technical-id">{trace.model_version_id}</dd>
+                </div>
                 <div>
                   <dt>Pipeline run</dt>
                   <dd className="technical-id">{trace.pipeline_run_id}</dd>
@@ -1694,6 +1801,18 @@ function ResultsDialog({
                     <dd>Not attached</dd>
                   </div>
                 )}
+                {trace.classification_policy && (
+                  <div>
+                    <dt>Classification policy</dt>
+                    <dd className="technical-id">{trace.classification_policy}</dd>
+                  </div>
+                )}
+                {trace.classification_catalog_sha256 && (
+                  <div>
+                    <dt>Reference catalog digest</dt>
+                    <dd className="technical-id">{trace.classification_catalog_sha256}</dd>
+                  </div>
+                )}
               </dl>
             </details>
 
@@ -1708,8 +1827,10 @@ function ResultsDialog({
             {run.error_code && <p className="error-code">Error code: {run.error_code}</p>}
 
             <div className="outcome-summary">
-              <SummaryMetric label="Anomalies" value={summary.anomaly_count} />
-              <SummaryMetric label="Normal" value={summary.normal_count} />
+              <SummaryMetric label="Heuristically final anomalies" value={summary.anomaly_count} />
+              <SummaryMetric label="Heuristically final normal" value={summary.normal_count} />
+              <SummaryMetric label="Provisional histories" value={summary.provisional_count} />
+              <SummaryMetric label="Unassigned context lines" value={summary.unassigned_context_line_count} />
               <SummaryMetric label="Rejected records" value={summary.rejected_records} />
               <SummaryMetric label="Invalid records" value={summary.invalid_records} />
             </div>
@@ -1718,6 +1839,13 @@ function ResultsDialog({
               invalid counts stay at zero for admitted HDFS runs; invalid uploads are rejected at
               dataset admission and never become analysis results.
             </p>
+            <div className="info-strip">
+              <strong>Heuristic outcomes</strong>
+              <span>
+                Heuristically final outcomes are based on membership in the pinned reference
+                catalog. Catalog membership is not proof that the source HDFS lifecycle ended.
+              </span>
+            </div>
 
             {validationExamples.length > 0 && (
               <div className="validation-examples">
@@ -1732,7 +1860,26 @@ function ResultsDialog({
               </div>
             )}
 
-            {showInspectionControls && results && (
+            {summary.provisional_count > 0 && (
+              <div className="results-panel-switch">
+                <button
+                  className={panel === "anomalies" ? "selected-button" : "secondary-button"}
+                  onClick={() => setPanel("anomalies")}
+                  type="button"
+                >
+                  Heuristically final anomalies
+                </button>
+                <button
+                  className={panel === "provisional" ? "selected-button" : "secondary-button"}
+                  onClick={() => setPanel("provisional")}
+                  type="button"
+                >
+                  Review {summary.provisional_count} provisional histories
+                </button>
+              </div>
+            )}
+
+            {panel === "anomalies" && showInspectionControls && results && (
               <form className="results-filters" onSubmit={(event) => applyFilters(event)}>
                 {filterError && <Banner tone="error" message={filterError} />}
                 <label htmlFor="results-sort">
@@ -1779,35 +1926,22 @@ function ResultsDialog({
               </form>
             )}
 
-            {showInspectionControls && results && (
-              <div className="results-pagination">
-                <button
-                  className="secondary-button"
-                  disabled={isLoading || previousCursors.length === 0}
-                  onClick={goPrevious}
-                  type="button"
-                >
-                  Previous page
-                </button>
-                <p>
-                  Page {previousCursors.length + 1}
-                  {results.next_cursor ? "" : ", last page"}
-                  {` · ${results.anomalies.length} HDFS blocks on this page`}
-                </p>
-                <button
-                  className="secondary-button"
-                  disabled={isLoading || !results.next_cursor}
-                  onClick={goNext}
-                  type="button"
-                >
-                  Next page
-                </button>
-              </div>
+            {panel === "anomalies" && showInspectionControls && results && (
+              <ResultPagination
+                hasNext={results.next_cursor !== null}
+                hasPrevious={previousCursors.length > 0}
+                isLoading={isLoading}
+                itemCount={results.anomalies.length}
+                itemLabel="HDFS blocks"
+                onNext={goNext}
+                onPrevious={goPrevious}
+                page={previousCursors.length + 1}
+              />
             )}
 
-            {results.anomalies.length > 0 && (
+            {panel === "anomalies" && results.anomalies.length > 0 && (
               <div className="anomaly-list">
-                <h4>Detected HDFS blocks</h4>
+                <h4>Heuristically final anomalies</h4>
                 {results.anomalies.map((anomaly) => (
                   <article className="anomaly-card" key={anomaly.block_id}>
                     <div className="anomaly-heading">
@@ -1819,28 +1953,86 @@ function ResultsDialog({
                       {formatInspectedNumber(anomaly.decision_threshold)}
                       {anomaly.anomaly_level ? ` · ${anomaly.anomaly_level}` : ""}
                     </p>
-                    <details className="results-disclosure">
-                      <summary>{sourceEvidenceLabel(anomaly.context)}</summary>
-                      {anomaly.context.source_lines.length === 0 ? (
-                        <p className="muted">
-                          No stored source lines are available for this block.
-                        </p>
-                      ) : (
-                        <ol className="source-line-list">
-                          {anomaly.context.source_lines.map((line, index) => (
-                            <li key={`${line.line_number ?? "unavailable"}-${index}`}>
-                              <span className="source-line-number">
-                                Line {line.line_number ?? "unavailable"}
-                              </span>
-                              <pre className="source-line-raw">{line.raw}</pre>
-                            </li>
-                          ))}
-                        </ol>
-                      )}
-                    </details>
+                    <SourceEvidence context={anomaly.context} kind="scored" />
                   </article>
                 ))}
               </div>
+            )}
+
+            {panel === "anomalies" && showInspectionControls && results && (
+              <ResultPagination
+                hasNext={results.next_cursor !== null}
+                hasPrevious={previousCursors.length > 0}
+                isLoading={isLoading}
+                itemCount={results.anomalies.length}
+                itemLabel="HDFS blocks"
+                onNext={goNext}
+                onPrevious={goPrevious}
+                page={previousCursors.length + 1}
+              />
+            )}
+
+            {panel === "provisional" && (
+              <>
+                <form className="results-filters results-filters-provisional" onSubmit={applyProvisionalFilters}>
+                  {provisionalFilterError && <Banner tone="error" message={provisionalFilterError} />}
+                  <label htmlFor="provisional-block-prefix">
+                    Block ID prefix
+                    <input
+                      disabled={isProvisionalLoading}
+                      id="provisional-block-prefix"
+                      onChange={(event) => setProvisionalDraftPrefix(event.target.value)}
+                      placeholder="e.g. blk_"
+                      value={provisionalDraftPrefix}
+                    />
+                  </label>
+                  <div className="results-filter-actions">
+                    <button className="secondary-button" disabled={isProvisionalLoading} type="submit">
+                      Apply filter
+                    </button>
+                    <button
+                      className="text-button"
+                      disabled={isProvisionalLoading}
+                      onClick={resetProvisionalFilters}
+                      type="button"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                </form>
+                {provisionalResults && (
+                  <ResultPagination
+                    hasNext={provisionalResults.next_cursor !== null}
+                    hasPrevious={provisionalPreviousCursors.length > 0}
+                    isLoading={isProvisionalLoading}
+                    itemCount={provisionalResults.items.length}
+                    itemLabel="provisional histories"
+                    onNext={goProvisionalNext}
+                    onPrevious={goProvisionalPrevious}
+                    page={provisionalPreviousCursors.length + 1}
+                  />
+                )}
+                {provisionalResults && provisionalResults.items.length > 0 && (
+                  <div className="anomaly-list">
+                    <h4>Provisional histories</h4>
+                    {provisionalResults.items.map((item) => (
+                      <ProvisionalHistoryCard key={item.block_id} item={item} />
+                    ))}
+                  </div>
+                )}
+                {provisionalResults && (
+                  <ResultPagination
+                    hasNext={provisionalResults.next_cursor !== null}
+                    hasPrevious={provisionalPreviousCursors.length > 0}
+                    isLoading={isProvisionalLoading}
+                    itemCount={provisionalResults.items.length}
+                    itemLabel="provisional histories"
+                    onNext={goProvisionalNext}
+                    onPrevious={goProvisionalPrevious}
+                    page={provisionalPreviousCursors.length + 1}
+                  />
+                )}
+              </>
             )}
           </>
         )}
@@ -1852,6 +2044,42 @@ function ResultsDialog({
         </div>
       </div>
     </Dialog>
+  );
+}
+
+function ResultPagination({
+  hasNext,
+  hasPrevious,
+  isLoading,
+  itemCount,
+  itemLabel,
+  onNext,
+  onPrevious,
+  page,
+}: {
+  hasNext: boolean;
+  hasPrevious: boolean;
+  isLoading: boolean;
+  itemCount: number;
+  itemLabel: string;
+  onNext: () => void;
+  onPrevious: () => void;
+  page: number;
+}): JSX.Element {
+  return (
+    <div className="results-pagination">
+      <button className="secondary-button" disabled={isLoading || !hasPrevious} onClick={onPrevious} type="button">
+        Previous page
+      </button>
+      <p>
+        Page {page}
+        {hasNext ? "" : ", last page"}
+        {` · ${itemCount} ${itemLabel} on this page`}
+      </p>
+      <button className="secondary-button" disabled={isLoading || !hasNext} onClick={onNext} type="button">
+        Next page
+      </button>
+    </div>
   );
 }
 
@@ -1952,6 +2180,47 @@ function SummaryMetric({ label, value }: { label: string; value: number }): JSX.
   );
 }
 
+function SourceEvidence({
+  context,
+  kind,
+}: {
+  context: HdfsAnomalyContext | HdfsProvisionalContext;
+  kind: "scored" | "source";
+}): JSX.Element {
+  return (
+    <details className="results-disclosure">
+      <summary>{sourceEvidenceLabel(context, kind)}</summary>
+      {context.source_lines.length === 0 ? (
+        <p className="muted">No stored source lines are available for this block.</p>
+      ) : (
+        <ol className="source-line-list">
+          {context.source_lines.map((line, index) => (
+            <li key={`${line.line_number ?? "unavailable"}-${index}`}>
+              <span className="source-line-number">Line {line.line_number ?? "unavailable"}</span>
+              <pre className="source-line-raw">{line.raw}</pre>
+            </li>
+          ))}
+        </ol>
+      )}
+    </details>
+  );
+}
+
+function ProvisionalHistoryCard({ item }: { item: HdfsProvisionalResult }): JSX.Element {
+  return (
+    <article className="anomaly-card">
+      <div className="anomaly-heading">
+        <span className="summary-label">Provisional HDFS block</span>
+        <strong className="technical-id">{item.block_id}</strong>
+      </div>
+      <p>
+        {item.reason} <span className="technical-id">({item.reason_code})</span>
+      </p>
+      <SourceEvidence context={item.context} kind="source" />
+    </article>
+  );
+}
+
 function messageFor(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
 }
@@ -1977,21 +2246,25 @@ function formatInspectedNumber(value: number | null): string {
   return formatMetric(value);
 }
 
-function sourceEvidenceLabel(context: HdfsAnomalyContext): string {
+function sourceEvidenceLabel(
+  context: HdfsAnomalyContext | HdfsProvisionalContext,
+  kind: "scored" | "source" = "scored",
+): string {
   const shown = context.source_lines.length;
   const matched = context.matched_line_count;
+  const lineKind = kind === "scored" ? "scored log lines" : "source log lines";
   if (shown === 0 && matched === 0) {
     return "Source evidence — no stored source lines";
   }
   if (shown >= matched && matched > 0) {
-    return `Source evidence — ${shown} scored log lines`;
+    return `Source evidence — ${shown} ${lineKind}`;
   }
-  return `Source evidence — showing ${shown} of ${matched} scored log lines`;
+  return `Source evidence — showing ${shown} of ${matched} ${lineKind}`;
 }
 
 function resultInspectionMessage(
   run: AnalysisRun,
-  anomalyCount: number,
+  summary: AnalysisResults["summary"],
   pageSize: number,
   filtered: boolean,
 ): { tone: "progress" | "failed" | "empty"; text: string } | null {
@@ -2013,7 +2286,14 @@ function resultInspectionMessage(
       text: `This run ended as ${run.status.split("_").join(" ")} and has no scored HDFS block anomalies.`,
     };
   }
-  if (run.status === "completed" && anomalyCount === 0) {
+  if (run.status === "completed" && summary.anomaly_count === 0) {
+    if (summary.provisional_count > 0 || summary.unassigned_context_line_count > 0) {
+      return {
+        tone: "empty",
+        text:
+          "Analysis completed. Heuristically final anomaly and normal counts are zero. Review provisional histories and unassigned context below; this run is not a failure.",
+      };
+    }
     return {
       tone: "empty",
       text: "Analysis completed with no detected HDFS block anomalies. The totals below still cover the whole run.",
@@ -2042,6 +2322,20 @@ function formatDate(value: string): string {
   }).format(date);
 }
 
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
 function formatMetric(value: unknown): string {
   if (typeof value === "number") {
     return Number.isInteger(value) ? String(value) : value.toFixed(4);
@@ -2060,8 +2354,13 @@ function shortId(value: string): string {
   return value.slice(0, 8);
 }
 
+function fileNameFromReference(reference: string): string {
+  const segments = reference.split("/").filter((segment) => segment.length > 0);
+  return segments[segments.length - 1] ?? reference;
+}
+
 function datasetOptionLabel(dataset: Dataset): string {
-  const segments = dataset.object_reference.split("/").filter((segment) => segment.length > 0);
-  const filename = segments[segments.length - 1] ?? dataset.object_reference;
-  return `${filename} · ${shortId(dataset.id)} · ${dataset.storage_kind}`;
+  return `${fileNameFromReference(dataset.object_reference)} · ${shortId(dataset.id)} · ${
+    dataset.storage_kind
+  }`;
 }

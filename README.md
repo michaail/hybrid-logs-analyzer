@@ -362,6 +362,29 @@ that token, JWT secret, or object-store keys in the Vite/React build. If the inf
 URL and token are unset, a valid analysis request still returns `202 queued` and waits;
 dispatch does not fabricate a terminal result.
 
+The private inference process also requires a pinned F-03 catalog pair:
+
+```bash
+# After scripts/build_hdfs_evaluation_dataset.py prints the ignored manifest path:
+shasum -a 256 artifacts/cache/hdfs/evaluation-data/<fingerprint>/manifest.json
+```
+
+Set both `INFERENCE_HDFS_COMPLETENESS_MANIFEST` and
+`INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256` (lowercase hex) on the inference
+process only. Leave them out of the public API, the React build, and model-validator
+packages.
+
+Locally, the manifest value is the absolute path to that ignored `manifest.json`.
+On Railway staging, the same variable is the Bucket object key
+`hdfs/reference-catalog/manifest.json`; upload that file and its sibling
+`selected-block-ids.txt` to the private `models` Bucket and pin the digest as the
+shared `INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256` variable. Inference `/health`
+verifies the catalog before reporting ready.
+
+A missing or checksum-mismatched catalog fails the analysis run; it does not
+treat every block as provisional. Generated evaluation artifacts stay under ignored
+workspace paths and must not be committed.
+
 Sign-in uses a username and password. Usernames are stored as a canonical lowercase
 identity (3–64 characters: letters, digits, underscore, dot, or hyphen), and sign-in is
 case-insensitive. A successful `POST /auth/token` returns a JWT bearer token with a
@@ -463,8 +486,29 @@ artifact checksum, and preprocessing-bundle identity when present.
 Results are project-scoped: a caller without membership in the selected project receives
 `404`, including when presenting a cursor issued for another project. Invalid or rejected
 HDFS uploads remain a `422` validation report at dataset admission and create no analysis
-run or historical result row. These pages present finalized detected anomalies only; the
-separate S-06 / FR-012 work owns completeness and provisional HDFS block histories.
+run or historical result row. These pages present heuristically final detected anomalies
+only. S-06 / FR-012 uses membership in a pinned F-03 selected-block-id catalog as the
+documented reference-membership heuristic: catalog members may receive anomaly or normal
+outcomes labelled **heuristically final**. That membership is useful triage evidence, not
+proof that an HDFS lifecycle ended. Histories absent from the catalog are provisional
+and must not appear in the anomaly list or heuristic-final counts.
+
+`GET /projects/{project_id}/analysis-runs/{analysis_run_id}/provisional-results` provides
+the separate, operator-authorized page of those provisional histories. It accepts only
+`limit` (1–100, default 50), literal `block_id_prefix`, and the opaque `cursor` from the
+preceding provisional page; it has no score filter or score-based ordering. Each returned
+record contains a block ID, `not_in_reference_catalog` reason, server-owned explanation,
+and bounded source evidence. It never contains a model score, decision threshold, or
+anomaly level. The route returns an empty page for queued, failed, rejected, and historical
+runs, and rejects a malformed, mismatched, or anomaly-issued cursor with `422`.
+
+The result summary remains run-wide, including while either result page is filtered or
+paginated. Its four existing fields are heuristic anomaly count, heuristic normal count,
+rejected records, and invalid records; `provisional_count` and
+`unassigned_context_line_count` are additive run columns. A parser-matched line with no
+HDFS block ID belongs to neither result page and increments only the unassigned-context
+count. The React outcome view keeps provisional histories in a separate panel and labels
+all scored outcomes as **heuristically final**.
 
 S-04 analysis loads a frozen Drain3 FilePersistence snapshot with the bundle `drain.ini`
 via `DrainParser.load`, then calls `annotate_file` only. It does not fit Drain, re-enrich
@@ -509,9 +553,10 @@ FR-013 evaluation data is a checksum-bound projection of an approved HDFS corpus
 explicit ordered block-ID list. A selected block is complete *within that corpus*: every
 source line whose first `blk_*` match is selected appears exactly once, in original
 source-file order, in one bounded shard. That is reproducible evaluation evidence, not a
-claim that an arbitrary Operator upload is lifecycle-complete. Distinguishing finalized
-versus provisional live-upload histories belongs to S-06 / FR-012 and does not change
-anomaly or normal result classification here.
+claim that an arbitrary Operator upload is lifecycle-complete. S-06 / FR-012 pins this
+artifact's selected-block-id list as a reference-membership heuristic for live analysis:
+catalog members are labelled **heuristically final**, not proven lifecycle-complete.
+F-03 does not classify Operator uploads.
 
 Line-prefix samples are parser or intake smoke tests only and cannot support
 anomaly-quality evaluation. The builder never infers a newest corpus, label file, release,
@@ -535,7 +580,13 @@ python scripts/build_hdfs_evaluation_dataset.py \
 
 The command prints the published or reused `manifest.json` path. Output stays under the
 ignored workspace cache `artifacts/cache/hdfs/evaluation-data/<fingerprint>/` and
-includes:
+must not be committed. Pin that absolute path and the manifest SHA-256 on the private
+inference service (`INFERENCE_HDFS_COMPLETENESS_MANIFEST` and
+`INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256`) so live analysis can apply the
+reference-membership heuristic. The digest is calculated at deploy time and is not
+stored in Git.
+
+The cache entry includes:
 
 - `selected-block-ids.txt` — copy of the supplied ordered ID file
 - `shard-NNN.log` — bounded complete-history shards
@@ -547,6 +598,41 @@ includes:
 Unchanged inputs, shard limits, and git revision reuse the same cache entry. Changing
 corpus, label, or selected-ID bytes produces a distinct artifact even if a path, size, or
 mtime is reused.
+
+### S-06 rollout, verification, and rollback
+
+Roll out S-06 in this order:
+
+1. Build and retain the F-03 artifact outside Git, then record the `manifest.json` SHA-256.
+2. Apply migration `008_provisional_hdfs_results` to the shared database.
+3. Configure and deploy the private inference service with the manifest location and exact
+   SHA-256 (filesystem path locally; Bucket object key `hdfs/reference-catalog/manifest.json`
+   on Railway); verify `/health` can load the catalog before admitting queued work.
+4. Deploy the public API.
+5. Deploy the frontend.
+
+The catalog is an immutable deployment input, not a browser or API upload. If its manifest
+or selected-ID file changes after the digest is pinned, a new run fails with
+`COMPLETENESS_CATALOG_UNAVAILABLE`; it must not silently classify every block as
+provisional. Retain the exact catalog artifact and digest for every completed run.
+
+Code rollback never drops migration 008's table, index, or columns. The original
+four-field `results_summary_json` remains unchanged, so an older API can still read
+completed runs after a code rollback. Do not remove provisional records or the catalog
+artifact while any run may need inspection.
+
+Run the regression checks in a normal local ML environment or the Linux inference
+environment, not Cursor's restricted native-library sandbox:
+
+```bash
+python -m pytest
+python -m pytest -m ml
+ruff check src tests scripts run_ablation.py
+mypy
+npm --prefix frontend run lint
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
+```
 
 The approved 11,167,740-line corpus build and the controlled `scripts/verify_hdfs_parity.py`
 run against the v3 release are documented manual release checks. They need the

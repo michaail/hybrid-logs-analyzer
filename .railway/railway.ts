@@ -51,6 +51,9 @@ export default defineRailway((ctx) => {
     },
     env: {
       INFERENCE_INTERNAL_TOKEN: ctx.shared.INFERENCE_INTERNAL_TOKEN,
+      INFERENCE_HDFS_COMPLETENESS_MANIFEST: "hdfs/reference-catalog/manifest.json",
+      INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256:
+        ctx.shared.INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256,
       ...sharedStore,
     },
   });

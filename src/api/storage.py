@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import math
+import re
 import sqlite3
 from collections.abc import Generator, Iterable, Mapping
 from contextlib import contextmanager
@@ -56,6 +57,28 @@ class AnomalyResultPage:
 
     rows: list[DatabaseRow]
     next_cursor: str | None
+
+
+@dataclass(frozen=True)
+class ProvisionalResultPageQuery:
+    """Whitelisted filters and keyset controls for one provisional result page."""
+
+    limit: int
+    block_id_prefix: str | None = None
+    cursor: str | None = None
+
+
+@dataclass(frozen=True)
+class ProvisionalResultPage:
+    """One deterministic page of provisional rows and an optional continuation cursor."""
+
+    rows: list[DatabaseRow]
+    next_cursor: str | None
+
+
+PROVISIONAL_REASON_NOT_IN_CATALOG = "not_in_reference_catalog"
+_PROVISIONAL_CURSOR_KIND = "provisional"
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 _STORAGE_KINDS = frozenset({"workspace", "object"})
@@ -896,6 +919,11 @@ class ApiDatabase:
         error_code: str | None = None,
         results_summary_json: str | None = None,
         anomaly_results: Iterable[dict[str, Any]] | None = None,
+        provisional_results: Iterable[dict[str, Any]] | None = None,
+        provisional_count: int | None = None,
+        unassigned_context_line_count: int | None = None,
+        classification_policy: str | None = None,
+        classification_catalog_sha256: str | None = None,
         validation_report_json: str | None = None,
     ) -> DatabaseRow:
         """Apply a legal compare-and-swap status transition inside one transaction."""
@@ -903,6 +931,21 @@ class ApiDatabase:
             raise RunStatusConflict("Analysis run status transition was not applied.")
         if next_status == "completed" and results_summary_json is None:
             raise ValueError("Completed analysis runs require a stored results summary.")
+        stored_provisional = list(provisional_results or ())
+        stored_provisional_count = _nonnegative_count(
+            provisional_count,
+            default=len(stored_provisional),
+            name="provisional_count",
+        )
+        stored_unassigned_count = _nonnegative_count(
+            unassigned_context_line_count,
+            default=0,
+            name="unassigned_context_line_count",
+        )
+        if next_status == "completed" and stored_provisional_count != len(stored_provisional):
+            raise ValueError("provisional_count must match the number of provisional rows.")
+        stored_policy = _optional_text(classification_policy)
+        stored_catalog_digest = _optional_sha256(classification_catalog_sha256)
         completed_at = utc_now() if next_status in {"completed", "failed"} else None
         with self.session() as connection:
             existing = connection.execute(
@@ -957,6 +1000,31 @@ class ApiDatabase:
                     run_id,
                     anomaly_results or (),
                 )
+                if self._has_provisional_result_schema(connection):
+                    connection.execute(
+                        """
+                        UPDATE analysis_runs
+                        SET provisional_count = ?, unassigned_context_line_count = ?,
+                            classification_policy = ?, classification_catalog_sha256 = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            stored_provisional_count,
+                            stored_unassigned_count,
+                            stored_policy,
+                            stored_catalog_digest,
+                            str(run_id),
+                        ),
+                    )
+                    self.replace_provisional_results(
+                        connection,
+                        run_id,
+                        stored_provisional,
+                    )
+                elif stored_provisional or stored_policy or stored_catalog_digest:
+                    raise RuntimeError(
+                        "Provisional HDFS result columns are not available."
+                    )
             self._insert_audit_event(
                 connection,
                 actor_user_id=actor_user_id,
@@ -1004,6 +1072,39 @@ class ApiDatabase:
                     item.get("anomaly_score"),
                     item.get("anomaly_level"),
                     item.get("decision_threshold"),
+                    str(context_json),
+                ),
+            )
+
+    def replace_provisional_results(
+        self,
+        connection: _DatabaseConnection,
+        run_id: UUID,
+        results: Iterable[dict[str, Any]],
+    ) -> None:
+        """Replace every provisional row for a run inside the caller's transaction."""
+        connection.execute(
+            "DELETE FROM provisional_results WHERE analysis_run_id = ?",
+            (str(run_id),),
+        )
+        for item in results:
+            reason_code = str(item.get("reason_code") or PROVISIONAL_REASON_NOT_IN_CATALOG)
+            if reason_code != PROVISIONAL_REASON_NOT_IN_CATALOG:
+                raise ValueError("Unsupported provisional reason_code.")
+            context_json = item.get("context_json")
+            if context_json is None:
+                context_json = json.dumps(item.get("context") or {}, sort_keys=True)
+            connection.execute(
+                """
+                INSERT INTO provisional_results (
+                    id, analysis_run_id, record_reference, reason_code, context_json
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    str(item.get("id") or uuid4()),
+                    str(run_id),
+                    str(item["record_reference"]),
+                    reason_code,
                     str(context_json),
                 ),
             )
@@ -1103,6 +1204,49 @@ class ApiDatabase:
             rows = rows[: query.limit]
         return AnomalyResultPage(rows=rows, next_cursor=next_cursor)
 
+    def list_provisional_results(self, run_id: UUID) -> list[DatabaseRow]:
+        return self._all(
+            """
+            SELECT * FROM provisional_results
+            WHERE analysis_run_id = ?
+            ORDER BY record_reference ASC, id ASC
+            """,
+            (str(run_id),),
+        )
+
+    def list_provisional_result_page(
+        self,
+        run_id: UUID,
+        query: ProvisionalResultPageQuery,
+    ) -> ProvisionalResultPage:
+        """Return one keyset page of provisional rows for a single analysis run."""
+        if query.limit < 1 or query.limit > 100:
+            raise ValueError("Result page limit must be between 1 and 100.")
+
+        filters = ["analysis_run_id = ?"]
+        parameters: list[object] = [str(run_id)]
+        if query.block_id_prefix is not None:
+            filters.append("record_reference LIKE ? ESCAPE '\\'")
+            parameters.append(_escape_like_prefix(query.block_id_prefix) + "%")
+
+        order_sql, keyset_sql, keyset_parameters = _provisional_page_keyset(run_id, query)
+        parameters.extend(keyset_parameters)
+        parameters.append(query.limit + 1)
+        sql = (
+            "SELECT * FROM provisional_results WHERE "
+            + " AND ".join(filters)
+            + keyset_sql
+            + " "
+            + order_sql
+            + " LIMIT ?"
+        )
+        rows = self._all(sql, tuple(parameters))
+        next_cursor: str | None = None
+        if len(rows) > query.limit:
+            next_cursor = _encode_provisional_cursor(run_id, rows[query.limit - 1], query)
+            rows = rows[: query.limit]
+        return ProvisionalResultPage(rows=rows, next_cursor=next_cursor)
+
     def list_running_analysis_run_ids(self) -> list[UUID]:
         """Return ids of analysis runs currently claimed as running."""
 
@@ -1147,6 +1291,21 @@ class ApiDatabase:
                 resource_id=resource_id,
                 details_json=details_json,
             )
+
+    def _has_provisional_result_schema(self, connection: _DatabaseConnection) -> bool:
+        if self._uses_postgresql:
+            row = connection.execute(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'analysis_runs'
+                  AND column_name = 'provisional_count'
+                """
+            ).fetchone()
+            return row is not None
+        rows = connection.execute("PRAGMA table_info(analysis_runs)").fetchall()
+        return any(str(dict(row)["name"]) == "provisional_count" for row in rows)
 
     def _insert_audit_event(
         self,
@@ -1424,6 +1583,108 @@ def _decode_result_cursor(
         score_is_null=False,
         score=numeric_score,
     )
+
+
+def _provisional_page_keyset(
+    run_id: UUID,
+    query: ProvisionalResultPageQuery,
+) -> tuple[str, str, list[object]]:
+    if query.cursor is None:
+        return _BLOCK_ID_ASC_ORDER, "", []
+    key = _decode_provisional_cursor(query.cursor, run_id, query)
+    return (
+        _BLOCK_ID_ASC_ORDER,
+        _BLOCK_ID_AFTER,
+        [key.record_reference, key.record_reference, key.row_id],
+    )
+
+
+def _encode_provisional_cursor(
+    run_id: UUID,
+    row: DatabaseRow,
+    query: ProvisionalResultPageQuery,
+) -> str:
+    payload: dict[str, Any] = {
+        "analysis_run_id": str(run_id),
+        "block_id_prefix": query.block_id_prefix,
+        "id": str(row["id"]),
+        "kind": _PROVISIONAL_CURSOR_KIND,
+        "record_reference": str(row["record_reference"]),
+        "sort": "block_id_asc",
+        "v": _CURSOR_VERSION,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_provisional_cursor(
+    cursor: str,
+    run_id: UUID,
+    query: ProvisionalResultPageQuery,
+) -> _CursorKey:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+    except (ValueError, json.JSONDecodeError, UnicodeError) as error:
+        raise ResultCursorError("Result cursor is invalid.") from error
+    if not isinstance(payload, dict):
+        raise ResultCursorError("Result cursor is invalid.")
+    expected_keys = {
+        "analysis_run_id",
+        "block_id_prefix",
+        "id",
+        "kind",
+        "record_reference",
+        "sort",
+        "v",
+    }
+    if set(payload) != expected_keys:
+        raise ResultCursorError("Result cursor is invalid.")
+    if (
+        payload.get("v") != _CURSOR_VERSION
+        or payload.get("kind") != _PROVISIONAL_CURSOR_KIND
+        or payload.get("analysis_run_id") != str(run_id)
+        or payload.get("sort") != "block_id_asc"
+    ):
+        raise ResultCursorError("Result cursor is invalid.")
+    if payload.get("block_id_prefix") != query.block_id_prefix:
+        raise ResultCursorError("Result cursor is invalid.")
+    record_reference = payload.get("record_reference")
+    row_id = payload.get("id")
+    if not isinstance(record_reference, str) or not record_reference:
+        raise ResultCursorError("Result cursor is invalid.")
+    if not isinstance(row_id, str):
+        raise ResultCursorError("Result cursor is invalid.")
+    try:
+        UUID(row_id)
+    except ValueError as error:
+        raise ResultCursorError("Result cursor is invalid.") from error
+    return _CursorKey(record_reference=record_reference, row_id=row_id)
+
+
+def _nonnegative_count(value: int | None, *, default: int, name: str) -> int:
+    count = default if value is None else value
+    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        raise ValueError(f"{name} must be a non-negative integer.")
+    return count
+
+
+def _optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _optional_sha256(value: str | None) -> str | None:
+    if value is None:
+        return None
+    digest = value.strip().lower()
+    if not digest:
+        return None
+    if _SHA256_RE.fullmatch(digest) is None:
+        raise ValueError("classification_catalog_sha256 must be a 64-character hex SHA-256.")
+    return digest
 
 
 def _normalized_checksum(storage_kind: str, checksum: str | None) -> str | None:

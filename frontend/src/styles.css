@@ -922,7 +922,7 @@ code {
 }
 
 .dialog.dialog-wide {
-  width: min(100%, 820px);
+  width: min(96vw, 1180px);
 }
 
 .dialog-heading {
@@ -1047,6 +1047,10 @@ textarea::placeholder {
   display: grid;
   gap: 0.75rem;
   margin: 0;
+}
+
+.results-identity {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .results-identity > div,
@@ -1216,21 +1220,19 @@ textarea::placeholder {
 
 .outcome-summary {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 1px;
   overflow: hidden;
   border: 1px solid #dce3ea;
   border-radius: 8px;
+  background: #dce3ea;
 }
 
 .outcome-summary > div {
   display: grid;
   gap: 0.2rem;
+  background: #fff;
   padding: 0.85rem;
-  border-right: 1px solid #dce3ea;
-}
-
-.outcome-summary > div:last-child {
-  border-right: 0;
 }
 
 .outcome-summary strong {
@@ -1243,16 +1245,36 @@ textarea::placeholder {
   font-size: 0.7rem;
 }
 
+.results-panel-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.results-filters-provisional {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .validation-examples,
 .anomaly-list {
   display: grid;
   gap: 0.55rem;
 }
 
+.anomaly-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 0.8rem;
+}
+
 .validation-examples h4,
 .anomaly-list h4 {
   color: #344157;
   font-size: 0.88rem;
+}
+
+.anomaly-list h4 {
+  grid-column: 1 / -1;
 }
 
 .validation-examples ul {
@@ -1267,10 +1289,12 @@ textarea::placeholder {
 
 .anomaly-list article {
   display: grid;
-  gap: 0.25rem;
+  min-width: 0;
+  gap: 0.55rem;
+  border: 1px solid #dce3ea;
   border-radius: 7px;
   background: #f8fafb;
-  padding: 0.7rem;
+  padding: 0.85rem;
 }
 
 .anomaly-list strong {
@@ -1377,6 +1401,20 @@ textarea::placeholder {
   }
 }
 
+@media (max-width: 960px) {
+  .dialog.dialog-wide {
+    width: min(100%, 820px);
+  }
+
+  .outcome-summary {
+    grid-template-columns: repeat(3, minmax(9.5rem, 1fr));
+  }
+
+  .anomaly-list {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 800px) {
   .app-shell {
     display: block;
@@ -1479,7 +1517,9 @@ textarea::placeholder {
 
   .results-pagination button,
   .results-filter-actions,
-  .results-filter-actions button {
+  .results-filter-actions button,
+  .results-panel-switch,
+  .results-panel-switch button {
     width: 100%;
   }
 
@@ -1488,15 +1528,7 @@ textarea::placeholder {
   }
 
   .outcome-summary {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .outcome-summary > div:nth-child(2) {
-    border-right: 0;
-  }
-
-  .outcome-summary > div:nth-child(-n + 2) {
-    border-bottom: 1px solid #dce3ea;
+    grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
   }
 
   .dialog-backdrop {

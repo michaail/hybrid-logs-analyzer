@@ -12,6 +12,9 @@ SAFE_MESSAGES = {
     "MISSING_CLUSTER_EMBEDDING": (
         "A parsed template has no frozen embedding in the preprocessing bundle."
     ),
+    "COMPLETENESS_CATALOG_UNAVAILABLE": (
+        "The pinned HDFS reference catalog is unavailable or failed verification."
+    ),
     "INFERENCE_FAILED": "Inference could not complete for this analysis run.",
 }
 
@@ -26,3 +29,12 @@ class InferenceExecutionError(RuntimeError):
         self.public_message = SAFE_MESSAGES[code]
         self.cause = cause
         super().__init__(self.public_message)
+
+
+def map_completeness_catalog_error(error: BaseException) -> InferenceExecutionError:
+    """Map any catalog validation or load failure to the stable public code."""
+
+    reason = getattr(error, "reason", None)
+    if not isinstance(reason, str) or not reason.strip():
+        reason = type(error).__name__
+    return InferenceExecutionError("COMPLETENESS_CATALOG_UNAVAILABLE", cause=reason)

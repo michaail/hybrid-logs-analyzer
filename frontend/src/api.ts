@@ -148,6 +148,8 @@ export interface AnalysisResultSummary {
   normal_count: number;
   rejected_records: number;
   invalid_records: number;
+  provisional_count: number;
+  unassigned_context_line_count: number;
 }
 
 export interface AnalysisResultTrace {
@@ -158,6 +160,8 @@ export interface AnalysisResultTrace {
   dataset_checksum: string | null;
   artifact_checksum: string | null;
   preprocessing_bundle: PreprocessingBundleIdentity | null;
+  classification_policy: string | null;
+  classification_catalog_sha256: string | null;
 }
 
 export interface AnalysisResults {
@@ -167,6 +171,37 @@ export interface AnalysisResults {
   anomalies: HdfsAnomalyResult[];
   next_cursor: string | null;
   query: AnalysisResultsQuery;
+}
+
+export interface ProvisionalResultsQueryParams {
+  limit?: number;
+  block_id_prefix?: string | null;
+  cursor?: string | null;
+}
+
+export interface ProvisionalResultsQuery {
+  limit: number;
+  block_id_prefix: string | null;
+  cursor: string | null;
+}
+
+export interface HdfsProvisionalContext {
+  matched_line_count: number;
+  source_lines: HdfsSourceLine[];
+}
+
+export interface HdfsProvisionalResult {
+  block_id: string;
+  record_reference: string;
+  reason_code: "not_in_reference_catalog";
+  reason: string;
+  context: HdfsProvisionalContext;
+}
+
+export interface ProvisionalResults {
+  items: HdfsProvisionalResult[];
+  next_cursor: string | null;
+  query: ProvisionalResultsQuery;
 }
 
 export interface AuditEvent {
@@ -291,6 +326,16 @@ export class ApiClient {
     return this.request<AnalysisResults>(analysisResultsPath(projectId, analysisRunId, query));
   }
 
+  getProvisionalResults(
+    projectId: string,
+    analysisRunId: string,
+    query: ProvisionalResultsQueryParams = {},
+  ): Promise<ProvisionalResults> {
+    return this.request<ProvisionalResults>(
+      provisionalResultsPath(projectId, analysisRunId, query),
+    );
+  }
+
   listAuditEvents(projectId: string): Promise<AuditEvent[]> {
     return this.request<AuditEvent[]>(`/projects/${projectId}/audit-events`);
   }
@@ -410,6 +455,26 @@ export function analysisResultsPath(
   }
   const encoded = params.toString();
   const path = `/projects/${projectId}/analysis-runs/${analysisRunId}/results`;
+  return encoded.length > 0 ? `${path}?${encoded}` : path;
+}
+
+export function provisionalResultsPath(
+  projectId: string,
+  analysisRunId: string,
+  query: ProvisionalResultsQueryParams = {},
+): string {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) {
+    params.set("limit", String(query.limit));
+  }
+  if (query.block_id_prefix) {
+    params.set("block_id_prefix", query.block_id_prefix);
+  }
+  if (query.cursor) {
+    params.set("cursor", query.cursor);
+  }
+  const encoded = params.toString();
+  const path = `/projects/${projectId}/analysis-runs/${analysisRunId}/provisional-results`;
   return encoded.length > 0 ? `${path}?${encoded}` : path;
 }
 

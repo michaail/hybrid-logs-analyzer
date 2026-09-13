@@ -17,6 +17,8 @@ from src.api.object_store import (
     build_object_store,
     dataset_object_key,
     dataset_object_prefix,
+    hdfs_reference_catalog_manifest_key,
+    hdfs_reference_catalog_selected_ids_key,
     model_package_object_key,
     model_package_object_prefix,
     preprocessing_bundle_object_key,
@@ -110,6 +112,26 @@ def test_dataset_object_key_rejects_path_escape() -> None:
         dataset_object_key("proj", "ds", "../escape.log")
     with pytest.raises(ValueError, match=r"\.\."):
         dataset_object_key("proj", "ds", "nested/../../etc/passwd")
+
+
+def test_hdfs_reference_catalog_keys_are_deployment_prefixed() -> None:
+    assert hdfs_reference_catalog_manifest_key() == (
+        "hdfs/reference-catalog/manifest.json"
+    )
+    assert hdfs_reference_catalog_selected_ids_key() == (
+        "hdfs/reference-catalog/selected-block-ids.txt"
+    )
+    assert (
+        hdfs_reference_catalog_selected_ids_key("hdfs/reference-catalog/manifest.json")
+        == "hdfs/reference-catalog/selected-block-ids.txt"
+    )
+
+
+def test_hdfs_reference_catalog_keys_reject_path_escape() -> None:
+    with pytest.raises(ValueError, match="relative POSIX"):
+        hdfs_reference_catalog_selected_ids_key("/etc/passwd")
+    with pytest.raises(ValueError, match=r"\.\."):
+        hdfs_reference_catalog_selected_ids_key("../manifest.json")
 
 
 def test_preprocessing_bundle_object_key_is_posix_prefix() -> None:
