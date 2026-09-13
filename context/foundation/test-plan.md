@@ -28,12 +28,13 @@ Tests follow three non-negotiable principles for this project:
    ground truth.
 
 Hot-spot scope used for likelihood weighting: `src/api`, `src/modules`,
-`src/model_validator`, `frontend/src`.
+`src/model_validator`, `src/inference_service`, `frontend/src`.
 
 Protect the HTTP isolation and model-lifecycle gates first. Add frontend
 role-signal tests only after those gates have a regression net. Do not spend
-rollout budget on notebooks, BGL, or `@ml` jobs on Ubuntu CI. Notebook
-parity within one percentage point waits for S-04 and a trained baseline.
+new rollout budget on notebooks, BGL, or additional `@ml` jobs on the
+Torch-free API CI job. Notebook-parity expansion stays excluded even though
+S-04 shipped.
 
 ## 2. Risk Map
 
@@ -51,6 +52,7 @@ research's job, see §1 principle #3).
 | 4 | An uploaded `.pt` is deserialized in the control plane or in a process that holds app secrets | High | Medium | AGENTS.md untrusted-model rule; tech-stack “API never deserializes”; F-02 archive risk |
 | 5 | A failed register leaves object-store leftovers another caller could hit if isolation slips | Medium | Medium | interview Q3; S-02 impl-review F7/F8; hot-spot dir `src/api` |
 | 6 | The UI shows Register/Publish/Select as available or successful when the API would deny the action | Medium | High | interview Q4; hot-spot dir `frontend/src` (19 file-touches/30d); sparse suite (no frontend tests) |
+| 7 | An Operator can treat an analysis as successful or heuristically final when the run is still queued or has failed, when admitted inputs were not the ones used, or when provisional block histories are scored or counted as anomalies | High | Medium | refresh interview Q3/Q4; PRD FR-006 / FR-007 / FR-012; roadmap S-04–S-06; hot-spot dirs `src/api` (87 file-touches/30d), `src/inference_service` (18 file-touches/30d) |
 
 ### Risk Response Guidance
 
@@ -62,6 +64,7 @@ research's job, see §1 principle #3).
 | #4 | Control plane admits/rejects without loading the `.pt`; validator environment has no app secrets | “Validator ran” means Torch in the API process is acceptable | Where the artifact is probed vs stored; env-scrub contract | integration / contract | Importing Torch in API tests “to be realistic” |
 | #5 | Duplicate or failed insert leaves only the first declared prefix, or nothing | HTTP 409/5xx implies storage was cleaned | put vs insert vs delete-prefix; Bucket error list | integration against the store adapter | Mocking the store so cleanup never runs |
 | #6 | Denied actions stay denied in the UI and the API error is shown; success copy only after an allowed 2xx | A disabled button means the client will not send the request | Which calls the UI makes per role; how 403/404 are shown | component tests with a fake API | Browser e2e because it “feels safer”; screenshot snapshots |
+| #7 | Queued or failed runs are readable without fake anomaly pages; exhausted dispatch stays queued; provisional pages omit score/threshold and do not change heuristically-final counts | HTTP 200 on a result page means the run succeeded; catalog membership means every block is scored | Run status vs result vs provisional collections; immutable admitted inputs vs live settings; heuristic catalog vs lifecycle proof | existing HTTP/integration tests (name in §6; do not add new ones in this refresh) | Parity checksums as oracles; browser e2e; copying current scorer output as the expected value |
 
 ## 3. Phased Rollout
 
@@ -71,10 +74,10 @@ orchestrator updates Status as artifacts appear on disk.
 
 | # | Phase name | Goal (one line) | Risks covered | Test types | Status | Change folder |
 |---|------------------------------|--------------------------------------------------|----------------|-------------------------------|-------------|---|
-| 1 | Critical-path API isolation | Prove cross-project deny, Operator 403, and ineligible/unpublished gates at the HTTP boundary | #1, #2, #3 | unit + integration | change opened | testing-critical-path-api-isolation |
-| 2 | Package admission safety | Prove untrusted `.pt` stays out of the control plane and failed admits leave no orphans | #4, #5 | integration + contract | not started | — |
+| 1 | Critical-path API isolation | Prove cross-project deny, Operator 403, and ineligible/unpublished gates at the HTTP boundary | #1, #2, #3 | unit + integration | complete | testing-critical-path-api-isolation |
+| 2 | Package admission safety | Prove a failed admit leaves no usable orphan prefix | #4, #5 | integration + contract | not started | — |
 | 3 | Frontend role signals | Prove the UI cannot look like a successful unauthorized publish or select | #6 | component (bootstrap runner if needed) | not started | — |
-| 4 | Quality-gates wiring | Lock Phase 1–3 tests into CI without adding `@ml` on Ubuntu | cross-cutting | gates | not started | — |
+| 4 | Quality-gates wiring | Lock existing Phase 1–3 tests into CI; document Torch-free python vs Ubuntu inference `@ml` jobs | cross-cutting | gates | complete | — |
 
 ## 4. Stack
 
@@ -90,17 +93,18 @@ of assuming access.
 | unit + integration | pytest | 9.1.1 | `tests/`; markers `ml` and `postgres`; FastAPI client via httpx 0.28.1 |
 | lint + types | ruff, mypy | 0.16.5 / 2.3.1 | already required in `.github/workflows/verify.yml` |
 | API runtime under test | FastAPI | 0.115.12 | control plane; do not load Torch in this process |
+| inference CI | pytest `@ml` | 9.1.1 | separate Verify `inference` job; not the Torch-free API job |
 | frontend unit | none yet — see Phase 3 | — | React 18 + Vite; no component runner in `frontend/package.json` |
 | e2e | Playwright | 1.63.0 | HDFS publication UI; `npm --prefix frontend run test:e2e`; Node 22; not a per-edit hook |
-| (optional) AI-native | cursor-ide-browser — checked: 2026-09-10 | n/a | manual smoke only; do not replace HTTP isolation tests |
+| (optional) AI-native | cursor-ide-browser — checked: 2026-09-13 | n/a | manual smoke only; do not replace HTTP isolation tests |
 
 **Stack grounding tools (current session):**
-- Docs: none — Context7 / framework-docs MCP not available; checked: 2026-09-10
-- Search: none as MCP — Exa.ai not available; checked: 2026-09-10
-- Runtime/browser: cursor-ide-browser — possible UI smoke, not a substitute for API isolation tests; checked: 2026-09-10
-- Provider/platform: none — no GitHub/Railway MCP; CI already lives in `verify.yml`; checked: 2026-09-10
+- Docs: none — Context7 / framework-docs MCP not available; checked: 2026-09-13
+- Search: none as MCP — Exa.ai not available; checked: 2026-09-13
+- Runtime/browser: cursor-ide-browser — possible UI smoke, not a substitute for API isolation tests; checked: 2026-09-13
+- Provider/platform: none — no GitHub/Railway MCP; CI already lives in `verify.yml`; checked: 2026-09-13
 
-Test-base profile: **sparse** — pytest configured, ~8 files clustered under `tests/`, frontend suite absent, CI skips `@ml`.
+Test-base profile: **sparse** — pytest configured, 15 `tests/test_*.py` files; frontend component suite absent; Verify `python` job uses `-m "not ml"`; Verify `inference` job runs `tests/test_inference_service.py` and `tests/test_hdfs_inference_parity.py` with `-m ml`.
 
 ## 5. Quality Gates
 
@@ -111,10 +115,10 @@ phase lands; before that, the gate is `planned`.
 | Gate | Where | Required? | Catches |
 |-------------------------------|-------------------|------------------------------|-----------------------------------------------|
 | lint + typecheck | local + CI | required | syntactic / type drift |
-| unit + integration (Torch-free) | local + CI | required after §3 Phase 1 | isolation, role, eligibility, unpublished-use regressions |
+| unit + integration (Torch-free) | local + CI | required | isolation, role, eligibility, unpublished-use regressions |
 | frontend component tests | local + CI | required after §3 Phase 3 | UI success/deny copy that contradicts the API |
 | Playwright E2E (publication) | local + CI | required | Eligible publish and ineligible reject across UI, auth, API, and persistence |
-| CI pytest + frontend-test jobs | CI on PR | required after §3 Phase 4 | Phase 1–3 tests silently dropping out of Verify |
+| CI pytest + inference + frontend build + e2e jobs | CI on PR | required | Named API files dropping from the Torch-free `python` job, or the Ubuntu `inference` `@ml` job disappearing |
 
 ## 6. Cookbook Patterns
 
