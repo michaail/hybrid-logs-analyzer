@@ -15,3 +15,24 @@
 - **Problem**: codebase gets cluttered with unused/dead code
 - **Rule**: Based on the 10x-impl-review perform a code check to delete unused/dead code paths. Verify with operator first
 - **Applies to**: implement, impl-review
+
+## Roll back object storage after every failed admission
+
+- **Context**: Upload/admission paths that write object-store data and then create database records.
+- **Problem**: Validation/duplicate cases were considered, but other database insert and partial cleanup failures could leave orphaned objects.
+- **Rule**: Validate before storage writes; create the database record last; on any subsequent failure delete the written prefix and test that no objects remain.
+- **Applies to**: plan, implement, impl-review
+
+## Exercise real isolated subprocesses in ML integration tests
+
+- **Context**: Model validators, inference workers, and other production subprocess boundaries that ordinary tests stub.
+- **Problem**: Stubbed API fixtures can pass while the actual command/module wiring is broken.
+- **Rule**: Add @pytest.mark.ml integration coverage that invokes the real subprocess command path; do not treat stubbed HTTP tests as proof of production wiring.
+- **Applies to**: plan, implement, impl-review
+
+## Keep generated runtime data out of Git, retain verifiable provenance
+
+- **Context**: Colab outputs, release exports, model/evaluation binaries, and large datasets.
+- **Problem**: Generated artifacts were committed despite the repository/workspace boundary; reproducibility still needs stable identity.
+- **Rule**: Store generated runtime artifacts only in ignored workspace paths; record their paths and SHA-256 checksums in manifests, baselines, or documentation before committing related code.
+- **Applies to**: plan, implement, impl-review
