@@ -483,30 +483,30 @@ package-admission leftovers), not isolation.
 
 #### Automated
 
-- [x] 1.1 `context/foundation/test-plan.md` §2 contains risks #1–#6 with those numbers unchanged and an appended risk #7 plus a matching Risk Response Guidance row
-- [x] 1.2 §3 Phase 1 Status is `complete` and Change folder is `testing-critical-path-api-isolation`; Phase 4 Status is `complete`; Phase 2 and Phase 3 Status are `not started`
-- [x] 1.3 §4 no longer claims `~8` test files or that CI skips `@ml`
-- [x] 1.4 §5 distinguishes the Torch-free API pytest job from the Ubuntu inference `@ml` job
-- [x] 1.5 Section headings remain §1 through §8 in that order; §3 Status values are only the schema literals
+- [x] 1.1 `context/foundation/test-plan.md` §2 contains risks #1–#6 with those numbers unchanged and an appended risk #7 plus a matching Risk Response Guidance row — 2891b79
+- [x] 1.2 §3 Phase 1 Status is `complete` and Change folder is `testing-critical-path-api-isolation`; Phase 4 Status is `complete`; Phase 2 and Phase 3 Status are `not started` — 2891b79
+- [x] 1.3 §4 no longer claims `~8` test files or that CI skips `@ml` — 2891b79
+- [x] 1.4 §5 distinguishes the Torch-free API pytest job from the Ubuntu inference `@ml` job — 2891b79
+- [x] 1.5 Section headings remain §1 through §8 in that order; §3 Status values are only the schema literals — 2891b79
 
 #### Manual
 
-- [x] 1.6 Read §1–§5: isolation is not described as new work; §2 Source has no file:line or function-name anchors; Phase 2 goal is leftover admission safety, not a blank suite; Phase 3 still requires unauthorized-role UI signals rather than existing Publisher Playwright specs
+- [x] 1.6 Read §1–§5: isolation is not described as new work; §2 Source has no file:line or function-name anchors; Phase 2 goal is leftover admission safety, not a blank suite; Phase 3 still requires unauthorized-role UI signals rather than existing Publisher Playwright specs — 2891b79
 
 ### Phase 2: Update cookbook and negative space
 
 #### Automated
 
-- [ ] 2.1 §6.2 names the dispatch, queued/failed, paging, and provisional test functions listed in this phase’s Contract (by exact function name)
-- [ ] 2.2 §6.3 still TBD for unauthorized-role UI and does not treat Playwright publication specs as that oracle
-- [ ] 2.3 §6.5 no longer reads only “TBD — see §3 Phase 2” and still states leftover-prefix cleanup as pending
-- [ ] 2.4 §7 no longer claims S-03 is unimplemented or that notebook-parity waits until S-04 opens
-- [ ] 2.5 §6.2 isolation matrix and named Phase 1 tests remain (not deleted or replaced by a new isolation program)
+- [x] 2.1 §6.2 names the dispatch, queued/failed, paging, and provisional test functions listed in this phase’s Contract (by exact function name)
+- [x] 2.2 §6.3 still TBD for unauthorized-role UI and does not treat Playwright publication specs as that oracle
+- [x] 2.3 §6.5 no longer reads only “TBD — see §3 Phase 2” and still states leftover-prefix cleanup as pending
+- [x] 2.4 §7 no longer claims S-03 is unimplemented or that notebook-parity waits until S-04 opens
+- [x] 2.5 §6.2 isolation matrix and named Phase 1 tests remain (not deleted or replaced by a new isolation program)
 
 #### Manual
 
-- [ ] 2.6 A new analysis/result test recipe is copy-pasteable from §6 without implying new ML, parity, or checksum work
-- [ ] 2.7 §7 still forbids expanding those suites; remaining Phase 2/3 work is obvious from §3 + §6.3/§6.5
+- [x] 2.6 A new analysis/result test recipe is copy-pasteable from §6 without implying new ML, parity, or checksum work
+- [x] 2.7 §7 still forbids expanding those suites; remaining Phase 2/3 work is obvious from §3 + §6.3/§6.5
 
 ### Phase 3: Verify the guide as an orchestrator artifact
 

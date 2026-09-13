@@ -188,9 +188,35 @@ Do not duplicate dataset IDOR
 `/projects/{id}/audit-events` for member isolation (admin-only, different
 403).
 
+Risk #7 oracles already exist; cite them, do not rewrite them. Queued
+dispatch is non-terminal; exhausted activation preserves queued; result
+reads of queued or failed runs stay **200** with empty pages and zero
+summaries; cursor pages are project-scoped and keep run-wide summaries;
+provisional uses a separate page, omits score/threshold, and does not
+change heuristically-final counts.
+
+- `test_published_v2_model_queues_and_schedules_dispatch` — published v2
+  model creates a `queued` run and schedules dispatch.
+- `test_exhausted_dispatch_preserves_queued_run` — exhausted activation
+  leaves the run `queued`.
+- `test_result_pages_expose_empty_queued_and_failed_run_states` — queued
+  and failed runs return empty result pages and zero summaries.
+- `test_result_pages_are_typed_project_scoped_and_keep_run_wide_summaries`
+  — cursor pages stay on the path project; summaries stay run-wide.
+- `test_provisional_pages_are_typed_project_scoped_and_exclude_scores` —
+  provisional pages omit score/threshold and stay project-scoped.
+- `test_provisional_pages_are_empty_for_queued_and_failed_runs` —
+  provisional pages are empty while the run is queued or failed.
+
+Do not add browser e2e or parity/checksum jobs for these oracles.
+
 ### 6.3 Adding a frontend component test
 
 TBD — see §3 Phase 3 for denied Register/Publish/Select remaining denied, with API errors shown and no success copy on 403.
+
+`frontend/e2e/publish-eligible-hdfs-model.spec.ts` and
+`frontend/e2e/reject-ineligible-hdfs-model.spec.ts` are Publisher
+publication paths. They are not this unauthorized-role UI oracle.
 
 ### 6.4 Adding a test for a new API endpoint
 
@@ -212,7 +238,19 @@ Then add the allowed-role happy path.
 
 ### 6.5 Adding a test for package admission
 
-TBD — see §3 Phase 2 for control-plane-without-Torch, env-scrub, and leftover-prefix cleanup after failed insert.
+Control-plane admission must not load Torch; the validator process must
+not see application secrets; an ineligible ZIP is **422** with no model
+row. Cite these; do not rewrite them:
+
+- `test_model_package_and_api_sources_do_not_import_torch`
+- `test_object_store_source_does_not_import_torch`
+- `test_scrub_environment_removes_application_secrets`
+- `test_registration_rejects_ineligible_zip_without_inserting` — ineligible
+  ZIP **422** `{valid, issues[]}` and empty model list (also listed in §6.2).
+
+Leftover-prefix cleanup after a failed insert remains the pending §3
+Phase 2 rollout (risk #5). Do not treat env-scrub or ineligible-ZIP tests
+as proof that orphans are gone.
 
 ### 6.6 Per-rollout-phase notes
 
@@ -220,6 +258,12 @@ TBD — see §3 Phase 2 for control-plane-without-Torch, env-scrub, and leftover
 enough — assert `GET .../models == []` after register and still-`eligible`
 after publish. HTTP **201** means `eligible` only; analysis still requires
 `published` (existing `test_unpublished_eligible_model_cannot_start_analysis`).
+
+**Analysis run and result semantics (S-04–S-06, documented 2026-09-13):**
+Dispatch, queued/failed result pages, paging, and provisional-without-score
+tests landed with the product slices, not a test-plan rollout folder. Risk
+#7 is protected by the named §6.2 oracles; do not add a parallel ML, parity,
+or checksum suite for them.
 
 ### 6.7 Adding a Playwright E2E test
 
@@ -254,16 +298,16 @@ Exclusions agreed during the rollout (Phase 2 interview, Q5). Future
 contributors should respect these unless the underlying assumption changes.
 
 - **R&D notebooks and BGL research paths** — they remain a separate comparison workflow, not the web MVP. Re-evaluate if notebooks become the production execution path. (Source: Phase 2 interview Q5.)
-- **`@ml` jobs on Ubuntu CI** — native Intel Torch paths are local; Verify stays Torch-free. Re-evaluate when a Linux inference image is the CI target.
-- **Notebook-parity within one percentage point** — High impact, Low likelihood until S-04 and a trained baseline exist. Re-evaluate when that slice opens.
-- **Invalid HDFS dataset intake** — S-03 is not implemented; do not invent that path in this rollout. Re-evaluate when intake is planned.
+- **New `@ml` jobs on the Torch-free API CI job** — a dedicated Verify `inference` job already runs `@ml`. Do not add further ML jobs to the `python` job. Re-evaluate if that split is removed. (Source: refresh interview Q5.)
+- **Notebook-parity and checksum-suite expansion** — S-04 shipped a release gate; do not spend rollout budget expanding the one-percentage-point parity or checksum suite into the Torch-free API job. Re-evaluate if the team wants parity in that job. (Source: refresh interview Q5.)
+- **New HDFS intake test programs** — S-03 shipped; invalid whole-dataset reject already has HTTP coverage. Do not invent a second intake suite in this rollout. Re-evaluate if intake rules change.
 - **Browser e2e outside the publication workflow** — analysis, intake, and screenshot snapshots stay out of Playwright. Publication E2E is limited to eligible publish and ineligible reject. Cross-project isolation stays at the HTTP layer (§6.7).
 
 ## 8. Freshness Ledger
 
 - Strategy (§1–§5) last reviewed: 2026-09-13
 - Stack versions last verified: 2026-09-13
-- AI-native tool references last verified: 2026-09-10
+- AI-native tool references last verified: 2026-09-13
 
 Refresh (`/10x-test-plan --refresh`) when:
 
