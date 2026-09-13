@@ -497,25 +497,25 @@ package-admission leftovers), not isolation.
 
 #### Automated
 
-- [x] 2.1 §6.2 names the dispatch, queued/failed, paging, and provisional test functions listed in this phase’s Contract (by exact function name)
-- [x] 2.2 §6.3 still TBD for unauthorized-role UI and does not treat Playwright publication specs as that oracle
-- [x] 2.3 §6.5 no longer reads only “TBD — see §3 Phase 2” and still states leftover-prefix cleanup as pending
-- [x] 2.4 §7 no longer claims S-03 is unimplemented or that notebook-parity waits until S-04 opens
-- [x] 2.5 §6.2 isolation matrix and named Phase 1 tests remain (not deleted or replaced by a new isolation program)
+- [x] 2.1 §6.2 names the dispatch, queued/failed, paging, and provisional test functions listed in this phase’s Contract (by exact function name) — 7df08f5
+- [x] 2.2 §6.3 still TBD for unauthorized-role UI and does not treat Playwright publication specs as that oracle — 7df08f5
+- [x] 2.3 §6.5 no longer reads only “TBD — see §3 Phase 2” and still states leftover-prefix cleanup as pending — 7df08f5
+- [x] 2.4 §7 no longer claims S-03 is unimplemented or that notebook-parity waits until S-04 opens — 7df08f5
+- [x] 2.5 §6.2 isolation matrix and named Phase 1 tests remain (not deleted or replaced by a new isolation program) — 7df08f5
 
 #### Manual
 
-- [x] 2.6 A new analysis/result test recipe is copy-pasteable from §6 without implying new ML, parity, or checksum work
-- [x] 2.7 §7 still forbids expanding those suites; remaining Phase 2/3 work is obvious from §3 + §6.3/§6.5
+- [x] 2.6 A new analysis/result test recipe is copy-pasteable from §6 without implying new ML, parity, or checksum work — 7df08f5
+- [x] 2.7 §7 still forbids expanding those suites; remaining Phase 2/3 work is obvious from §3 + §6.3/§6.5 — 7df08f5
 
 ### Phase 3: Verify the guide as an orchestrator artifact
 
 #### Automated
 
-- [ ] 3.1 `python -m pytest tests/test_api.py tests/test_inference_dispatch.py tests/test_model_package.py tests/test_object_store.py tests/test_model_validator.py -m "not ml"` still passes (no product-test edits)
-- [ ] 3.2 `git diff --stat` for this change lists `context/foundation/test-plan.md` (and this change folder) only — not `src/`, `tests/`, `frontend/`, or `.github/workflows/`
-- [ ] 3.3 `rg -n 'file:line|src/[a-z_]+/[a-z_]+\.py:[0-9]+' context/foundation/test-plan.md` finds no §2-style code anchors (cookbook may still name `tests/test_api.py` and test function identifiers)
+- [x] 3.1 `python -m pytest tests/test_api.py tests/test_inference_dispatch.py tests/test_model_package.py tests/test_object_store.py tests/test_model_validator.py -m "not ml"` still passes (no product-test edits)
+- [x] 3.2 `git diff --stat` for this change lists `context/foundation/test-plan.md` (and this change folder) only — not `src/`, `tests/`, `frontend/`, or `.github/workflows/`
+- [x] 3.3 `rg -n 'file:line|src/[a-z_]+/[a-z_]+\.py:[0-9]+' context/foundation/test-plan.md` finds no §2-style code anchors (cookbook may still name `tests/test_api.py` and test function identifiers)
 
 #### Manual
 
-- [ ] 3.4 Read the whole guide once: §3 would send `/10x-test-plan` to narrowed Phase 2 next; risk #7 is visible in §2 and mapped to named §6 tests; dates in the header and §8 match the reconciled content, not a stale E2E-only bump
+- [x] 3.4 Read the whole guide once: §3 would send `/10x-test-plan` to narrowed Phase 2 next; risk #7 is visible in §2 and mapped to named §6 tests; dates in the header and §8 match the reconciled content, not a stale E2E-only bump
