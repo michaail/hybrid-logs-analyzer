@@ -1691,6 +1691,18 @@ def test_result_pages_are_typed_project_scoped_and_keep_run_wide_summaries(
     assert payload["trace"]["artifact_checksum"] == model["artifact_sha256"]
     assert payload["trace"]["preprocessing_bundle"] == model["preprocessing_bundle"]
 
+    administrator = _login(client, "admin")
+    other_project = _create_project(client, administrator, "incident-other")
+    _provision_project_account(
+        client, administrator, "other-results-operator", str(other_project["id"]), "operator"
+    )
+    foreign_page = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/results",
+        headers=_login(client, "other-results-operator"),
+        params={"limit": 2, "sort": "score_desc", "cursor": payload["next_cursor"]},
+    )
+    assert foreign_page.status_code == 404
+
     second = client.get(
         f"/projects/{project['id']}/analysis-runs/{run_id}/results",
         headers=headers,
@@ -1737,6 +1749,54 @@ def test_result_pages_are_typed_project_scoped_and_keep_run_wide_summaries(
     assert infinite.status_code == 422
 
 
+def test_result_pages_expose_empty_queued_and_failed_run_states(
+    api: ApiFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, headers, project, _model, operator_id = _queued_v2_run(api, monkeypatch)
+    run_id = client.get(
+        f"/projects/{project['id']}/analysis-runs",
+        headers=headers,
+    ).json()[0]["id"]
+    queued = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/results",
+        headers=headers,
+    )
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["run"]["status"] == "queued"
+    assert queued.json()["anomalies"] == []
+    assert queued.json()["next_cursor"] is None
+    assert queued.json()["summary"] == {
+        "anomaly_count": 0,
+        "normal_count": 0,
+        "rejected_records": 0,
+        "invalid_records": 0,
+    }
+
+    database = ApiDatabase(api.settings.database_url)
+    database.transition_analysis_run(
+        UUID(run_id),
+        expected_status="queued",
+        next_status="running",
+        actor_user_id=UUID(operator_id),
+    )
+    database.transition_analysis_run(
+        UUID(run_id),
+        expected_status="running",
+        next_status="failed",
+        actor_user_id=UUID(operator_id),
+        error_code="INFERENCE_FAILED",
+    )
+    failed = client.get(
+        f"/projects/{project['id']}/analysis-runs/{run_id}/results",
+        headers=headers,
+    )
+    assert failed.status_code == 200, failed.text
+    assert failed.json()["run"]["status"] == "failed"
+    assert failed.json()["anomalies"] == []
+    assert failed.json()["summary"] == queued.json()["summary"]
+
+
 def _hdfs_block_log(block_id: str, count: int) -> bytes:
     lines = [
         (
@@ -1748,7 +1808,7 @@ def _hdfs_block_log(block_id: str, count: int) -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
-def test_result_pages_expand_capped_source_lines_from_the_dataset(
+def test_result_pages_keep_capped_stored_source_lines(
     api: ApiFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1790,9 +1850,8 @@ def test_result_pages_expand_capped_source_lines_from_the_dataset(
     assert payload.status_code == 200, payload.text
     context = payload.json()["anomalies"][0]["context"]
     assert context["matched_line_count"] == 23
-    assert len(context["source_lines"]) == 23
+    assert len(context["source_lines"]) == 20
     assert context["source_lines"][0]["line_number"] == 1
-    assert context["source_lines"][-1]["line_number"] == 23
-    assert "blk_123" in context["source_lines"][-1]["raw"]
-    assert context["source_lines"][0]["raw"].startswith("081109 203615")
+    assert context["source_lines"][-1]["line_number"] == 20
+    assert context["source_lines"][0]["raw"] == "capped-0"
 

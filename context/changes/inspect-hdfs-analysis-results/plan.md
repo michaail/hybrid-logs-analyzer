@@ -408,23 +408,23 @@ legacy-order rule.
 
 #### Automated
 
-- [x] 2.1 Pass frontend linting, TypeScript checking, and production build
-- [x] 2.2 Compile the dialog against typed result context without unsafe raw HTML
+- [x] 2.1 Pass frontend linting, TypeScript checking, and production build — fed2c5c
+- [x] 2.2 Compile the dialog against typed result context without unsafe raw HTML — fed2c5c
 
 #### Manual
 
-- [x] 2.3 Verify completed-run identity, provenance, scored context, and source-line labels
-- [x] 2.4 Verify filters, ordering, pagination, empty, in-progress, failed, and responsive states
+- [x] 2.3 Verify completed-run identity, provenance, scored context, and source-line labels — fed2c5c
+- [x] 2.4 Verify filters, ordering, pagination, empty, in-progress, failed, and responsive states — fed2c5c
 
 ### Phase 3: Lock in behavior and operating guidance
 
 #### Automated
 
-- [ ] 3.1 Cover result traces, safe context, paging edge cases, migration, and isolation
-- [ ] 3.2 Include affected non-ML result tests in the existing CI verification job
-- [ ] 3.3 Pass the full local Python verification suite, Ruff, and mypy
+- [x] 3.1 Cover result traces, safe context, paging edge cases, migration, and isolation
+- [x] 3.2 Include affected non-ML result tests in the existing CI verification job
+- [x] 3.3 Pass the full local Python verification suite, Ruff, and mypy
 
 #### Manual
 
-- [ ] 3.4 Review result-inspection documentation against a completed HDFS run
-- [ ] 3.5 Confirm project isolation for results, cursors, context, and provenance
+- [x] 3.4 Review result-inspection documentation against a completed HDFS run
+- [x] 3.5 Confirm project isolation for results, cursors, context, and provenance

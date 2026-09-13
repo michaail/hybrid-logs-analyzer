@@ -770,6 +770,22 @@ def test_result_page_filters_and_cursor_validation(tmp_path: Path) -> None:
             min_score=0.9,
             cursor=next_cursor,
         )
+    source_run = database.get_analysis_run(run_id)
+    assert source_run is not None
+    other_run_id = _queued_run(
+        database,
+        UUID(str(source_run["project_id"])),
+        UUID(str(source_run["requested_by_user_id"])),
+        UUID(str(source_run["model_version_id"])),
+    )
+    with pytest.raises(ResultCursorError):
+        _page_rows(
+            database,
+            other_run_id,
+            limit=2,
+            sort="score_desc",
+            cursor=next_cursor,
+        )
     with pytest.raises(ResultCursorError):
         _page_rows(database, run_id, limit=2, sort="score_desc", cursor="not-a-cursor")
     empty = database.list_anomaly_result_page(

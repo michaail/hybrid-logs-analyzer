@@ -47,9 +47,8 @@ from src.api.schemas import (
     TokenResponse,
     UserResponse,
 )
-from src.api.hdfs_evidence import collect_hdfs_block_source_lines
 from src.api.inference_dispatch import dispatch_analysis_run
-from src.api.object_store import ObjectStore, build_object_store, dataset_object_prefix
+from src.api.object_store import build_object_store, dataset_object_prefix
 from src.api.security import create_access_token, decode_access_token, hash_password, verify_password
 from src.api.settings import ApiSettings
 from src.api.storage import AnomalyResultPageQuery, ApiDatabase, DatabaseIntegrityError, ResultCursorError
@@ -640,19 +639,11 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Result cursor is invalid.",
             ) from None
-        block_lines = _dataset_block_source_lines(
-            object_store,
-            str(run["log_reference"]),
-            {str(item["record_reference"]) for item in page.rows},
-        )
         return AnalysisResultsResponse(
             run=response,
             summary=_analysis_result_summary(run, response),
             trace=_analysis_result_trace(run, model),
-            anomalies=[
-                _anomaly_response(item, block_lines.get(str(item["record_reference"])))
-                for item in page.rows
-            ],
+            anomalies=[_anomaly_response(item) for item in page.rows],
             next_cursor=page.next_cursor,
             query=results_query,
         )
@@ -920,30 +911,7 @@ def _dataset_response(row: Any) -> DatasetResponse:
     )
 
 
-def _dataset_block_source_lines(
-    object_store: ObjectStore,
-    object_reference: str,
-    block_ids: set[str],
-) -> dict[str, list[HdfsSourceLine]]:
-    """Load full scored sequences from the admitted dataset when they exceed stored caps."""
-
-    if not object_reference or not block_ids:
-        return {}
-    try:
-        payload = object_store.get(object_reference)
-    except (FileNotFoundError, KeyError, OSError, ValueError):
-        return {}
-    try:
-        text = payload.decode("utf-8")
-    except UnicodeDecodeError:
-        return {}
-    return collect_hdfs_block_source_lines(text, block_ids)
-
-
-def _anomaly_response(
-    row: Any,
-    expanded_lines: list[HdfsSourceLine] | None = None,
-) -> HdfsAnomalyResult:
+def _anomaly_response(row: Any) -> HdfsAnomalyResult:
     try:
         stored_context = json.loads(str(row["context_json"]))
     except json.JSONDecodeError:
@@ -951,11 +919,6 @@ def _anomaly_response(
     block_id = str(row["record_reference"])
     level = row["anomaly_level"]
     context = _hdfs_anomaly_context(stored_context)
-    if expanded_lines is not None and len(expanded_lines) > len(context.source_lines):
-        context = HdfsAnomalyContext(
-            matched_line_count=max(context.matched_line_count, len(expanded_lines)),
-            source_lines=expanded_lines,
-        )
     return HdfsAnomalyResult(
         block_id=block_id,
         record_reference=block_id,

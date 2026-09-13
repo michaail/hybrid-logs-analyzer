@@ -1085,7 +1085,7 @@ class ApiDatabase:
             filters.append("anomaly_score IS NOT NULL AND anomaly_score >= ?")
             parameters.append(query.min_score)
 
-        order_sql, keyset_sql, keyset_parameters = _result_page_keyset(query)
+        order_sql, keyset_sql, keyset_parameters = _result_page_keyset(run_id, query)
         parameters.extend(keyset_parameters)
         parameters.append(query.limit + 1)
         sql = (
@@ -1099,7 +1099,7 @@ class ApiDatabase:
         rows = self._all(sql, tuple(parameters))
         next_cursor: str | None = None
         if len(rows) > query.limit:
-            next_cursor = _encode_result_cursor(rows[query.limit - 1], query)
+            next_cursor = _encode_result_cursor(run_id, rows[query.limit - 1], query)
             rows = rows[: query.limit]
         return AnomalyResultPage(rows=rows, next_cursor=next_cursor)
 
@@ -1300,12 +1300,15 @@ def _escape_like_prefix(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _result_page_keyset(query: AnomalyResultPageQuery) -> tuple[str, str, list[object]]:
+def _result_page_keyset(
+    run_id: UUID,
+    query: AnomalyResultPageQuery,
+) -> tuple[str, str, list[object]]:
     """Return a whitelisted ORDER BY, keyset predicate, and bound keyset values."""
     if query.sort == "block_id_asc":
         if query.cursor is None:
             return _BLOCK_ID_ASC_ORDER, "", []
-        key = _decode_result_cursor(query.cursor, query)
+        key = _decode_result_cursor(query.cursor, run_id, query)
         return (
             _BLOCK_ID_ASC_ORDER,
             _BLOCK_ID_AFTER,
@@ -1313,7 +1316,7 @@ def _result_page_keyset(query: AnomalyResultPageQuery) -> tuple[str, str, list[o
         )
     if query.cursor is None:
         return _SCORE_DESC_ORDER, "", []
-    key = _decode_result_cursor(query.cursor, query)
+    key = _decode_result_cursor(query.cursor, run_id, query)
     if key.score_is_null:
         return (
             _SCORE_DESC_ORDER,
@@ -1328,8 +1331,13 @@ def _result_page_keyset(query: AnomalyResultPageQuery) -> tuple[str, str, list[o
     )
 
 
-def _encode_result_cursor(row: DatabaseRow, query: AnomalyResultPageQuery) -> str:
+def _encode_result_cursor(
+    run_id: UUID,
+    row: DatabaseRow,
+    query: AnomalyResultPageQuery,
+) -> str:
     payload: dict[str, Any] = {
+        "analysis_run_id": str(run_id),
         "block_id_prefix": query.block_id_prefix,
         "id": str(row["id"]),
         "min_score": query.min_score,
@@ -1345,7 +1353,11 @@ def _encode_result_cursor(row: DatabaseRow, query: AnomalyResultPageQuery) -> st
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
-def _decode_result_cursor(cursor: str, query: AnomalyResultPageQuery) -> _CursorKey:
+def _decode_result_cursor(
+    cursor: str,
+    run_id: UUID,
+    query: AnomalyResultPageQuery,
+) -> _CursorKey:
     try:
         padded = cursor + "=" * (-len(cursor) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
@@ -1354,6 +1366,7 @@ def _decode_result_cursor(cursor: str, query: AnomalyResultPageQuery) -> _Cursor
     if not isinstance(payload, dict):
         raise ResultCursorError("Result cursor is invalid.")
     expected_keys = {
+        "analysis_run_id",
         "block_id_prefix",
         "id",
         "min_score",
@@ -1365,7 +1378,11 @@ def _decode_result_cursor(cursor: str, query: AnomalyResultPageQuery) -> _Cursor
         expected_keys.update({"score", "score_is_null"})
     if set(payload) != expected_keys:
         raise ResultCursorError("Result cursor is invalid.")
-    if payload.get("v") != _CURSOR_VERSION or payload.get("sort") != query.sort:
+    if (
+        payload.get("v") != _CURSOR_VERSION
+        or payload.get("analysis_run_id") != str(run_id)
+        or payload.get("sort") != query.sort
+    ):
         raise ResultCursorError("Result cursor is invalid.")
     if payload.get("block_id_prefix") != query.block_id_prefix:
         raise ResultCursorError("Result cursor is invalid.")

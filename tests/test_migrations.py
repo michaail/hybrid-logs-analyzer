@@ -13,6 +13,7 @@ from src.api.migrations import (
     PACKAGE_ADMISSION_VERSION,
     PREPROCESSING_BUNDLE_VERSION,
     RESULT_INSPECTION_INDEXES_VERSION,
+    RESULT_INSPECTION_SCORE_INDEX_VERSION,
     SHARED_STATE_VERSION,
     apply_migrations,
     _upgrade_shared_state_sqlite,
@@ -52,6 +53,26 @@ def _index_names(database: ApiDatabase, table_name: str) -> set[str]:
         return {str(dict(row)["name"]) for row in rows}
 
 
+def _index_definition(database: ApiDatabase, index_name: str) -> str:
+    with database.session() as connection:
+        if database.uses_postgresql:
+            row = connection.execute(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = current_schema() AND indexname = ?
+                """,
+                (index_name,),
+            ).fetchone()
+        else:
+            row = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+                (index_name,),
+            ).fetchone()
+    assert row is not None
+    return str(dict(row)["indexdef" if database.uses_postgresql else "sql"])
+
+
 def _applied_versions(database: ApiDatabase) -> set[str]:
     with database.session() as connection:
         rows = connection.execute("SELECT version FROM schema_migrations").fetchall()
@@ -79,12 +100,16 @@ def _assert_shared_state_schema(database: ApiDatabase) -> None:
         OBJECT_CHECKSUM_VERSION,
         PREPROCESSING_BUNDLE_VERSION,
         RESULT_INSPECTION_INDEXES_VERSION,
+        RESULT_INSPECTION_SCORE_INDEX_VERSION,
     } <= _applied_versions(database)
     assert {
         "idx_anomaly_results_run_id",
         "idx_anomaly_results_run_score_desc",
         "idx_anomaly_results_run_block_id",
     } <= _index_names(database, "anomaly_results")
+    score_index = _index_definition(database, "idx_anomaly_results_run_score_desc").upper()
+    assert "CASE WHEN ANOMALY_SCORE IS NULL THEN 1 ELSE 0 END" in score_index
+    assert "ANOMALY_SCORE DESC" in score_index
     assert {
         "id",
         "project_id",

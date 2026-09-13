@@ -26,6 +26,7 @@ FEATURE_RTOL = 1.0e-5
 SCORE_ATOL = 1.0e-5
 SCORE_RTOL = 1.0e-5
 MAX_RAW_CHARS = 500
+MAX_CONTEXT_LINES = 20
 MAX_SOURCE_LINES = 100_000
 MAX_BLOCKS = 25_000
 
@@ -409,7 +410,7 @@ def _source_lines(frame: Any) -> tuple[SourceLine, ...]:
         raw = str(row.get("raw") or "")[:MAX_RAW_CHARS]
         line_number = int(row["line_number"]) if row.get("line_number") is not None else None
         evidence.append(SourceLine(line_number=line_number, raw=raw))
-    return tuple(evidence)
+    return tuple(evidence[:MAX_CONTEXT_LINES])
 
 
 def _count_nonempty_lines(path: Path) -> int:
