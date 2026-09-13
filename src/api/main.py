@@ -449,6 +449,11 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Model package validator is unavailable.",
             )
+        def _delete_admitted_prefixes() -> None:
+            object_store.delete_prefix(admitted.package_reference)
+            if admitted.preprocessing_bundle is not None:
+                object_store.delete_prefix(admitted.preprocessing_bundle.object_prefix)
+
         try:
             model = database.create_model_version(
                 project_id=project_id,
@@ -481,13 +486,14 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 ),
             )
         except DatabaseIntegrityError:
-            object_store.delete_prefix(admitted.package_reference)
-            if admitted.preprocessing_bundle is not None:
-                object_store.delete_prefix(admitted.preprocessing_bundle.object_prefix)
+            _delete_admitted_prefixes()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This model identifier and version already exists in the project.",
             ) from None
+        except Exception:
+            _delete_admitted_prefixes()
+            raise
         return _model_response(model)
 
     @app.get(
