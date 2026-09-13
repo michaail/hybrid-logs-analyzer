@@ -450,9 +450,11 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 detail="Model package validator is unavailable.",
             )
         def _delete_admitted_prefixes() -> None:
-            object_store.delete_prefix(admitted.package_reference)
-            if admitted.preprocessing_bundle is not None:
-                object_store.delete_prefix(admitted.preprocessing_bundle.object_prefix)
+            try:
+                object_store.delete_prefix(admitted.package_reference)
+            finally:
+                if admitted.preprocessing_bundle is not None:
+                    object_store.delete_prefix(admitted.preprocessing_bundle.object_prefix)
 
         try:
             model = database.create_model_version(

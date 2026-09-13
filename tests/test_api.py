@@ -1247,7 +1247,7 @@ def test_registration_deletes_prefix_when_insert_fails(
     monkeypatch.setattr(ApiDatabase, "_insert_audit_event", _fail_audit_event)
     with TestClient(client.app, raise_server_exceptions=False) as failing:
         failed = _register(failing, headers, project_id, _zip_staged(api.workspace))
-    assert failed.status_code >= 500
+    assert failed.status_code == 500
     assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
     assert _object_files(api) == set()
 
