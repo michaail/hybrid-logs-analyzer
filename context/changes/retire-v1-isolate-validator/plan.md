@@ -581,14 +581,14 @@ runs are retired in a later change. Audit history is retained with dangling
 
 #### Automated
 
-- [x] 3.1 `python -m pytest tests/test_model_validator.py tests/test_api.py -m "not ml"` passes
-- [x] 3.2 `test -f Dockerfile.validator` succeeds
-- [x] 3.3 `rg -n "model-validator" .railway/railway.ts` matches
-- [x] 3.4 `rg -n "MODEL_VALIDATOR_SERVICE_URL" src/api/settings.py` matches
-- [x] 3.7 `rg -n "MODEL_VALIDATOR_SERVICE_URL" README.md .env.example` matches
-- [x] 3.5 `ruff check src/model_validator src/api/settings.py src/api/validation.py`
+- [x] 3.1 `python -m pytest tests/test_model_validator.py tests/test_api.py -m "not ml"` passes — 0c4dbb4
+- [x] 3.2 `test -f Dockerfile.validator` succeeds — 0c4dbb4
+- [x] 3.3 `rg -n "model-validator" .railway/railway.ts` matches — 0c4dbb4
+- [x] 3.4 `rg -n "MODEL_VALIDATOR_SERVICE_URL" src/api/settings.py` matches — 0c4dbb4
+- [x] 3.7 `rg -n "MODEL_VALIDATOR_SERVICE_URL" README.md .env.example` matches — 0c4dbb4
+- [x] 3.5 `ruff check src/model_validator src/api/settings.py src/api/validation.py` — 0c4dbb4
 
 #### Manual
 
-- [x] 3.6 Owner confirms deploy-plan/Railway text still reads as unexecuted future design (not a proven staging deployment), and that the validator service env in IaC has neither JWT nor object-store credentials
-- [x] 3.8 Owner confirms the `@pytest.mark.ml` validator-app `weights_only=True` probe passed in a normal local ML venv (not Cursor’s sandbox, not Ubuntu CI)
+- [x] 3.6 Owner confirms deploy-plan/Railway text still reads as unexecuted future design (not a proven staging deployment), and that the validator service env in IaC has neither JWT nor object-store credentials — 0c4dbb4
+- [x] 3.8 Owner confirms the `@pytest.mark.ml` validator-app `weights_only=True` probe passed in a normal local ML venv (not Cursor’s sandbox, not Ubuntu CI) — 0c4dbb4

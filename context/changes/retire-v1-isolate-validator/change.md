@@ -1,9 +1,9 @@
 ---
 change_id: retire-v1-isolate-validator
 title: Retire v1 packages and add the private model-validator service
-status: implementing
+status: implemented
 created: 2026-09-13
-updated: 2026-09-13
+updated: 2026-09-14
 archived_at: null
 ---
 
