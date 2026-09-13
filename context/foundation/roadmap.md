@@ -67,7 +67,7 @@ controlled model lifecycle that every later analysis run requires.
 | S-03 | intake-hdfs-dataset | An Operator can upload or select an HDFS dataset and receive a clear whole-dataset acceptance or rejection result. | F-01, S-01 | US-02, FR-005, FR-008 | done |
 | S-04 | run-parity-hdfs-analysis | An Operator can start asynchronous analysis of an HDFS dataset with a compatible, published same-project model and see a terminal run status. | F-01, F-02, S-02, S-03 | US-02, FR-006, FR-010, FR-011 | done |
 | S-05 | inspect-hdfs-analysis-results | An Operator can inspect traceable detected anomalies and summaries for normal, rejected, and invalid outcomes. | S-04 | US-02, FR-007, FR-008 | done |
-| S-06 | separate-provisional-hdfs-results | An Operator can distinguish heuristically final anomalies from provisional HDFS block histories absent from the pinned reference catalog. | F-03, S-04, S-05 | US-03, FR-012 | in-progress |
+| S-06 | separate-provisional-hdfs-results | An Operator can distinguish heuristically final anomalies from provisional HDFS block histories absent from the pinned reference catalog. | F-03, S-04, S-05 | US-03, FR-012 | done |
 
 ## Streams
 
@@ -229,7 +229,7 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 - **Risk:** Block-ID catalog membership can falsely classify a truncated known ID as
   heuristically final. Provisional context must remain visible without presenting a model
   score as a decision or including it in heuristically final result counts.
-- **Status:** in-progress
+- **Status:** done
 
 ## Backlog Handoff
 
@@ -296,3 +296,4 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 - **S-04: An Operator can start asynchronous analysis of an HDFS dataset with a compatible, published same-project model and see a terminal run status.** — Archived 2026-09-12 → `context/archive/2026-09-11-run-parity-hdfs-analysis/`. Lesson: —.
 - **F-03: (foundation) Complete HDFS block histories are available as reproducible evaluation inputs.** — Archived 2026-09-12 → `context/archive/2026-09-12-complete-hdfs-block-evaluation-data/`. Lesson: —.
 - **S-05: An Operator can inspect traceable detected anomalies and summaries for normal, rejected, and invalid outcomes.** — Archived 2026-09-13 → `context/archive/2026-09-12-inspect-hdfs-analysis-results/`. Lesson: —.
+- **S-06: An Operator can distinguish heuristically final anomalies from provisional HDFS block histories that are absent from the pinned F-03 reference catalog.** — Archived 2026-09-13 → `context/archive/2026-09-13-separate-provisional-hdfs-results/`. Lesson: —.
