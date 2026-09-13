@@ -630,11 +630,11 @@ keys.
 
 #### Automated
 
-- [x] 5.1 Real private-service ML subprocess test passes
-- [x] 5.2 Full Python, ML, Ruff, mypy, and frontend checks pass
+- [x] 5.1 Real private-service ML subprocess test passes — eff5309
+- [x] 5.2 Full Python, ML, Ruff, mypy, and frontend checks pass — eff5309
 
 #### Manual
 
-- [x] 5.3 Disposable migration rollout preserves an existing run
-- [x] 5.4 Catalog digest is traceable and altered catalog fails safely
-- [x] 5.5 Notebook/parity release check remains within the agreed tolerance
+- [x] 5.3 Disposable migration rollout preserves an existing run — eff5309
+- [x] 5.4 Catalog digest is traceable and altered catalog fails safely — eff5309
+- [x] 5.5 Notebook/parity release check remains within the agreed tolerance — eff5309
