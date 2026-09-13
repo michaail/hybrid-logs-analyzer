@@ -512,10 +512,10 @@ package-admission leftovers), not isolation.
 
 #### Automated
 
-- [x] 3.1 `python -m pytest tests/test_api.py tests/test_inference_dispatch.py tests/test_model_package.py tests/test_object_store.py tests/test_model_validator.py -m "not ml"` still passes (no product-test edits)
-- [x] 3.2 `git diff --stat` for this change lists `context/foundation/test-plan.md` (and this change folder) only — not `src/`, `tests/`, `frontend/`, or `.github/workflows/`
-- [x] 3.3 `rg -n 'file:line|src/[a-z_]+/[a-z_]+\.py:[0-9]+' context/foundation/test-plan.md` finds no §2-style code anchors (cookbook may still name `tests/test_api.py` and test function identifiers)
+- [x] 3.1 `python -m pytest tests/test_api.py tests/test_inference_dispatch.py tests/test_model_package.py tests/test_object_store.py tests/test_model_validator.py -m "not ml"` still passes (no product-test edits) — 85cf0d6
+- [x] 3.2 `git diff --stat` for this change lists `context/foundation/test-plan.md` (and this change folder) only — not `src/`, `tests/`, `frontend/`, or `.github/workflows/` — 85cf0d6
+- [x] 3.3 `rg -n 'file:line|src/[a-z_]+/[a-z_]+\.py:[0-9]+' context/foundation/test-plan.md` finds no §2-style code anchors (cookbook may still name `tests/test_api.py` and test function identifiers) — 85cf0d6
 
 #### Manual
 
-- [x] 3.4 Read the whole guide once: §3 would send `/10x-test-plan` to narrowed Phase 2 next; risk #7 is visible in §2 and mapped to named §6 tests; dates in the header and §8 match the reconciled content, not a stale E2E-only bump
+- [x] 3.4 Read the whole guide once: §3 would send `/10x-test-plan` to narrowed Phase 2 next; risk #7 is visible in §2 and mapped to named §6 tests; dates in the header and §8 match the reconciled content, not a stale E2E-only bump — 85cf0d6

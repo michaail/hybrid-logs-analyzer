@@ -1,7 +1,7 @@
 ---
 change_id: test-plan-refresh-2026-09-13
 title: Refresh the test plan after S-03 analysis and result slices
-status: implementing
+status: implemented
 created: 2026-09-13
 updated: 2026-09-13
 archived_at: null
