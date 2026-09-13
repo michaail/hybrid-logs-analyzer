@@ -359,9 +359,9 @@ modifying historical state.
 
 #### Automated
 
-- [x] 3.1 Align README and staging documentation with bounded queued retry then terminal failure
-- [x] 3.2 Verify live documentation and focused checks contain no stale queued-preservation contract
+- [x] 3.1 Align README and staging documentation with bounded queued retry then terminal failure — 1f9ffb4
+- [x] 3.2 Verify live documentation and focused checks contain no stale queued-preservation contract — 1f9ffb4
 
 #### Manual
 
-- [x] 3.3 Confirm local and staging instructions accurately describe the final lifecycle
+- [x] 3.3 Confirm local and staging instructions accurately describe the final lifecycle — 1f9ffb4
