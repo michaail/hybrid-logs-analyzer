@@ -936,12 +936,18 @@ def _analysis_result_summary(run: Any, response: AnalysisRunResponse) -> Analysi
         payload = json.loads(
             _stored_results_summary(response.status, response.validation_report or {}, 0)
         )
+    if not isinstance(payload, dict):
+        payload = {}
+    payload["provisional_count"] = int(run["provisional_count"] or 0)
+    payload["unassigned_context_line_count"] = int(run["unassigned_context_line_count"] or 0)
     return AnalysisResultSummary.model_validate(payload)
 
 
 def _analysis_result_trace(run: Any, model: Any) -> AnalysisResultTrace:
     artifact = model.get("artifact_sha256")
     dataset_checksum = run.get("dataset_checksum")
+    policy = run.get("classification_policy")
+    catalog_digest = run.get("classification_catalog_sha256")
     return AnalysisResultTrace(
         model_identifier=str(model["model_identifier"]),
         version=str(model["version"]),
@@ -958,6 +964,8 @@ def _analysis_result_trace(run: Any, model: Any) -> AnalysisResultTrace:
             if model.get("preprocessing_bundle_identifier")
             else None
         ),
+        classification_policy=str(policy) if policy else None,
+        classification_catalog_sha256=str(catalog_digest) if catalog_digest else None,
     )
 
 

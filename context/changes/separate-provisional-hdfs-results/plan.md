@@ -576,28 +576,28 @@ keys.
 
 #### Automated
 
-- [x] 1.1 Catalog loader accepts valid F-03 artifacts and rejects integrity failures
-- [x] 1.2 Inference settings reject incomplete catalog configuration
-- [x] 1.3 Ruff and mypy pass
+- [x] 1.1 Catalog loader accepts valid F-03 artifacts and rejects integrity failures — 4396ca4
+- [x] 1.2 Inference settings reject incomplete catalog configuration — 4396ca4
+- [x] 1.3 Ruff and mypy pass — 4396ca4
 
 #### Manual
 
-- [x] 1.4 Pinned catalog artifact is deployed outside Git
-- [x] 1.5 Documentation communicates heuristic limitations
+- [x] 1.4 Pinned catalog artifact is deployed outside Git — 4396ca4
+- [x] 1.5 Documentation communicates heuristic limitations — 4396ca4
 
 ### Phase 2: Persist Provisional Histories and Run-Level Classification Provenance
 
 #### Automated
 
-- [ ] 2.1 Migration preserves existing rows and applies idempotently on supported databases
-- [ ] 2.2 Completed-result transaction rolls back both result kinds on failure
-- [ ] 2.3 Provisional paging validates prefixes and cursor kind
-- [ ] 2.4 Typed schemas reject invalid provisional result fields and counts
+- [x] 2.1 Migration preserves existing rows and applies idempotently on supported databases
+- [x] 2.2 Completed-result transaction rolls back both result kinds on failure
+- [x] 2.3 Provisional paging validates prefixes and cursor kind
+- [x] 2.4 Typed schemas reject invalid provisional result fields and counts
 
 #### Manual
 
-- [ ] 2.5 Historical runs expose zero new counts after migration
-- [ ] 2.6 Stored provisional rows contain context and no score
+- [x] 2.5 Historical runs expose zero new counts after migration
+- [x] 2.6 Stored provisional rows contain context and no score
 
 ### Phase 3: Split Block Histories Before Graph Scoring
 

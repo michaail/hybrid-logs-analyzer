@@ -1119,6 +1119,8 @@ def test_openapi_exposes_administration_lifecycle_without_legacy_user_create(
         "normal_count",
         "rejected_records",
         "invalid_records",
+        "provisional_count",
+        "unassigned_context_line_count",
     } <= set(summary_schema["properties"])
     trace_schema = schema["components"]["schemas"]["AnalysisResultTrace"]
     assert {
@@ -1129,6 +1131,8 @@ def test_openapi_exposes_administration_lifecycle_without_legacy_user_create(
         "dataset_checksum",
         "artifact_checksum",
         "preprocessing_bundle",
+        "classification_policy",
+        "classification_catalog_sha256",
     } <= set(trace_schema["properties"])
     run_item = "/projects/{project_id}/analysis-runs/{analysis_run_id}"
     assert "patch" not in paths.get(run_item, {})
@@ -1469,6 +1473,8 @@ def test_published_v2_model_queues_and_schedules_dispatch(
         "normal_count": 0,
         "rejected_records": 0,
         "invalid_records": 0,
+        "provisional_count": 0,
+        "unassigned_context_line_count": 0,
     }
 
 
@@ -1670,6 +1676,8 @@ def test_result_pages_are_typed_project_scoped_and_keep_run_wide_summaries(
         "normal_count": 5,
         "rejected_records": 0,
         "invalid_records": 0,
+        "provisional_count": 0,
+        "unassigned_context_line_count": 0,
     }
     assert payload["query"]["limit"] == 2
     assert payload["query"]["sort"] == "score_desc"
@@ -1771,6 +1779,8 @@ def test_result_pages_expose_empty_queued_and_failed_run_states(
         "normal_count": 0,
         "rejected_records": 0,
         "invalid_records": 0,
+        "provisional_count": 0,
+        "unassigned_context_line_count": 0,
     }
 
     database = ApiDatabase(api.settings.database_url)
@@ -1854,4 +1864,71 @@ def test_result_pages_keep_capped_stored_source_lines(
     assert context["source_lines"][0]["line_number"] == 1
     assert context["source_lines"][-1]["line_number"] == 20
     assert context["source_lines"][0]["raw"] == "capped-0"
+
+
+def test_typed_schemas_reject_provisional_scores_and_negative_counts() -> None:
+    from pydantic import ValidationError as PydanticValidationError
+
+    from src.api.schemas import (
+        AnalysisResultSummary,
+        AnalysisResultTrace,
+        HdfsProvisionalResult,
+        ProvisionalResultsQuery,
+    )
+
+    valid_summary = {
+        "anomaly_count": 0,
+        "normal_count": 0,
+        "rejected_records": 0,
+        "invalid_records": 0,
+    }
+    with pytest.raises(PydanticValidationError):
+        AnalysisResultSummary.model_validate({**valid_summary, "provisional_count": -1})
+    with pytest.raises(PydanticValidationError):
+        AnalysisResultSummary.model_validate(
+            {**valid_summary, "unassigned_context_line_count": -1}
+        )
+    with pytest.raises(PydanticValidationError):
+        HdfsProvisionalResult.model_validate(
+            {
+                "block_id": "blk_1",
+                "record_reference": "blk_1",
+                "reason_code": "not_in_reference_catalog",
+                "reason": "This block is not in the pinned reference catalog.",
+                "anomaly_score": 0.91,
+            }
+        )
+    with pytest.raises(PydanticValidationError):
+        HdfsProvisionalResult.model_validate(
+            {
+                "block_id": "blk_1",
+                "record_reference": "blk_1",
+                "reason_code": "not_in_reference_catalog",
+                "reason": "This block is not in the pinned reference catalog.",
+                "decision_threshold": 0.5,
+            }
+        )
+    with pytest.raises(PydanticValidationError):
+        ProvisionalResultsQuery.model_validate({"min_score": 0.5})
+    with pytest.raises(PydanticValidationError):
+        AnalysisResultTrace.model_validate(
+            {
+                "model_identifier": "attribute-gae",
+                "version": "v1",
+                "model_version_id": "00000000-0000-4000-8000-000000000001",
+                "pipeline_run_id": "run",
+                "classification_catalog_sha256": "not-a-digest",
+            }
+        )
+    accepted = HdfsProvisionalResult.model_validate(
+        {
+            "block_id": "blk_1",
+            "record_reference": "blk_1",
+            "reason_code": "not_in_reference_catalog",
+            "reason": "This block is not in the pinned reference catalog.",
+            "context": {"matched_line_count": 1, "source_lines": []},
+        }
+    )
+    assert not hasattr(accepted, "anomaly_score")
+    assert "anomaly_score" not in accepted.model_dump()
 

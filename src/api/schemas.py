@@ -285,6 +285,8 @@ class AnalysisResultSummary(ApiModel):
     normal_count: int = Field(ge=0)
     rejected_records: int = Field(ge=0)
     invalid_records: int = Field(ge=0)
+    provisional_count: int = Field(default=0, ge=0)
+    unassigned_context_line_count: int = Field(default=0, ge=0)
 
 
 class AnalysisResultTrace(ApiModel):
@@ -297,6 +299,11 @@ class AnalysisResultTrace(ApiModel):
     dataset_checksum: str | None = None
     artifact_checksum: str | None = None
     preprocessing_bundle: PreprocessingBundleIdentity | None = None
+    classification_policy: str | None = None
+    classification_catalog_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
 
 
 class AnalysisResultsResponse(ApiModel):
@@ -308,6 +315,45 @@ class AnalysisResultsResponse(ApiModel):
     anomalies: list[HdfsAnomalyResult]
     next_cursor: str | None = None
     query: AnalysisResultsQuery
+
+
+class ProvisionalResultsQuery(ApiModel):
+    """Accepted provisional-page controls; block-id pagination only."""
+
+    limit: int = Field(default=50, ge=1, le=100)
+    block_id_prefix: str | None = Field(default=None, min_length=1)
+    cursor: str | None = Field(default=None, min_length=1)
+
+
+class HdfsProvisionalContext(ApiModel):
+    """Bounded source evidence for a provisional HDFS block history."""
+
+    matched_line_count: int = Field(default=0, ge=0)
+    source_lines: list[HdfsSourceLine] = Field(default_factory=list)
+
+
+class HdfsProvisionalResult(ApiModel):
+    """One unscored provisional HDFS block history."""
+
+    block_id: str
+    record_reference: str
+    reason_code: Literal["not_in_reference_catalog"]
+    reason: str = Field(min_length=1)
+    context: HdfsProvisionalContext = Field(default_factory=HdfsProvisionalContext)
+
+    @model_validator(mode="after")
+    def _block_id_matches_record_reference(self) -> HdfsProvisionalResult:
+        if self.block_id != self.record_reference:
+            raise ValueError("block_id must equal record_reference")
+        return self
+
+
+class ProvisionalResultsResponse(ApiModel):
+    """Typed, paginated provisional HDFS result contract."""
+
+    items: list[HdfsProvisionalResult]
+    next_cursor: str | None = None
+    query: ProvisionalResultsQuery
 
 
 class AuditEventResponse(ApiModel):

@@ -18,6 +18,7 @@ OBJECT_CHECKSUM_VERSION = "004_model_object_checksum"
 PREPROCESSING_BUNDLE_VERSION = "005_preprocessing_bundles"
 RESULT_INSPECTION_INDEXES_VERSION = "006_result_inspection_indexes"
 RESULT_INSPECTION_SCORE_INDEX_VERSION = "007_result_inspection_score_index"
+PROVISIONAL_HDFS_RESULTS_VERSION = "008_provisional_hdfs_results"
 _MIGRATION_ORDER = (
     INITIAL_SCHEMA_VERSION,
     SHARED_STATE_VERSION,
@@ -26,6 +27,7 @@ _MIGRATION_ORDER = (
     PREPROCESSING_BUNDLE_VERSION,
     RESULT_INSPECTION_INDEXES_VERSION,
     RESULT_INSPECTION_SCORE_INDEX_VERSION,
+    PROVISIONAL_HDFS_RESULTS_VERSION,
 )
 
 _INITIAL_SCHEMA_STATEMENTS: tuple[str, ...] = (
@@ -250,6 +252,40 @@ _RESULT_INSPECTION_SCORE_INDEX_STATEMENTS: tuple[str, ...] = (
     )
     """,
 )
+_PROVISIONAL_RESULTS_TABLE = """
+CREATE TABLE IF NOT EXISTS provisional_results (
+    id TEXT PRIMARY KEY,
+    analysis_run_id TEXT NOT NULL REFERENCES analysis_runs(id),
+    record_reference TEXT NOT NULL,
+    reason_code TEXT NOT NULL CHECK (reason_code = 'not_in_reference_catalog'),
+    context_json TEXT NOT NULL,
+    UNIQUE (analysis_run_id, record_reference)
+)
+"""
+_PROVISIONAL_RESULTS_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_provisional_results_run_block_id
+ON provisional_results (analysis_run_id, record_reference, id)
+"""
+_PROVISIONAL_RUN_COLUMNS: tuple[tuple[str, str], ...] = (
+    (
+        "provisional_count",
+        "ALTER TABLE analysis_runs ADD COLUMN provisional_count INTEGER NOT NULL "
+        "DEFAULT 0 CHECK (provisional_count >= 0)",
+    ),
+    (
+        "unassigned_context_line_count",
+        "ALTER TABLE analysis_runs ADD COLUMN unassigned_context_line_count INTEGER NOT NULL "
+        "DEFAULT 0 CHECK (unassigned_context_line_count >= 0)",
+    ),
+    (
+        "classification_policy",
+        "ALTER TABLE analysis_runs ADD COLUMN classification_policy TEXT",
+    ),
+    (
+        "classification_catalog_sha256",
+        "ALTER TABLE analysis_runs ADD COLUMN classification_catalog_sha256 TEXT",
+    ),
+)
 
 _PACKAGE_ADMISSION_STATEMENTS: tuple[str, ...] = (
     """
@@ -337,6 +373,11 @@ def apply_migrations(database: ApiDatabase, *, target: str | None = None) -> Non
                 and RESULT_INSPECTION_SCORE_INDEX_VERSION not in _read_applied_versions(connection)
             ):
                 _apply_result_inspection_score_index(connection)
+            if (
+                _should_apply(PROVISIONAL_HDFS_RESULTS_VERSION, target)
+                and PROVISIONAL_HDFS_RESULTS_VERSION not in _read_applied_versions(connection)
+            ):
+                _apply_provisional_hdfs_results(database, connection)
             return
 
     if (
@@ -383,6 +424,13 @@ def apply_migrations(database: ApiDatabase, *, target: str | None = None) -> Non
     ):
         with database.session() as connection:
             _apply_result_inspection_score_index(connection)
+    if (
+        not database.uses_postgresql
+        and _should_apply(PROVISIONAL_HDFS_RESULTS_VERSION, target)
+        and PROVISIONAL_HDFS_RESULTS_VERSION not in _current_applied_versions(database)
+    ):
+        with database.session() as connection:
+            _apply_provisional_hdfs_results(database, connection)
 
 
 def main() -> None:
@@ -418,6 +466,17 @@ def _apply_result_inspection_score_index(connection: _Executor) -> None:
     for statement in _RESULT_INSPECTION_SCORE_INDEX_STATEMENTS:
         connection.execute(statement)
     _record_migration(connection, RESULT_INSPECTION_SCORE_INDEX_VERSION)
+
+
+def _apply_provisional_hdfs_results(database: ApiDatabase, connection: Any) -> None:
+    connection.execute(_PROVISIONAL_RESULTS_TABLE)
+    connection.execute(_PROVISIONAL_RESULTS_INDEX)
+    existing_columns = _table_columns(database, connection, "analysis_runs")
+    for column, statement in _PROVISIONAL_RUN_COLUMNS:
+        if column not in existing_columns:
+            connection.execute(statement)
+            existing_columns.add(column)
+    _record_migration(connection, PROVISIONAL_HDFS_RESULTS_VERSION)
 
 
 def _apply_object_checksum_postgres(connection: _Executor) -> None:
