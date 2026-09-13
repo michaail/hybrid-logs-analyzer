@@ -347,21 +347,21 @@ modifying historical state.
 
 #### Automated
 
-- [x] 2.1 Convert the exhausted-dispatch test into the pre-claim failure regression oracle
-- [x] 2.2 Cover dispatch outcomes and guarded queued-to-failed repository semantics
-- [x] 2.3 Verify public API remains non-ML and focused test suites pass
+- [x] 2.1 Convert the exhausted-dispatch test into the pre-claim failure regression oracle — e2a396e
+- [x] 2.2 Cover dispatch outcomes and guarded queued-to-failed repository semantics — e2a396e
+- [x] 2.3 Verify public API remains non-ML and focused test suites pass — e2a396e
 
 #### Manual
 
-- [x] 2.4 Review ownership boundaries between dispatch and post-claim inference failures
+- [x] 2.4 Review ownership boundaries between dispatch and post-claim inference failures — e2a396e
 
 ### Phase 3: Documentation alignment
 
 #### Automated
 
-- [ ] 3.1 Align README and staging documentation with bounded queued retry then terminal failure
-- [ ] 3.2 Verify live documentation and focused checks contain no stale queued-preservation contract
+- [x] 3.1 Align README and staging documentation with bounded queued retry then terminal failure
+- [x] 3.2 Verify live documentation and focused checks contain no stale queued-preservation contract
 
 #### Manual
 
-- [ ] 3.3 Confirm local and staging instructions accurately describe the final lifecycle
+- [x] 3.3 Confirm local and staging instructions accurately describe the final lifecycle

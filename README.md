@@ -358,9 +358,11 @@ cd frontend && npm install && npm run dev
 
 Set `INFERENCE_SERVICE_URL` (for example `http://127.0.0.1:8080`) and the same
 `INFERENCE_INTERNAL_TOKEN` in the API process and the inference process. Do not put
-that token, JWT secret, or object-store keys in the Vite/React build. If the inference
-URL and token are unset, a valid analysis request still returns `202 queued` and waits;
-dispatch does not fabricate a terminal result.
+that token, JWT secret, or object-store keys in the Vite/React build. A valid analysis
+request still returns `202 queued` immediately. The API then retries activation for a
+bounded interval. If both settings are unset, or activation cannot succeed, the run
+becomes `failed` with `INFERENCE_DISPATCH_FAILED` and a generic Operator-safe report.
+That public result does not include the inference URL, token, or exception text.
 
 The private inference process also requires a pinned F-03 catalog pair:
 
@@ -455,10 +457,13 @@ insert no row. Analysis starts with `POST /projects/{project_id}/analysis-runs` 
 copies the dataset object key into `log_reference`; it does not re-scan the log at analyze
 time. A published v1 model without a bound preprocessing bundle returns 409 before any run
 is created. An inference-ready published v2 model returns `202` with status `queued` and
-null completion/error fields; the API then activates the private inference service. Dispatch
-failures stay `queued` and are logged without secrets. The inference service owns
-`queued → running → completed|failed`. Model and run responses add `storage_kind` and
-nullable `checksum`; runs also return `dataset_id`. GET results returns the stored
+null completion/error fields; the API then activates the private inference service with
+bounded retry. If activation succeeds, the inference service owns
+`queued → running → completed|failed`. If activation cannot succeed, the still-queued
+run becomes `failed` with `INFERENCE_DISPATCH_FAILED`. Server logs keep exception type
+names only; they never include the token or `Authorization` header. Model and run
+responses add `storage_kind` and nullable `checksum`; runs also return `dataset_id`.
+GET results returns the stored
 `results_summary_json`, not a computed empty summary. There is no public PATCH for
 datasets, and no public POST/PATCH for anomaly rows or run status.
 

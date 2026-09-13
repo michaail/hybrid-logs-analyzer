@@ -211,10 +211,12 @@ Then sign in through the same-origin UI and confirm all of these conditions:
 - An Operator can upload a UTF-8 HDFS log, receive an accepted object-kind dataset or a
   structured 422, and start analysis by selecting that `dataset_id`.
 - A published inference-ready v2 model queues a run (`202 queued`). Observe a staging
-  cold start: the first activation may retry while `inference` wakes, the run stays
-  honestly `queued` during a transient activation failure, and polling then reaches
-  `running` and a terminal `completed` or `failed` state. Do not treat a dispatch retry
-  as a fabricated success.
+  cold start: the run stays `queued` only while bounded activation retry is in progress
+  as `inference` wakes. If activation succeeds, polling then reaches `running` and a
+  terminal `completed` or `failed` execution state. If activation cannot succeed, the
+  run becomes `failed` with `INFERENCE_DISPATCH_FAILED` and a generic report that does
+  not include the token, URL, or exception text. Do not treat a dispatch retry as a
+  fabricated success.
 - The browser, frontend build, and public API responses contain neither
   `INFERENCE_INTERNAL_TOKEN` nor Bucket credentials.
 - The health endpoint reports success only while PostgreSQL is reachable.
