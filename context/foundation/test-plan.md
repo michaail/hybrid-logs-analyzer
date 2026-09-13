@@ -6,7 +6,7 @@
 >
 > Refresh: re-run `/10x-test-plan --refresh` when stale (see §8).
 >
-> Last updated: 2026-09-13
+> Last updated: 2026-09-14
 
 ## 1. Strategy
 
@@ -75,7 +75,7 @@ orchestrator updates Status as artifacts appear on disk.
 | # | Phase name | Goal (one line) | Risks covered | Test types | Status | Change folder |
 |---|------------------------------|--------------------------------------------------|----------------|-------------------------------|-------------|---|
 | 1 | Critical-path API isolation | Prove cross-project deny, Operator 403, and ineligible/unpublished gates at the HTTP boundary | #1, #2, #3 | unit + integration | complete | testing-critical-path-api-isolation |
-| 2 | Package admission safety | Prove a failed admit leaves no usable orphan prefix | #4, #5 | integration + contract | not started | — |
+| 2 | Package admission safety | Prove a failed admit leaves no usable orphan prefix | #4, #5 | integration + contract | complete | testing-package-admission-safety |
 | 3 | Frontend role signals | Prove the UI cannot look like a successful unauthorized publish or select | #6 | component (bootstrap runner if needed) | not started | — |
 | 4 | Quality-gates wiring | Lock existing Phase 1–3 tests into CI; document Torch-free python vs Ubuntu inference `@ml` jobs | cross-cutting | gates | complete | — |
 
@@ -248,9 +248,24 @@ row. Cite these; do not rewrite them:
 - `test_registration_rejects_ineligible_zip_without_inserting` — ineligible
   ZIP **422** `{valid, issues[]}` and empty model list (also listed in §6.2).
 
-Leftover-prefix cleanup after a failed insert remains the pending §3
-Phase 2 rollout (risk #5). Do not treat env-scrub or ineligible-ZIP tests
-as proof that orphans are gone.
+Leftover-prefix cleanup after a failed **model register** insert is
+shipped (risk #5). After a real `put`, a non-integrity insert failure must
+return **5xx**, insert no model row, and leave no object-store files.
+Duplicate identity stays **409** with the first prefix kept. Do not mock
+the object store; list leftover keys (`_object_files` / filesystem
+`rglob`). Bucket `delete_objects` Errors must raise; a FakeS3 happy-path
+delete is not that proof.
+
+- `test_registration_deletes_prefix_when_insert_fails` — **5xx**, empty
+  model list, no leftover object files after forced audit/insert failure.
+- `test_bucket_delete_prefix_raises_on_errors_and_keeps_keys` — FakeS3
+  `Errors` without deleting keys; `delete_prefix` raises; keys remain.
+
+Dataset upload still deletes the prefix only on integrity conflict
+(**409**). Do not treat this phase as a new HDFS intake program.
+
+Do not treat env-scrub or ineligible-ZIP tests as proof that orphans are
+gone.
 
 ### 6.6 Per-rollout-phase notes
 
@@ -264,6 +279,13 @@ Dispatch, queued/failed result pages, paging, and provisional-without-score
 tests landed with the product slices, not a test-plan rollout folder. Risk
 #7 is protected by the named §6.2 oracles; do not add a parallel ML, parity,
 or checksum suite for them.
+
+**Package admission leftover-prefix (2026-09-14):** Failed-insert cleanup
+is shipped for model register
+(`test_registration_deletes_prefix_when_insert_fails`) and Bucket Errors
+(`test_bucket_delete_prefix_raises_on_errors_and_keeps_keys`). Risk #4
+stays on the cited Torch / env-scrub / ineligible tests. Dataset upload
+remains 409-only.
 
 ### 6.7 Adding a Playwright E2E test
 

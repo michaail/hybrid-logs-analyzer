@@ -337,20 +337,20 @@ unchanged. No schema change.
 
 #### Automated
 
-- [x] 2.1 `python -m pytest tests/test_object_store.py -m "not ml"` passes, including the new Errors test
-- [x] 2.2 `ruff check src/api/object_store.py tests/test_object_store.py` and `mypy` pass
+- [x] 2.1 `python -m pytest tests/test_object_store.py -m "not ml"` passes, including the new Errors test — 7f5a12e
+- [x] 2.2 `ruff check src/api/object_store.py tests/test_object_store.py` and `mypy` pass — 7f5a12e
 
 #### Manual
 
-- [x] 2.3 Confirm F7 is unit/FakeS3 only — no MinIO and no HTTP register against Bucket in this change
+- [x] 2.3 Confirm F7 is unit/FakeS3 only — no MinIO and no HTTP register against Bucket in this change — 7f5a12e
 
 ### Phase 3: Cookbook for leftover-prefix tests
 
 #### Automated
 
-- [ ] 3.1 `context/foundation/test-plan.md` §6.5 no longer states leftover-prefix cleanup as pending for model register
-- [ ] 3.2 `python -m pytest tests/test_api.py tests/test_object_store.py -m "not ml"` still passes
+- [x] 3.1 `context/foundation/test-plan.md` §6.5 no longer states leftover-prefix cleanup as pending for model register
+- [x] 3.2 `python -m pytest tests/test_api.py tests/test_object_store.py -m "not ml"` still passes
 
 #### Manual
 
-- [ ] 3.3 Read §6.5–§6.6: risk #4 tests still cited; dataset twin is explicit; no §2-style code anchors; Phase 2 ledger row is `complete`
+- [x] 3.3 Read §6.5–§6.6: risk #4 tests still cited; dataset twin is explicit; no §2-style code anchors; Phase 2 ledger row is `complete`
