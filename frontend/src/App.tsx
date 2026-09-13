@@ -604,7 +604,11 @@ function ModelsView({
             const isSelected = selectedModelId === model.id;
             const isPublished = model.status === "published";
             return (
-              <article className={`model-card ${isSelected ? "selected" : ""}`} key={model.id}>
+              <article
+                aria-label={`${model.model_identifier} version ${model.version}`}
+                className={`model-card ${isSelected ? "selected" : ""}`}
+                key={model.id}
+              >
                 <div className="card-title-row">
                   <div>
                     <p className="model-name">{model.model_identifier}</p>

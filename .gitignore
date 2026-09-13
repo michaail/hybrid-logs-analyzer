@@ -28,3 +28,10 @@ __pycache__/
 
 # OS metadata
 .DS_Store
+
+# Playwright E2E (isolated runtime, generated auth, HTML reports)
+.e2e/
+playwright/.auth/
+frontend/playwright-report/
+frontend/test-results/
+frontend/blob-report/
