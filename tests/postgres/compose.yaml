@@ -1,4 +1,6 @@
 # Disposable PostgreSQL for dialect-sensitive API migrations.
+# Mutually exclusive with the root compose.yaml on host 5433. When the MVP
+# stack is up, point TEST_DATABASE_URL at it instead of starting this file.
 # TEST_DATABASE_URL=postgresql://analyzer:analyzer@127.0.0.1:5433/analyzer
 services:
   postgres:

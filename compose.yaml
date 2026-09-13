@@ -1,0 +1,136 @@
+# HDFS MVP local stack. Always invoke with:
+#   docker compose --env-file compose.env up --build
+# Compose interpolates a project-root .env automatically. Do not set container
+# DATABASE_URL from ${DATABASE_URL} — that file is SQLite-oriented. The URL below
+# is the Postgres service on the Compose network.
+# Host ports: web 8000→8080, postgres 5433→5432. Inference and the validator
+# stay private. Mutually exclusive with tests/postgres/compose.yaml on 5433.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: analyzer
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: analyzer
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analyzer -d analyzer"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    image: analyzer-web:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    command: ["python", "-m", "src.api.migrations"]
+    environment:
+      API_JWT_SECRET: ${API_JWT_SECRET}
+      DATABASE_URL: postgresql://analyzer:${POSTGRES_PASSWORD}@postgres:5432/analyzer
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    image: analyzer-web:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8080"
+    environment:
+      PORT: "8080"
+      API_JWT_SECRET: ${API_JWT_SECRET}
+      API_JWT_TTL_MINUTES: "30"
+      API_TRUSTED_WORKSPACE_ROOT: /tmp/workspace
+      DATABASE_URL: postgresql://analyzer:${POSTGRES_PASSWORD}@postgres:5432/analyzer
+      API_OBJECT_STORE_ROOT: /var/lib/analyzer/objects
+      INFERENCE_SERVICE_URL: http://inference:8080
+      INFERENCE_INTERNAL_TOKEN: ${INFERENCE_INTERNAL_TOKEN}
+      MODEL_VALIDATOR_SERVICE_URL: http://model-validator:8080
+      MODEL_VALIDATOR_INTERNAL_TOKEN: ${MODEL_VALIDATOR_INTERNAL_TOKEN}
+    volumes:
+      - objects:/var/lib/analyzer/objects
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  inference:
+    image: analyzer-inference:local
+    build:
+      context: .
+      dockerfile: Dockerfile.inference
+    environment:
+      PORT: "8080"
+      DATABASE_URL: postgresql://analyzer:${POSTGRES_PASSWORD}@postgres:5432/analyzer
+      API_OBJECT_STORE_ROOT: /var/lib/analyzer/objects
+      INFERENCE_INTERNAL_TOKEN: ${INFERENCE_INTERNAL_TOKEN}
+      INFERENCE_HDFS_COMPLETENESS_MANIFEST: /var/lib/analyzer/catalog/manifest.json
+      INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256: ${INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256}
+    volumes:
+      - objects:/var/lib/analyzer/objects
+      # :- default keeps `docker compose config` valid when compose.env leaves
+      # the catalog dir empty. Inference /health still 503 until the real tree
+      # and SHA match. Do not treat /tmp/hdfs-completeness-catalog as the pin.
+      - ${HDFS_COMPLETENESS_CATALOG_DIR:-/tmp/hdfs-completeness-catalog}:/var/lib/analyzer/catalog:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 180s
+
+  model-validator:
+    image: analyzer-model-validator:local
+    build:
+      context: .
+      dockerfile: Dockerfile.validator
+    environment:
+      MODEL_VALIDATOR_INTERNAL_TOKEN: ${MODEL_VALIDATOR_INTERNAL_TOKEN}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 180s
+
+volumes:
+  objects:
+  postgres_data:
