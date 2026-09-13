@@ -369,12 +369,12 @@ them here.
 
 #### Automated
 
-- [x] 2.1 `rg -n "one percentage point"` has no matches in the FR-011 sentences this phase rewrites
-- [x] 2.2 `rg -n "hdfs-parity-baseline.md" configs/hdfs_baseline.yaml` matches
-- [x] 2.3 `rg -n "context/changes/run-parity-hdfs-analysis/baseline.md" configs/hdfs_baseline.yaml` has no matches
-- [x] 2.4 `rg -n "milestone_status: done" context/foundation/roadmap.md` matches
-- [x] 2.5 `rg -n "prd-parity-contract"` in `mvp-alignment-plan.md` shows status `done`
+- [x] 2.1 `rg -n "one percentage point"` has no matches in the FR-011 sentences this phase rewrites — edb206e
+- [x] 2.2 `rg -n "hdfs-parity-baseline.md" configs/hdfs_baseline.yaml` matches — edb206e
+- [x] 2.3 `rg -n "context/changes/run-parity-hdfs-analysis/baseline.md" configs/hdfs_baseline.yaml` has no matches — edb206e
+- [x] 2.4 `rg -n "milestone_status: done" context/foundation/roadmap.md` matches — edb206e
+- [x] 2.5 `rg -n "prd-parity-contract"` in `mvp-alignment-plan.md` shows status `done` — edb206e
 
 #### Manual
 
-- [x] 2.6 Owner confirms M-1 history records closure without a new open milestone, and that README still documenting v1 upload is acceptable until `retire-v1`
+- [x] 2.6 Owner confirms M-1 history records closure without a new open milestone, and that README still documenting v1 upload is acceptable until `retire-v1` — edb206e

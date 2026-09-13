@@ -1,7 +1,7 @@
 ---
 change_id: narrow-hdfs-mvp-contract
 title: Align foundation docs to the v2-only FR-011 contract
-status: implementing
+status: implemented
 created: 2026-09-13
 updated: 2026-09-13
 archived_at: null
