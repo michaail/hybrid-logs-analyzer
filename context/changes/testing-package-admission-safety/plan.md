@@ -326,23 +326,23 @@ unchanged. No schema change.
 
 #### Automated
 
-- [x] 1.1 `python -m pytest tests/test_api.py -m "not ml"` passes, including the new leftover-prefix test and existing 409 / ineligible-ZIP key oracles
-- [x] 1.2 `ruff check src/api/main.py tests/test_api.py` and `mypy` pass
+- [x] 1.1 `python -m pytest tests/test_api.py -m "not ml"` passes, including the new leftover-prefix test and existing 409 / ineligible-ZIP key oracles — c4d77bf
+- [x] 1.2 `ruff check src/api/main.py tests/test_api.py` and `mypy` pass — c4d77bf
 
 #### Manual
 
-- [x] 1.3 Confirm the new test observes `_object_files` (or equivalent rglob) and does not mock the object store; 409 still maps only integrity conflicts
+- [x] 1.3 Confirm the new test observes `_object_files` (or equivalent rglob) and does not mock the object store; 409 still maps only integrity conflicts — c4d77bf
 
 ### Phase 2: Bucket delete_objects Errors (F7)
 
 #### Automated
 
-- [ ] 2.1 `python -m pytest tests/test_object_store.py -m "not ml"` passes, including the new Errors test
-- [ ] 2.2 `ruff check src/api/object_store.py tests/test_object_store.py` and `mypy` pass
+- [x] 2.1 `python -m pytest tests/test_object_store.py -m "not ml"` passes, including the new Errors test
+- [x] 2.2 `ruff check src/api/object_store.py tests/test_object_store.py` and `mypy` pass
 
 #### Manual
 
-- [ ] 2.3 Confirm F7 is unit/FakeS3 only — no MinIO and no HTTP register against Bucket in this change
+- [x] 2.3 Confirm F7 is unit/FakeS3 only — no MinIO and no HTTP register against Bucket in this change
 
 ### Phase 3: Cookbook for leftover-prefix tests
 
