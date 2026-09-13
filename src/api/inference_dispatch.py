@@ -168,7 +168,7 @@ def _dispatch(
             )
             return DispatchOutcome.failed()
 
-        if status_code < 400:
+        if 200 <= status_code < 300:
             return DispatchOutcome.ok()
         if status_code not in _TRANSIENT_STATUS_CODES or attempt >= attempts:
             logger.warning(

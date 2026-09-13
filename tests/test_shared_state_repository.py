@@ -370,6 +370,34 @@ def test_queued_to_failed_is_legal_audited_and_cas_protected(tmp_path: Path) -> 
         )
 
 
+def test_queued_to_failed_does_not_overwrite_running(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    project_id, user_id, model_id = _seed_model(database)
+    run_id = _queued_run(database, project_id, user_id, model_id)
+
+    running = database.transition_analysis_run(
+        run_id,
+        expected_status="queued",
+        next_status="running",
+        actor_user_id=user_id,
+    )
+    assert running["status"] == "running"
+
+    with pytest.raises(RunStatusConflict):
+        database.transition_analysis_run(
+            run_id,
+            expected_status="queued",
+            next_status="failed",
+            actor_user_id=None,
+            error_code="INFERENCE_DISPATCH_FAILED",
+        )
+    stored = database.get_analysis_run(run_id)
+    assert stored is not None
+    assert stored["status"] == "running"
+    assert stored["error_code"] is None
+    assert stored["completed_at"] is None
+
+
 @pytest.mark.postgres
 def test_postgres_dataset_identity_checksum_check_and_cas_conflict(
     postgres_database: ApiDatabase,

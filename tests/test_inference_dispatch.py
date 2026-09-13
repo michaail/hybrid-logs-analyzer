@@ -130,6 +130,20 @@ def test_unauthorized_response_is_not_retried(tmp_path: Path) -> None:
     assert calls["n"] == 1
 
 
+def test_redirect_response_is_a_failure(tmp_path: Path) -> None:
+    calls = {"n": 0}
+
+    def post(url: str, headers: Mapping[str, str], connect: float, read: float) -> int:
+        del url, headers, connect, read
+        calls["n"] += 1
+        return 302
+
+    outcome = dispatch_analysis_run(uuid4(), _settings(tmp_path), post=post, sleep=lambda _: None)
+    assert outcome == DispatchOutcome.failed()
+    assert outcome.error_code == INFERENCE_DISPATCH_FAILED
+    assert calls["n"] == 1
+
+
 def test_unconfigured_dispatch_is_a_failure(tmp_path: Path) -> None:
     def post(url: str, headers: Mapping[str, str], connect: float, read: float) -> int:
         del url, headers, connect, read
