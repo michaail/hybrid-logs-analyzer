@@ -433,7 +433,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         package: UploadFile = File(..., description="Complete HDFS model package ZIP"),
         preprocessing_bundle: UploadFile | None = File(
             default=None,
-            description="Companion preprocessing-bundle ZIP required for v2 packages",
+            description="Companion preprocessing-bundle ZIP required for registration",
         ),
     ) -> ModelVersionResponse:
         """Admit a Publisher ZIP upload. Never loads the artifact in this process."""

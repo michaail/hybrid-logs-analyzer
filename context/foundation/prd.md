@@ -72,7 +72,7 @@ The primary persona is an SRE responsible for investigating unusual system-log b
 
 #### Acceptance Criteria
 
-- Missing or invalid artifacts, required metadata, metrics, source compatibility, preprocessing bundle, or non-empty JSON external-evaluation attestation produce a clear rejection and cannot be published. `attribute-aware-gae-v1` is not an accepted contract; leftover v1 rows are removed in follow-on `retire-v1`. The running app may still admit v1 until that change lands.
+- Missing or invalid artifacts, required metadata, metrics, source compatibility, preprocessing bundle, or non-empty JSON external-evaluation attestation produce a clear rejection and cannot be published. `attribute-aware-gae-v1` is not an accepted contract; leftover v1 rows are removed with `python -m src.api.retire_v1`.
 - Registration retains the model identifier, version, status, metadata, metrics, artifact reference, and project ownership.
 - Publication records the Publisher, publication time, and exact model version in the audit log.
 - An Operator cannot register or publish a model.
@@ -114,7 +114,7 @@ The primary persona is an SRE responsible for investigating unusual system-log b
 - [new] FR-001: Administrator can provision user accounts; public sign-up is unavailable. Priority: must-have
   > Socrates: Counter-argument considered: account provisioning adds scope that could be replaced by pre-seeded users. Resolution: kept; provisioning is necessary to demonstrate the authentication boundary.
 - [new] FR-002: Publisher can upload a pretrained `attribute-aware-gae-v2` model with its artifact, required metadata, evaluation metrics, declared HDFS compatibility, bound immutable preprocessing bundle, and a non-empty JSON external-evaluation attestation. Priority: must-have
-  > Socrates: Counter-argument considered: uploaded model artifacts add security and compatibility risk. Resolution: kept; the MVP accepts only `attribute-aware-gae-v2` plus its preprocessing bundle. `attribute-aware-gae-v1` is unsupported; follow-on `retire-v1` removes remaining v1 handling. `feature_contract: notebook_raw_v1` names graph-feature semantics, not a package format. The attestation is not scored as proof that an external evaluation succeeded.
+  > Socrates: Counter-argument considered: uploaded model artifacts add security and compatibility risk. Resolution: kept; the MVP accepts only `attribute-aware-gae-v2` plus its preprocessing bundle. `attribute-aware-gae-v1` is unsupported. `feature_contract: notebook_raw_v1` names graph-feature semantics, not a package format. The attestation is not scored as proof that an external evaluation succeeded.
 - [new] FR-003: System can validate the completeness and declared source compatibility of an uploaded model package, clearly reject failures, and register eligible models as traceable versions; this validation does not establish model quality. Priority: must-have
   > Socrates: Counter-argument considered: presence of external-evaluation evidence cannot prove actual model quality. Resolution: revised; eligibility validation establishes completeness and compatibility only.
 - [new] FR-004: Publisher can explicitly publish an eligible model version within an authorized project. Priority: must-have
@@ -143,7 +143,7 @@ The primary persona is an SRE responsible for investigating unusual system-log b
 ### Backward compatibility
 
 - Preserve the dataset and configuration semantics used by the agreed notebook baseline in [hdfs-parity-baseline.md](hdfs-parity-baseline.md).
-- Preserve compatibility with that baseline's v3 `attribute-aware-gae-v2` package, preprocessing bundle, and evaluation outputs. Do not preserve `attribute-aware-gae-v1` as an upload or execution contract; follow-on `retire-v1` removes remaining v1 handling.
+- Preserve compatibility with that baseline's v3 `attribute-aware-gae-v2` package, preprocessing bundle, and evaluation outputs. Do not preserve `attribute-aware-gae-v1` as an upload or execution contract.
 - For identical datasets, models, and configurations, FR-011 keeps `best_threshold` exact and test F1, PR-AUC, and ROC-AUC within `0.01`.
 - Reference, regression, and parity datasets selected from the HDFS source corpus retain complete
   source histories for every selected block identifier. Line-prefix samples are limited to parser
@@ -151,7 +151,7 @@ The primary persona is an SRE responsible for investigating unusual system-log b
 
 ### Data migration
 
-- No existing application data is migrated into this contract. Pretrained models enter through the Publisher upload flow as `attribute-aware-gae-v2` plus a preprocessing bundle. Leftover v1 model rows and object prefixes are deleted in follow-on `retire-v1`; audit history is retained. There is no v1 runtime compatibility path.
+- No existing application data is migrated into this contract. Pretrained models enter through the Publisher upload flow as `attribute-aware-gae-v2` plus a preprocessing bundle. Leftover v1 model rows and object prefixes are deleted with `python -m src.api.retire_v1`; audit history is retained. There is no v1 runtime compatibility path.
 
 ### Existing integrations
 
@@ -182,7 +182,7 @@ the source HDFS lifecycle ended.
 
 The MVP preserves that classification rule and adds a lifecycle rule: a pretrained model can be published and used for anomaly analysis only when it is a complete `attribute-aware-gae-v2` package bound to an immutable preprocessing bundle, declared HDFS-compatible, accompanied by a non-empty JSON external-evaluation attestation, explicitly published by a Publisher, and used with logs in the same project. The attestation is not a quality score.
 
-The lifecycle rule consumes the uploaded v2 package and bundle, declared HDFS compatibility, the JSON attestation, publication action, and project ownership. It produces either a clear rejection or a published model version that an Operator can select for a compatible analysis run. `attribute-aware-gae-v1` is not part of this lifecycle; follow-on `retire-v1` removes remaining v1 handling.
+The lifecycle rule consumes the uploaded v2 package and bundle, declared HDFS compatibility, the JSON attestation, publication action, and project ownership. It produces either a clear rejection or a published model version that an Operator can select for a compatible analysis run. `attribute-aware-gae-v1` is not part of this lifecycle.
 
 ## Access Control Changes
 
@@ -217,7 +217,7 @@ Input data, model artifacts, analysis runs, and results are isolated by project.
 ## Open Questions
 
 1. **What languages, frameworks, storage, and infrastructure make up the current notebook system? (resolved 2026-09-09)** — Jupyter notebooks in Python; storage is local artefacts; infrastructure is local. — Owner: user. Block: none.
-2. **What exact model-package format and artifact contract can a Publisher upload? (resolved 2026-09-13)** — Only `attribute-aware-gae-v2`: a pretrained tensor-only PyTorch `.pt` state dict inside the package contract (architecture, input-normalization/scoring, metrics with `best_threshold`, HDFS compatibility) plus a bound immutable preprocessing bundle. Publishers upload both ZIPs (`manifest.json` at each archive root) through same-origin multipart registration. A non-empty JSON external-evaluation attestation is required and is not scored. Ineligible packages receive a structured 422 and no row. Eligible versions still require an explicit publish. `attribute-aware-gae-v1` is unsupported; follow-on `retire-v1` removes remaining v1 handling. `feature_contract: notebook_raw_v1` is graph-feature semantics, not a package format.
+2. **What exact model-package format and artifact contract can a Publisher upload? (resolved 2026-09-13)** — Only `attribute-aware-gae-v2`: a pretrained tensor-only PyTorch `.pt` state dict inside the package contract (architecture, input-normalization/scoring, metrics with `best_threshold`, HDFS compatibility) plus a bound immutable preprocessing bundle. Publishers upload both ZIPs (`manifest.json` at each archive root) through same-origin multipart registration. A non-empty JSON external-evaluation attestation is required and is not scored. Ineligible packages receive a structured 422 and no row. Eligible versions still require an explicit publish. `attribute-aware-gae-v1` is unsupported. `feature_contract: notebook_raw_v1` is graph-feature semantics, not a package format.
 3. **Which notebook and configuration form the agreed parity baseline? (Open Question 3, resolved 2026-09-13)** — Notebook `src/notebooks/6_GAE_Training_Colab.ipynb`, config `configs/hdfs_baseline.yaml`, run `hdfs_gae_20260829_104013_baseline`. Active pin: [hdfs-parity-baseline.md](hdfs-parity-baseline.md). Immutable evidence: `context/archive/2026-09-11-run-parity-hdfs-analysis/baseline.md`.
 4. **What is the current user scale of the notebook system? (resolved 2026-09-09)** — One user, the solution owner and infrastructure operator. — Owner: user. Block: none.
 5. **What deterministic evidence establishes that an HDFS block history is complete? (resolved 2026-09-13)** — Membership in the checksum-pinned F-03 `selected-block-ids.txt` catalog is the documented reference-membership heuristic. Catalog members are labelled heuristically final; non-members are provisional. This is not lifecycle-completeness proof. Lifecycle-event detection, inactivity watermarks, and backfill remain out of scope.

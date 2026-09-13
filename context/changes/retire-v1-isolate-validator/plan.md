@@ -554,28 +554,28 @@ runs are retired in a later change. Audit history is retained with dangling
 
 #### Automated
 
-- [x] 1.1 `python -m pytest tests/test_retire_v1.py -m "not ml"` passes
-- [x] 1.2 `ruff check src/api/retire_v1.py tests/test_retire_v1.py`
-- [x] 1.3 `python -m src.api.retire_v1 --help` shows `--dry-run` and `--apply`
+- [x] 1.1 `python -m pytest tests/test_retire_v1.py -m "not ml"` passes — fdc6ef1
+- [x] 1.2 `ruff check src/api/retire_v1.py tests/test_retire_v1.py` — fdc6ef1
+- [x] 1.3 `python -m src.api.retire_v1 --help` shows `--dry-run` and `--apply` — fdc6ef1
 
 #### Manual
 
-- [x] 1.4 Owner confirms the dry-run listing is readable (candidate id, format, bundle-null, run count, action) and that blocked rows are an acceptable leftover until those runs are retired separately
+- [x] 1.4 Owner confirms the dry-run listing is readable (candidate id, format, bundle-null, run count, action) and that blocked rows are an acceptable leftover until those runs are retired separately — fdc6ef1
 
 ### Phase 2: v2-only admission
 
 #### Automated
 
-- [ ] 2.1 `python -m pytest tests/test_model_package.py tests/test_inference_bundle.py tests/test_api.py tests/test_model_validator.py -m "not ml"` passes
-- [ ] 2.2 `rg -n "V1 uses the" README.md` has no matches
-- [ ] 2.3 `rg -n "legacy packages stay visible" frontend/src/App.tsx` has no matches
-- [ ] 2.4 `rg -n "The running app may still admit v1" context/foundation/prd.md` has no matches
-- [ ] 2.5 `ruff check src/modules/model_package.py src/modules/inference_bundle.py src/api/validation.py src/api/main.py tests/test_api.py tests/test_model_package.py`
-- [ ] 2.7 `npm --prefix frontend run test:e2e`
+- [x] 2.1 `python -m pytest tests/test_model_package.py tests/test_inference_bundle.py tests/test_api.py tests/test_model_validator.py -m "not ml"` passes
+- [x] 2.2 `rg -n "V1 uses the" README.md` has no matches
+- [x] 2.3 `rg -n "legacy packages stay visible" frontend/src/App.tsx` has no matches
+- [x] 2.4 `rg -n "The running app may still admit v1" context/foundation/prd.md` has no matches
+- [x] 2.5 `ruff check src/modules/model_package.py src/modules/inference_bundle.py src/api/validation.py src/api/main.py tests/test_api.py tests/test_model_package.py`
+- [x] 2.7 `npm --prefix frontend run test:e2e`
 
 #### Manual
 
-- [ ] 2.6 Owner confirms README and the register dialog describe only v2+bundle, and that a v1 ZIP is rejected with a structured issue (UI or API)
+- [x] 2.6 Owner confirms README and the register dialog describe only v2+bundle, and that a v1 ZIP is rejected with a structured issue (UI or API)
 
 ### Phase 3: Private validator HTTP service
 

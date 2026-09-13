@@ -23,7 +23,7 @@ from src.modules.inference_bundle import (
     validate_preprocessing_bundle,
     validate_preprocessing_bundle_source,
 )
-from src.modules.model_package import MANIFEST_NAME, PACKAGE_FORMAT_V2, PackageArchitecture
+from src.modules.model_package import MANIFEST_NAME, PACKAGE_FORMAT_V1, PACKAGE_FORMAT_V2, PackageArchitecture
 from tests.test_model_package import TINY_ARCHITECTURE, _assert_has_issue, _write_package
 
 V2_ARCHITECTURE = {
@@ -101,25 +101,25 @@ def _write_bundle(
     return bundle
 
 
-def _v2_package(root: Path, digest: str) -> Path:
-    return _write_package(
-        root,
-        manifest={
-            "model_identifier": "attribute-gae",
+def _v2_package(root: Path, digest: str, **package_kwargs: Any) -> Path:
+    manifest = {
+        "model_identifier": "attribute-gae",
+        "version": "v2",
+        "source_compatibility": "hdfs",
+        "format": PACKAGE_FORMAT_V2,
+        "metrics": {"best_threshold": 0.147},
+        "architecture": dict(V2_ARCHITECTURE),
+        "scoring": {"alpha": 1.0, "beta": 1.0, "gamma": 0.0},
+        "files": {"artifact": "model.pt", "evidence": "evidence.json", "checksums": {}},
+        "preprocessing_bundle": {
+            "identifier": "attribute-gae-preprocessing",
             "version": "v2",
-            "source_compatibility": "hdfs",
-            "format": PACKAGE_FORMAT_V2,
-            "metrics": {"best_threshold": 0.147},
-            "architecture": dict(V2_ARCHITECTURE),
-            "scoring": {"alpha": 1.0, "beta": 1.0, "gamma": 0.0},
-            "files": {"artifact": "model.pt", "evidence": "evidence.json", "checksums": {}},
-            "preprocessing_bundle": {
-                "identifier": "attribute-gae-preprocessing",
-                "version": "v2",
-                "digest": digest,
-            },
+            "digest": digest,
         },
-    )
+    }
+    if "manifest" in package_kwargs:
+        return _write_package(root, **package_kwargs)
+    return _write_package(root, manifest=manifest, **package_kwargs)
 
 
 def test_inference_bundle_source_does_not_import_torch() -> None:
@@ -218,12 +218,14 @@ def test_zip_slip_bundle_is_rejected(tmp_path: Path) -> None:
     assert written == {"slip.zip"}
 
 
-def test_v1_package_rejects_companion_bundle(tmp_path: Path) -> None:
-    package = _write_package(tmp_path)
+def test_v1_package_is_rejected_even_with_companion_bundle(tmp_path: Path) -> None:
+    from tests.test_model_package import _manifest_payload
+
+    package = _write_package(tmp_path, manifest=_manifest_payload(format=PACKAGE_FORMAT_V1))
     bundle = _write_bundle(tmp_path)
     result = validate_packaged_release(package, bundle)
     assert not result.valid
-    _assert_has_issue(result, "preprocessing_bundle")
+    _assert_has_issue(result, "attribute-aware-gae-v1")
 
 
 def test_v2_package_requires_matching_bundle(tmp_path: Path) -> None:

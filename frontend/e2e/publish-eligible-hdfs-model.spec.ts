@@ -10,7 +10,7 @@ test("publisher can upload an eligible HDFS package and explicitly publish it", 
   const pkg = eligiblePackage();
   await openPublisherWorkspace(page);
 
-  const registration = await registerPackage(page, pkg.zipPath);
+  const registration = await registerPackage(page, pkg.zipPath, pkg.bundleZipPath);
   expect(registration.status()).toBe(201);
   await expect(
     page.getByRole("status").filter({

@@ -267,17 +267,15 @@ export class ApiClient {
   registerModel(
     projectId: string,
     packageFile: File,
-    preprocessingBundleFile: File | null,
+    preprocessingBundleFile: File,
   ): Promise<ModelVersion> {
     const body = new FormData();
     body.append("package", packageFile, packageFile.name);
-    if (preprocessingBundleFile) {
-      body.append(
-        "preprocessing_bundle",
-        preprocessingBundleFile,
-        preprocessingBundleFile.name,
-      );
-    }
+    body.append(
+      "preprocessing_bundle",
+      preprocessingBundleFile,
+      preprocessingBundleFile.name,
+    );
     return this.request<ModelVersion>(`/projects/${projectId}/models`, {
       method: "POST",
       body,

@@ -13,7 +13,6 @@ from pydantic import Field, field_validator, model_validator
 
 from src.modules.model_package import (
     MANIFEST_NAME,
-    PACKAGE_FORMAT_V1,
     PACKAGE_FORMAT_V2,
     PackageArchitecture,
     PackageModel,
@@ -213,23 +212,13 @@ def validate_packaged_release(
     *,
     load_state_dict: Any = None,
 ) -> PackageValidationResult:
-    """Validate a model package and, for v2, its bound preprocessing bundle."""
+    """Validate a model package and its bound preprocessing bundle."""
 
     issues: list[PackageValidationIssue] = []
     package_result = validate_model_package(package_root, load_state_dict=load_state_dict)
     issues.extend(package_result.issues)
     manifest = try_load_model_package_manifest(package_root)
     if manifest is None:
-        return PackageValidationResult.from_issues(issues)
-
-    if manifest.format == PACKAGE_FORMAT_V1:
-        if bundle_root is not None:
-            issues.append(
-                PackageValidationIssue(
-                    path="preprocessing_bundle",
-                    reason="A preprocessing bundle is not allowed for attribute-aware-gae-v1.",
-                )
-            )
         return PackageValidationResult.from_issues(issues)
 
     if manifest.format != PACKAGE_FORMAT_V2:

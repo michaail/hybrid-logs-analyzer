@@ -9,7 +9,7 @@ test("ineligible HDFS package is rejected and cannot be published", async ({ pag
   const pkg = ineligiblePackage();
   await openPublisherWorkspace(page);
 
-  const response = await registerPackage(page, pkg.zipPath);
+  const response = await registerPackage(page, pkg.zipPath, pkg.bundleZipPath);
   expect(response.status()).toBe(422);
 
   const dialog = page.getByRole("dialog", { name: "Register trained model" });

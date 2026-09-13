@@ -26,11 +26,13 @@ export async function openPublisherWorkspace(page: Page, projectName = "e2e-proj
 export async function registerPackage(
   page: Page,
   zipPath: string,
+  bundleZipPath: string,
 ): Promise<Response> {
   await page.getByRole("button", { name: "Register trained model" }).click();
   const dialog = page.getByRole("dialog", { name: "Register trained model" });
   await expect(dialog).toBeVisible();
   await dialog.getByLabel("HDFS model package ZIP").setInputFiles(zipPath);
+  await dialog.getByLabel("Preprocessing-bundle ZIP").setInputFiles(bundleZipPath);
   const pending = page.waitForResponse((response) => {
     if (response.request().method() !== "POST") {
       return false;

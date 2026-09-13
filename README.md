@@ -421,24 +421,31 @@ into object storage. Extra undeclared ZIP members are ignored for eligibility an
 persisted. `manifest.json` must sit at the ZIP root; a single wrapping folder is not
 unwrapped.
 
-A hand-built package ZIP looks like this:
+A hand-built registration looks like two ZIPs:
 
 ```text
-hdfs-attribute-gae-v1.zip
+hdfs-attribute-gae-v2.zip
   manifest.json
   model.pt
   evidence.json
+
+hdfs-preprocessing-bundle.zip
+  manifest.json
+  drain.ini
+  drain_parser.bin
+  embeddings.npz
 ```
 
 `manifest.json` is a closed schema. Required fields include `model_identifier`, `version`,
-`source_compatibility` (`hdfs` only), `format` (`attribute-aware-gae-v1`), `metrics` with a
+`source_compatibility` (`hdfs` only), `format` (`attribute-aware-gae-v2`), `metrics` with a
 finite `best_threshold`, `architecture` (`node_dim`, `edge_dim`, `hidden_dim`, `latent_dim`,
 `gine_aggregation`, `node_transformation`, paired `edge_mean`/`edge_std`), `scoring`
-(`alpha`, `beta`, `gamma`), and `files` with relative POSIX `artifact` / `evidence` paths plus
+(`alpha`, `beta`, `gamma`), `preprocessing_bundle` (`identifier`, `version`, `digest`), and
+`files` with relative POSIX `artifact` / `evidence` paths plus
 lowercase hex SHA-256 checksums of those files. Extra undeclared files are ignored for
 eligibility. `evidence.json` must be a non-empty JSON object; its contents are not scored.
 
-`model.pt` must be a tensor-only `attribute-aware-gae-v1` state dict. A dedicated
+`model.pt` must be a tensor-only AttributeAwareGAE state dict. A dedicated
 package-validation process loads it with `torch.load(..., map_location="cpu", weights_only=True)`
 and checks keys, shapes, and dtypes against the declared architecture. The public API never
 imports PyTorch, never calls `torch.load`, and never uses `weights_only=False` on an admitted
@@ -446,16 +453,16 @@ artifact. Install `requirements-model-validator.txt` only for that isolated proc
 `requirements-api.txt` Torch-free. Do not regenerate `requirements-macos-intel.lock.txt`
 from the validator file.
 
-Publishers register with `POST /projects/{project_id}/models` as multipart ZIP and explicitly
-publish an eligible version. V1 uses the `package` field only; v2 also requires its companion
-`preprocessing_bundle` ZIP in the same request. Operators admit a UTF-8 HDFS log with
+Publishers register with `POST /projects/{project_id}/models` as multipart ZIP (`package` and
+`preprocessing_bundle`) and explicitly
+publish an eligible version. Operators admit a UTF-8 HDFS log with
 `POST /projects/{project_id}/datasets` (multipart field `log`, 32 MiB cap). A valid file
 becomes a new `storage_kind=object` dataset with a SHA-256 checksum. Invalid, empty,
 oversize, or non-UTF-8 payloads return 422 with a validation report, persist no object, and
 insert no row. Analysis starts with `POST /projects/{project_id}/analysis-runs` using
 `{ model_version_id, dataset_id }` only. Missing or foreign datasets return 404. The API
 copies the dataset object key into `log_reference`; it does not re-scan the log at analyze
-time. A published v1 model without a bound preprocessing bundle returns 409 before any run
+time. An unpublished model returns 409 before any run
 is created. An inference-ready published v2 model returns `202` with status `queued` and
 null completion/error fields; the API then activates the private inference service with
 bounded retry. If activation succeeds, the inference service owns
@@ -720,10 +727,11 @@ session token under `playwright/.auth/`. Specs restore that token into `sessionS
 (`logscope.access-token`) instead of logging in again. Refresh auth by re-running the suite
 (the API process wipes `.e2e/` on each start).
 
-Safe fixtures: committed files in `tests/fixtures/model_packages/valid_files/`. Each test
-rewrites unique `model_identifier` / `version` via `scripts/e2e_package.py`. Ineligible
-packages use empty `evidence.json`. The E2E API validator is the existing Torch-free
-`tests/support/files_only_validator.py` subprocess — it never `torch.load`s artifacts.
+Safe fixtures: `scripts/e2e_package.py` writes a unique `attribute-aware-gae-v2` package ZIP
+and matching preprocessing-bundle ZIP (never `torch.load`s artifacts). Ineligible packages
+use empty `evidence.json`. The E2E API validator is the existing Torch-free
+`tests/support/files_only_validator.py` subprocess. A committed v1 directory
+`tests/fixtures/model_packages/rejected_v1/` is a 422 oracle, not an upload fixture.
 
 Cleanup: there is no public model-delete API. Each suite start deletes `.e2e/` and creates
 a new SQLite file and object store. Tests also use unique identities so parallel workers

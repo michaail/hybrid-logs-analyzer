@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import io
 import json
 import zipfile
 from pathlib import Path
@@ -15,9 +16,12 @@ from src.modules.model_package import (
     MANIFEST_NAME,
     MAX_ZIP_COMPRESSED_BYTES,
     MAX_ZIP_UNCOMPRESSED_BYTES,
+    PACKAGE_FORMAT_V1,
+    PACKAGE_FORMAT_V2,
     PackageArchitecture,
     expected_state_dict_spec,
     materialize_declared_package_files,
+    package_zip_admission_preview_issues,
     validate_model_package,
     validate_model_package_source,
     validate_state_dict,
@@ -32,6 +36,11 @@ TINY_ARCHITECTURE = {
     "node_transformation": "mlp",
     "edge_mean": [0.0],
     "edge_std": [0.2],
+}
+DEFAULT_PREPROCESSING_BUNDLE = {
+    "identifier": "attribute-gae-preprocessing",
+    "version": "v2",
+    "digest": "a" * 64,
 }
 
 
@@ -52,7 +61,7 @@ def _manifest_payload(**overrides: Any) -> dict[str, Any]:
         "model_identifier": "attribute-gae",
         "version": "v1",
         "source_compatibility": "hdfs",
-        "format": "attribute-aware-gae-v1",
+        "format": PACKAGE_FORMAT_V2,
         "metrics": {"best_threshold": 0.147, "test_roc_auc": 0.97},
         "architecture": dict(TINY_ARCHITECTURE),
         "scoring": {"alpha": 1.0, "beta": 1.0, "gamma": 0.0},
@@ -61,6 +70,7 @@ def _manifest_payload(**overrides: Any) -> dict[str, Any]:
             "evidence": "evidence.json",
             "checksums": {},
         },
+        "preprocessing_bundle": dict(DEFAULT_PREPROCESSING_BUNDLE),
     }
     payload.update(overrides)
     return payload
@@ -143,25 +153,20 @@ def test_extra_undeclared_files_are_accepted(tmp_path: Path) -> None:
 
 
 def test_v2_manifest_requires_preprocessing_bundle(tmp_path: Path) -> None:
-    payload = _manifest_payload(format="attribute-aware-gae-v2", version="v2")
+    payload = _manifest_payload()
+    payload.pop("preprocessing_bundle")
     package = _write_package(tmp_path, manifest=payload)
     result = validate_model_package(package)
     assert not result.valid
     _assert_has_issue(result, "preprocessing_bundle")
 
 
-def test_v1_manifest_rejects_preprocessing_bundle(tmp_path: Path) -> None:
-    payload = _manifest_payload(
-        preprocessing_bundle={
-            "identifier": "attribute-gae-preprocessing",
-            "version": "v2",
-            "digest": "a" * 64,
-        }
-    )
+def test_v1_format_is_a_manifest_issue(tmp_path: Path) -> None:
+    payload = _manifest_payload(format=PACKAGE_FORMAT_V1)
     package = _write_package(tmp_path, manifest=payload)
     result = validate_model_package(package)
     assert not result.valid
-    _assert_has_issue(result, "preprocessing_bundle")
+    _assert_has_issue(result, "attribute-aware-gae-v1")
     payload = _manifest_payload(unexpected="nope")
     package = _write_package(tmp_path, manifest=payload)
     result = validate_model_package(package)
@@ -538,3 +543,15 @@ def test_materialize_refuses_path_escape_in_declared_name(tmp_path: Path) -> Non
         materialize_declared_package_files(package, destination)
     leftover = [path for path in destination.rglob("*") if path.is_file()]
     assert leftover == []
+
+
+def test_zip_preview_rejects_v1_format_without_extracting(tmp_path: Path) -> None:
+    package = _write_package(tmp_path, manifest=_manifest_payload(format=PACKAGE_FORMAT_V1))
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as handle:
+        for file in package.rglob("*"):
+            if file.is_file():
+                handle.write(file, file.relative_to(package).as_posix())
+    issues = package_zip_admission_preview_issues(buffer.getvalue())
+    assert issues
+    assert any("attribute-aware-gae-v1" in issue.reason for issue in issues)

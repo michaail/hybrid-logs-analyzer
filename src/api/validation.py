@@ -30,13 +30,11 @@ from src.modules.inference_bundle import materialize_declared_bundle_files
 from src.modules.model_package import (
     MANIFEST_NAME,
     MAX_ZIP_COMPRESSED_BYTES,
-    PACKAGE_FORMAT_V1,
-    PACKAGE_FORMAT_V2,
     ModelPackageManifest,
     PackageValidationIssue,
     PackageValidationResult,
     materialize_declared_package_files,
-    try_load_model_package_manifest,
+    package_zip_admission_preview_issues,
     unpack_zip_bytes,
 )
 
@@ -146,10 +144,24 @@ def admit_uploaded_zip_package(
     size_issue = _zip_size_issue(archive_bytes, path="package")
     if size_issue is not None:
         return size_issue, None
-    if preprocessing_bundle_bytes is not None:
-        bundle_size_issue = _zip_size_issue(preprocessing_bundle_bytes, path="preprocessing_bundle")
-        if bundle_size_issue is not None:
-            return bundle_size_issue, None
+    preview_issues = package_zip_admission_preview_issues(archive_bytes)
+    if preview_issues:
+        return PackageValidationResult.from_issues(preview_issues), None
+    if not preprocessing_bundle_bytes:
+        return (
+            PackageValidationResult.from_issues(
+                [
+                    PackageValidationIssue(
+                        path="preprocessing_bundle",
+                        reason="attribute-aware-gae-v2 packages require a preprocessing bundle.",
+                    )
+                ]
+            ),
+            None,
+        )
+    bundle_size_issue = _zip_size_issue(preprocessing_bundle_bytes, path="preprocessing_bundle")
+    if bundle_size_issue is not None:
+        return bundle_size_issue, None
 
     with tempfile.TemporaryDirectory(prefix="model-upload-") as tmp:
         tmp_root = Path(tmp)
@@ -158,40 +170,12 @@ def admit_uploaded_zip_package(
         unpack_report = unpack_zip_bytes(archive_bytes, extract_root)
         if not unpack_report.valid:
             return unpack_report, None
-        identity_preview = try_load_model_package_manifest(extract_root)
-        package_format = identity_preview.format if identity_preview is not None else None
-        if package_format == PACKAGE_FORMAT_V2 and not preprocessing_bundle_bytes:
-            return (
-                PackageValidationResult.from_issues(
-                    [
-                        PackageValidationIssue(
-                            path="preprocessing_bundle",
-                            reason="attribute-aware-gae-v2 packages require a preprocessing bundle.",
-                        )
-                    ]
-                ),
-                None,
-            )
-        if package_format == PACKAGE_FORMAT_V1 and preprocessing_bundle_bytes:
-            return (
-                PackageValidationResult.from_issues(
-                    [
-                        PackageValidationIssue(
-                            path="preprocessing_bundle",
-                            reason="A preprocessing bundle is not allowed for attribute-aware-gae-v1.",
-                        )
-                    ]
-                ),
-                None,
-            )
 
-        bundle_root: Path | None = None
-        if preprocessing_bundle_bytes:
-            bundle_root = tmp_root / "bundle"
-            bundle_root.mkdir()
-            bundle_unpack = unpack_zip_bytes(preprocessing_bundle_bytes, bundle_root)
-            if not bundle_unpack.valid:
-                return bundle_unpack, None
+        bundle_root = tmp_root / "bundle"
+        bundle_root.mkdir()
+        bundle_unpack = unpack_zip_bytes(preprocessing_bundle_bytes, bundle_root)
+        if not bundle_unpack.valid:
+            return bundle_unpack, None
 
         report = run_private_package_validator(extract_root, settings, bundle_root)
         if not report.valid:
