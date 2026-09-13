@@ -89,6 +89,34 @@ def test_source_lines_keep_the_bounded_scored_sequence() -> None:
     assert lines[-1].raw == f"scored-line-{MAX_CONTEXT_LINES}"
 
 
+def test_partition_sequences_none_selector_scores_every_block() -> None:
+    from src.modules.hdfs_inference import _partition_sequences
+
+    sequences = {"blk_1": "a", "blk_2": "b"}
+    scored, provisional = _partition_sequences(sequences, None)
+    assert scored == sequences
+    assert provisional == {}
+
+
+def test_partition_sequences_splits_catalog_members_from_provisional() -> None:
+    from src.modules.hdfs_inference import _partition_sequences
+
+    sequences = {"blk_1": "a", "blk_2": "b"}
+    scored, provisional = _partition_sequences(sequences, frozenset({"blk_1"}))
+    assert list(scored) == ["blk_1"]
+    assert list(provisional) == ["blk_2"]
+
+
+def test_unassigned_context_count_uses_null_block_ids() -> None:
+    import pandas as pd
+
+    from src.modules.hdfs_inference import _count_unassigned_context_lines
+
+    frame = pd.DataFrame({"block_id": ["blk_1", None, "blk_2", None]})
+    assert _count_unassigned_context_lines(frame) == 2
+    assert _count_unassigned_context_lines(pd.DataFrame()) == 0
+
+
 def _mutate_graph_feature(expected: dict[str, Any]) -> dict[str, Any]:
     blocks = expected["blocks"]
     assert isinstance(blocks, list)
@@ -346,6 +374,65 @@ def test_golden_fixture_matches_frozen_inference() -> None:
     for block in snapshot["blocks"]:
         assert isinstance(block, dict)
         assert block["decision"] == (block["score"] > snapshot["threshold"])
+    assert actual.provisional_blocks == ()
+    assert actual.unassigned_context_line_count == 0
+
+
+@pytest.mark.ml
+def test_mixed_log_scores_catalog_ids_and_keeps_provisional_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.modules.hdfs_inference import (
+        BlockInferenceSnapshot,
+        ProvisionalBlockSnapshot,
+        score_frozen_hdfs_log,
+    )
+
+    manifest = ModelPackageManifest.model_validate(
+        json.loads((FIXTURE / "package" / MANIFEST_NAME).read_text(encoding="utf-8"))
+    )
+    captured: list[list[str]] = []
+    import src.modules.dataset as dataset_module
+
+    original_build = dataset_module.build_pyg_dataset
+
+    def _capture(sequences: Any, *args: Any, **kwargs: Any) -> Any:
+        captured.append([str(key) for key in sequences])
+        return original_build(sequences, *args, **kwargs)
+
+    monkeypatch.setattr(dataset_module, "build_pyg_dataset", _capture)
+    full = score_frozen_hdfs_log(
+        manifest=manifest,
+        bundle_dir=FIXTURE / "bundle",
+        log_path=FIXTURE / "hdfs.log",
+        artifact_path=FIXTURE / "package" / "model.pt",
+    )
+    catalog_id = full.blocks[0].block_id
+    other = full.blocks[1]
+    mixed = score_frozen_hdfs_log(
+        manifest=manifest,
+        bundle_dir=FIXTURE / "bundle",
+        log_path=FIXTURE / "hdfs.log",
+        artifact_path=FIXTURE / "package" / "model.pt",
+        scoring_block_ids=frozenset({catalog_id}),
+    )
+    assert [block.block_id for block in mixed.blocks] == [catalog_id]
+    scored = mixed.blocks[0]
+    expected = full.blocks[0]
+    assert isinstance(scored, BlockInferenceSnapshot)
+    assert scored.score == expected.score
+    assert scored.decision == expected.decision
+    assert scored.decision == (scored.score > mixed.threshold)
+    assert mixed.threshold == full.threshold
+    assert [block.block_id for block in mixed.provisional_blocks] == [other.block_id]
+    provisional = mixed.provisional_blocks[0]
+    assert isinstance(provisional, ProvisionalBlockSnapshot)
+    assert not hasattr(provisional, "score")
+    assert not hasattr(provisional, "decision")
+    assert provisional.matched_line_count == other.matched_line_count
+    assert provisional.source_lines == other.source_lines
+    assert mixed.unassigned_context_line_count == 0
+    assert captured[-1] == [catalog_id]
 
 
 @pytest.mark.ml

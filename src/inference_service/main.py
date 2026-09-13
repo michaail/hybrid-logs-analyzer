@@ -76,6 +76,8 @@ def create_app(settings: InferenceSettings | None = None) -> FastAPI:
             database,
             object_store,
             stale_running_seconds=resolved.stale_running_seconds,
+            hdfs_completeness_manifest=resolved.hdfs_completeness_manifest,
+            hdfs_completeness_manifest_sha256=resolved.hdfs_completeness_manifest_sha256,
         )
         if not result.get("found"):
             raise HTTPException(

@@ -26,7 +26,14 @@ from src.inference_service.errors import (
 )
 from src.inference_service.main import create_app
 from src.inference_service.settings import InferenceSettings
-from src.modules.hdfs_completeness import CompletenessCatalogError
+from src.modules.hdfs_completeness import CompletenessCatalogError, REFERENCE_MEMBERSHIP_POLICY
+from src.modules.hdfs_evaluation_data import (
+    BlockLineCount,
+    EvaluationDataManifest,
+    EvaluationShardRecord,
+    selected_block_ids_order_sha256,
+    sha256_file,
+)
 from src.modules.inference_bundle import (
     DRAIN_CONFIG_NAME,
     DRAIN_PARSER_NAME,
@@ -47,6 +54,14 @@ TINY_LOG = (
     "081109 203617 150 INFO dfs.DataNode$DataXceiver: "
     "Receiving block blk_2 src: /10.0.0.1:50010 dest: /10.0.0.2:50010\n"
 ).encode("utf-8")
+MIXED_LOG = TINY_LOG + (
+    "081109 203618 151 INFO dfs.DataNode$DataXceiver: "
+    "Receiving block none src: /10.0.0.1:50010 dest: /10.0.0.2:50010\n"
+).encode("utf-8")
+UNASSIGNED_LOG = (
+    "081109 203615 148 INFO dfs.DataNode$DataXceiver: "
+    "Receiving block none src: /10.0.0.1:50010 dest: /10.0.0.2:50010\n"
+).encode("utf-8")
 UNMATCHED_LOG = (
     "081109 203615 148 INFO dfs.UnknownComponent: xyzzy-unmatched-line blk_9\n"
 ).encode("utf-8")
@@ -56,16 +71,58 @@ def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _write_catalog(destination: Path, block_ids: list[str]) -> tuple[Path, str]:
+    destination.mkdir(parents=True, exist_ok=True)
+    selected = destination / "selected-block-ids.txt"
+    selected.write_text("".join(f"{block_id}\n" for block_id in block_ids), encoding="utf-8")
+    digest_zero = "0" * 64
+    manifest = EvaluationDataManifest(
+        schema_version=1,
+        corpus_sha256=digest_zero,
+        labels_sha256=digest_zero,
+        selected_block_ids_sha256=sha256_file(selected),
+        selected_block_ids_order_sha256=selected_block_ids_order_sha256(block_ids),
+        selected_block_count=len(block_ids),
+        source_line_count=1,
+        max_source_lines=100_000,
+        max_blocks=25_000,
+        selected_line_counts=[
+            BlockLineCount(block_id=block_id, source_line_count=1) for block_id in block_ids
+        ],
+        shards=[
+            EvaluationShardRecord(
+                name="shard-000.log",
+                sha256=digest_zero,
+                source_line_count=1,
+                block_count=len(block_ids),
+            )
+        ],
+        timestamp_warnings=[],
+    )
+    path = destination / "manifest.json"
+    path.write_text(manifest.model_dump_json() + "\n", encoding="utf-8")
+    return path.resolve(), sha256_file(path)
+
+
 def _temporary_catalog_pin(tmp_path: Path) -> tuple[Path, str]:
-    manifest = tmp_path / "hdfs-completeness" / "manifest.json"
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    payload = b'{"schema_version": 1}\n'
-    manifest.write_bytes(payload)
-    return manifest.resolve(), hashlib.sha256(payload).hexdigest()
+    return _write_catalog(tmp_path / "hdfs-completeness", ["blk_1", "blk_2"])
 
 
-def _settings(tmp_path: Path) -> InferenceSettings:
-    manifest, digest = _temporary_catalog_pin(tmp_path)
+def _settings(
+    tmp_path: Path,
+    *,
+    catalog_block_ids: list[str] | None = None,
+    catalog_manifest: Path | None = None,
+    catalog_sha256: str | None = None,
+) -> InferenceSettings:
+    if catalog_manifest is None:
+        manifest, digest = _write_catalog(
+            tmp_path / "hdfs-completeness",
+            catalog_block_ids or ["blk_1", "blk_2"],
+        )
+    else:
+        manifest = catalog_manifest
+        digest = catalog_sha256 or hashlib.sha256(b"missing-catalog").hexdigest()
     return InferenceSettings(
         database_url=f"sqlite:///{tmp_path / 'api.db'}",
         internal_token=TOKEN,
@@ -76,8 +133,19 @@ def _settings(tmp_path: Path) -> InferenceSettings:
     )
 
 
-def _client(tmp_path: Path) -> tuple[TestClient, InferenceSettings, ApiDatabase]:
-    settings = _settings(tmp_path)
+def _client(
+    tmp_path: Path,
+    *,
+    catalog_block_ids: list[str] | None = None,
+    catalog_manifest: Path | None = None,
+    catalog_sha256: str | None = None,
+) -> tuple[TestClient, InferenceSettings, ApiDatabase]:
+    settings = _settings(
+        tmp_path,
+        catalog_block_ids=catalog_block_ids,
+        catalog_manifest=catalog_manifest,
+        catalog_sha256=catalog_sha256,
+    )
     database = ApiDatabase(settings.database_url)
     database.apply_migrations()
     return TestClient(create_app(settings)), settings, database
@@ -190,8 +258,9 @@ def _seed_queued_job(
     fit_bytes: bytes | None = None,
     cluster_ids_override: list[int] | None = None,
     artifact_bytes: bytes | None = None,
-) -> tuple[TestClient, UUID, ApiDatabase]:
-    client, settings, database = _client(tmp_path)
+    catalog_block_ids: list[str] | None = None,
+) -> tuple[TestClient, UUID, ApiDatabase, InferenceSettings]:
+    client, settings, database = _client(tmp_path, catalog_block_ids=catalog_block_ids)
     store = FilesystemObjectStore(settings.object_store_root)
     project = database.create_project("incident-a")
     user = database.create_user(username="operator", password_hash="x", is_administrator=False)
@@ -311,12 +380,12 @@ def _seed_queued_job(
         completed_at=None,
         dataset_id=dataset_id,
     )
-    return client, UUID(str(run["id"])), database
+    return client, UUID(str(run["id"])), database, settings
 
 
 @pytest.mark.ml
 def test_tiny_frozen_release_completes_block_level_results(tmp_path: Path) -> None:
-    client, run_id, database = _seed_queued_job(tmp_path)
+    client, run_id, database, settings = _seed_queued_job(tmp_path)
     executed = client.post(f"/internal/analysis-runs/{run_id}/execute", headers=_auth())
     assert executed.status_code == 200, executed.text
     assert executed.json()["status"] == "completed"
@@ -326,6 +395,11 @@ def test_tiny_frozen_release_completes_block_level_results(tmp_path: Path) -> No
     assert summary["anomaly_count"] + summary["normal_count"] == 2
     assert summary["normal_count"] == 2
     assert database.list_anomaly_results(run_id) == []
+    assert database.list_provisional_results(run_id) == []
+    assert int(run["provisional_count"] or 0) == 0
+    assert int(run["unassigned_context_line_count"] or 0) == 0
+    assert run["classification_policy"] == REFERENCE_MEMBERSHIP_POLICY
+    assert run["classification_catalog_sha256"] == settings.hdfs_completeness_manifest_sha256
     duplicate = client.post(f"/internal/analysis-runs/{run_id}/execute", headers=_auth())
     assert duplicate.status_code == 200
     assert duplicate.json()["status"] == "completed"
@@ -336,7 +410,7 @@ def test_tiny_frozen_release_completes_block_level_results(tmp_path: Path) -> No
 
 @pytest.mark.ml
 def test_unmatched_template_fails_without_partial_results(tmp_path: Path) -> None:
-    client, run_id, database = _seed_queued_job(
+    client, run_id, database, _settings = _seed_queued_job(
         tmp_path,
         log_bytes=UNMATCHED_LOG,
         fit_bytes=TINY_LOG,
@@ -349,22 +423,25 @@ def test_unmatched_template_fails_without_partial_results(tmp_path: Path) -> Non
     assert run["error_code"] == "UNMATCHED_TEMPLATE"
     assert "frozen Drain" in str(run["validation_report_json"])
     assert database.list_anomaly_results(run_id) == []
+    assert database.list_provisional_results(run_id) == []
 
 
 @pytest.mark.ml
 def test_missing_cluster_embedding_fails(tmp_path: Path) -> None:
-    client, run_id, database = _seed_queued_job(tmp_path, cluster_ids_override=[999])
+    client, run_id, database, _settings = _seed_queued_job(tmp_path, cluster_ids_override=[999])
     executed = client.post(f"/internal/analysis-runs/{run_id}/execute", headers=_auth())
     assert executed.status_code == 200, executed.text
     assert executed.json()["status"] == "failed"
     run = database.get_analysis_run(run_id)
     assert run is not None
     assert run["error_code"] == "MISSING_CLUSTER_EMBEDDING"
+    assert database.list_anomaly_results(run_id) == []
+    assert database.list_provisional_results(run_id) == []
 
 
 @pytest.mark.ml
 def test_corrupt_state_dict_fails_model_load(tmp_path: Path) -> None:
-    client, run_id, database = _seed_queued_job(tmp_path, artifact_bytes=b"not-a-state-dict")
+    client, run_id, database, _settings = _seed_queued_job(tmp_path, artifact_bytes=b"not-a-state-dict")
     executed = client.post(f"/internal/analysis-runs/{run_id}/execute", headers=_auth())
     assert executed.status_code == 200, executed.text
     assert executed.json()["status"] == "failed"
@@ -375,10 +452,10 @@ def test_corrupt_state_dict_fails_model_load(tmp_path: Path) -> None:
 
 @pytest.mark.ml
 def test_checksum_mismatch_fails_before_load(tmp_path: Path) -> None:
-    client, run_id, database = _seed_queued_job(tmp_path)
+    client, run_id, database, _settings = _seed_queued_job(tmp_path)
     run = database.get_analysis_run(run_id)
     assert run is not None
-    store = FilesystemObjectStore(_settings(tmp_path).object_store_root)
+    store = FilesystemObjectStore(_settings.object_store_root)
     job = database.get_inference_execution(run_id)
     assert job is not None
     store.put(f"{job['model_package_reference']}/model.pt", b"tampered-bytes")
@@ -392,10 +469,10 @@ def test_checksum_mismatch_fails_before_load(tmp_path: Path) -> None:
 
 @pytest.mark.ml
 def test_manifest_bundle_binding_mismatch_fails_before_load(tmp_path: Path) -> None:
-    client, run_id, database = _seed_queued_job(tmp_path)
+    client, run_id, database, _settings = _seed_queued_job(tmp_path)
     job = database.get_inference_execution(run_id)
     assert job is not None
-    store = FilesystemObjectStore(_settings(tmp_path).object_store_root)
+    store = FilesystemObjectStore(_settings.object_store_root)
     manifest_key = f"{job['model_package_reference']}/{MANIFEST_NAME}"
     manifest = json.loads(store.get(manifest_key))
     manifest["preprocessing_bundle"]["identifier"] = "substituted-bundle"
@@ -408,6 +485,81 @@ def test_manifest_bundle_binding_mismatch_fails_before_load(tmp_path: Path) -> N
     failed = database.get_analysis_run(run_id)
     assert failed is not None
     assert failed["error_code"] == "MODEL_LOAD_FAILED"
+
+
+@pytest.mark.ml
+def test_mixed_run_persists_exclusive_heuristic_and_provisional_outcomes(tmp_path: Path) -> None:
+    client, run_id, database, settings = _seed_queued_job(
+        tmp_path,
+        log_bytes=MIXED_LOG,
+        catalog_block_ids=["blk_1"],
+    )
+    executed = client.post(f"/internal/analysis-runs/{run_id}/execute", headers=_auth())
+    assert executed.status_code == 200, executed.text
+    assert executed.json()["status"] == "completed"
+    run = database.get_analysis_run(run_id)
+    assert run is not None
+    summary = json.loads(str(run["results_summary_json"]))
+    assert summary["anomaly_count"] == 0
+    assert summary["normal_count"] == 1
+    assert int(run["provisional_count"] or 0) == 1
+    assert int(run["unassigned_context_line_count"] or 0) == 1
+    assert run["classification_policy"] == REFERENCE_MEMBERSHIP_POLICY
+    assert run["classification_catalog_sha256"] == settings.hdfs_completeness_manifest_sha256
+    assert database.list_anomaly_results(run_id) == []
+    provisional = database.list_provisional_results(run_id)
+    assert len(provisional) == 1
+    row = provisional[0]
+    assert row["record_reference"] == "blk_2"
+    assert row["reason_code"] == "not_in_reference_catalog"
+    assert "anomaly_score" not in row.keys()
+    assert "decision_threshold" not in row.keys()
+    context = json.loads(str(row["context_json"]))
+    assert "anomaly_score" not in context
+    assert "decision_threshold" not in context
+    assert context["matched_line_count"] >= 1
+    assert context["source_lines"]
+
+
+@pytest.mark.ml
+def test_catalog_miss_completes_as_all_provisional(tmp_path: Path) -> None:
+    client, run_id, database, _settings = _seed_queued_job(
+        tmp_path,
+        catalog_block_ids=["blk_9"],
+    )
+    executed = client.post(f"/internal/analysis-runs/{run_id}/execute", headers=_auth())
+    assert executed.status_code == 200, executed.text
+    assert executed.json()["status"] == "completed"
+    run = database.get_analysis_run(run_id)
+    assert run is not None
+    summary = json.loads(str(run["results_summary_json"]))
+    assert summary["anomaly_count"] == 0
+    assert summary["normal_count"] == 0
+    assert int(run["provisional_count"] or 0) == 2
+    assert database.list_anomaly_results(run_id) == []
+    references = {row["record_reference"] for row in database.list_provisional_results(run_id)}
+    assert references == {"blk_1", "blk_2"}
+
+
+@pytest.mark.ml
+def test_unassigned_only_run_completes_with_context_count(tmp_path: Path) -> None:
+    client, run_id, database, _settings = _seed_queued_job(
+        tmp_path,
+        log_bytes=UNASSIGNED_LOG,
+        catalog_block_ids=["blk_1"],
+    )
+    executed = client.post(f"/internal/analysis-runs/{run_id}/execute", headers=_auth())
+    assert executed.status_code == 200, executed.text
+    assert executed.json()["status"] == "completed"
+    run = database.get_analysis_run(run_id)
+    assert run is not None
+    summary = json.loads(str(run["results_summary_json"]))
+    assert summary["anomaly_count"] == 0
+    assert summary["normal_count"] == 0
+    assert int(run["provisional_count"] or 0) == 0
+    assert int(run["unassigned_context_line_count"] or 0) == 1
+    assert database.list_anomaly_results(run_id) == []
+    assert database.list_provisional_results(run_id) == []
 
 
 def _queued_run_record(database: ApiDatabase) -> UUID:
@@ -568,6 +720,88 @@ def test_catalog_failures_map_to_safe_unavailable_error(tmp_path: Path) -> None:
     assert mapped.public_message == InferenceExecutionError(
         "COMPLETENESS_CATALOG_UNAVAILABLE"
     ).public_message
+
+
+def _assert_catalog_failure_leaves_no_results(
+    tmp_path: Path,
+    client: TestClient,
+    database: ApiDatabase,
+    run_id: UUID,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _must_not_score(*args: object, **kwargs: object) -> None:
+        raise AssertionError("must not score")
+
+    monkeypatch.setattr(
+        "src.inference_service.runner._infer_from_materialized",
+        _must_not_score,
+    )
+    executed = client.post(f"/internal/analysis-runs/{run_id}/execute", headers=_auth())
+    assert executed.status_code == 200, executed.text
+    assert executed.json()["status"] == "failed"
+    failed = database.get_analysis_run(run_id)
+    assert failed is not None
+    assert failed["error_code"] == "COMPLETENESS_CATALOG_UNAVAILABLE"
+    report = str(failed["validation_report_json"])
+    assert "unavailable or failed verification" in report
+    assert str(tmp_path) not in report
+    assert "hdfs-completeness" not in report
+    assert "manifest.json" not in report
+    assert database.list_anomaly_results(run_id) == []
+    assert database.list_provisional_results(run_id) == []
+
+
+def test_missing_catalog_fails_without_partial_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    missing = tmp_path / "absent-catalog" / "manifest.json"
+    client, _settings, database = _client(
+        tmp_path,
+        catalog_manifest=missing,
+        catalog_sha256="0" * 64,
+    )
+    run_id = _queued_run_record(database)
+    with caplog.at_level("ERROR"):
+        _assert_catalog_failure_leaves_no_results(tmp_path, client, database, run_id, monkeypatch)
+    assert "manifest_missing" in caplog.text
+    assert "COMPLETENESS_CATALOG_UNAVAILABLE" in caplog.text
+    failed = database.get_analysis_run(run_id)
+    assert failed is not None
+    report = str(failed["validation_report_json"])
+    assert "absent-catalog" not in report
+    assert str(missing) not in report
+
+
+def test_altered_catalog_digest_fails_without_partial_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, digest = _write_catalog(tmp_path / "hdfs-completeness", ["blk_1"])
+    wrong = "ab" * 32
+    assert wrong != digest
+    client, _settings, database = _client(
+        tmp_path,
+        catalog_manifest=manifest,
+        catalog_sha256=wrong,
+    )
+    run_id = _queued_run_record(database)
+    _assert_catalog_failure_leaves_no_results(tmp_path, client, database, run_id, monkeypatch)
+
+
+def test_malformed_catalog_fails_without_partial_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog_dir = tmp_path / "hdfs-completeness"
+    catalog_dir.mkdir(parents=True, exist_ok=True)
+    manifest = catalog_dir / "manifest.json"
+    manifest.write_text("{not-json", encoding="utf-8")
+    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    client, _settings, database = _client(
+        tmp_path,
+        catalog_manifest=manifest,
+        catalog_sha256=digest,
+    )
+    run_id = _queued_run_record(database)
+    _assert_catalog_failure_leaves_no_results(tmp_path, client, database, run_id, monkeypatch)
 
 
 def test_health_reclaims_stale_running_runs(tmp_path: Path) -> None:

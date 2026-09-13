@@ -589,29 +589,29 @@ keys.
 
 #### Automated
 
-- [x] 2.1 Migration preserves existing rows and applies idempotently on supported databases
-- [x] 2.2 Completed-result transaction rolls back both result kinds on failure
-- [x] 2.3 Provisional paging validates prefixes and cursor kind
-- [x] 2.4 Typed schemas reject invalid provisional result fields and counts
+- [x] 2.1 Migration preserves existing rows and applies idempotently on supported databases — 158dff3
+- [x] 2.2 Completed-result transaction rolls back both result kinds on failure — 158dff3
+- [x] 2.3 Provisional paging validates prefixes and cursor kind — 158dff3
+- [x] 2.4 Typed schemas reject invalid provisional result fields and counts — 158dff3
 
 #### Manual
 
-- [x] 2.5 Historical runs expose zero new counts after migration
-- [x] 2.6 Stored provisional rows contain context and no score
+- [x] 2.5 Historical runs expose zero new counts after migration — 158dff3
+- [x] 2.6 Stored provisional rows contain context and no score — 158dff3
 
 ### Phase 3: Split Block Histories Before Graph Scoring
 
 #### Automated
 
-- [ ] 3.1 Golden parity remains unchanged without a scoring-ID selector
-- [ ] 3.2 Mixed ML execution persists exclusive heuristic and provisional outcomes
-- [ ] 3.3 Invalid catalog configuration fails without partial results
-- [ ] 3.4 Existing terminal failures leave both result tables empty
+- [x] 3.1 Golden parity remains unchanged without a scoring-ID selector
+- [x] 3.2 Mixed ML execution persists exclusive heuristic and provisional outcomes
+- [x] 3.3 Invalid catalog configuration fails without partial results
+- [x] 3.4 Existing terminal failures leave both result tables empty
 
 #### Manual
 
-- [ ] 3.5 Mixed private-service execution stores only scores for catalog IDs
-- [ ] 3.6 Catalog errors preserve a safe public message
+- [x] 3.5 Mixed private-service execution stores only scores for catalog IDs
+- [x] 3.6 Catalog errors preserve a safe public message
 
 ### Phase 4: Expose Project-Scoped Provisional Inspection and the Results Panel
 
