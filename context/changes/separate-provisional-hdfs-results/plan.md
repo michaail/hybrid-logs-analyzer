@@ -576,14 +576,14 @@ keys.
 
 #### Automated
 
-- [ ] 1.1 Catalog loader accepts valid F-03 artifacts and rejects integrity failures
-- [ ] 1.2 Inference settings reject incomplete catalog configuration
-- [ ] 1.3 Ruff and mypy pass
+- [x] 1.1 Catalog loader accepts valid F-03 artifacts and rejects integrity failures
+- [x] 1.2 Inference settings reject incomplete catalog configuration
+- [x] 1.3 Ruff and mypy pass
 
 #### Manual
 
-- [ ] 1.4 Pinned catalog artifact is deployed outside Git
-- [ ] 1.5 Documentation communicates heuristic limitations
+- [x] 1.4 Pinned catalog artifact is deployed outside Git
+- [x] 1.5 Documentation communicates heuristic limitations
 
 ### Phase 2: Persist Provisional Histories and Run-Level Classification Provenance
 

@@ -362,6 +362,20 @@ that token, JWT secret, or object-store keys in the Vite/React build. If the inf
 URL and token are unset, a valid analysis request still returns `202 queued` and waits;
 dispatch does not fabricate a terminal result.
 
+The private inference process also requires a pinned F-03 catalog pair:
+
+```bash
+# After scripts/build_hdfs_evaluation_dataset.py prints the ignored manifest path:
+shasum -a 256 artifacts/cache/hdfs/evaluation-data/<fingerprint>/manifest.json
+```
+
+Set both `INFERENCE_HDFS_COMPLETENESS_MANIFEST` (absolute path to that `manifest.json`)
+and `INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256` (lowercase hex) on the inference
+process only. Leave them out of the public API, the React build, and model-validator
+packages. A missing or checksum-mismatched catalog fails the analysis run; it does not
+treat every block as provisional. Generated evaluation artifacts stay under ignored
+workspace paths and must not be committed.
+
 Sign-in uses a username and password. Usernames are stored as a canonical lowercase
 identity (3–64 characters: letters, digits, underscore, dot, or hyphen), and sign-in is
 case-insensitive. A successful `POST /auth/token` returns a JWT bearer token with a
@@ -463,8 +477,12 @@ artifact checksum, and preprocessing-bundle identity when present.
 Results are project-scoped: a caller without membership in the selected project receives
 `404`, including when presenting a cursor issued for another project. Invalid or rejected
 HDFS uploads remain a `422` validation report at dataset admission and create no analysis
-run or historical result row. These pages present finalized detected anomalies only; the
-separate S-06 / FR-012 work owns completeness and provisional HDFS block histories.
+run or historical result row. These pages present heuristically final detected anomalies
+only. S-06 / FR-012 uses membership in a pinned F-03 selected-block-id catalog as the
+documented reference-membership heuristic: catalog members may receive anomaly or normal
+outcomes labelled **heuristically final**. That membership is useful triage evidence, not
+proof that an HDFS lifecycle ended. Histories absent from the catalog are provisional
+and must not appear in the anomaly list or heuristic-final counts.
 
 S-04 analysis loads a frozen Drain3 FilePersistence snapshot with the bundle `drain.ini`
 via `DrainParser.load`, then calls `annotate_file` only. It does not fit Drain, re-enrich
@@ -509,9 +527,10 @@ FR-013 evaluation data is a checksum-bound projection of an approved HDFS corpus
 explicit ordered block-ID list. A selected block is complete *within that corpus*: every
 source line whose first `blk_*` match is selected appears exactly once, in original
 source-file order, in one bounded shard. That is reproducible evaluation evidence, not a
-claim that an arbitrary Operator upload is lifecycle-complete. Distinguishing finalized
-versus provisional live-upload histories belongs to S-06 / FR-012 and does not change
-anomaly or normal result classification here.
+claim that an arbitrary Operator upload is lifecycle-complete. S-06 / FR-012 pins this
+artifact's selected-block-id list as a reference-membership heuristic for live analysis:
+catalog members are labelled **heuristically final**, not proven lifecycle-complete.
+F-03 does not classify Operator uploads.
 
 Line-prefix samples are parser or intake smoke tests only and cannot support
 anomaly-quality evaluation. The builder never infers a newest corpus, label file, release,
@@ -535,7 +554,13 @@ python scripts/build_hdfs_evaluation_dataset.py \
 
 The command prints the published or reused `manifest.json` path. Output stays under the
 ignored workspace cache `artifacts/cache/hdfs/evaluation-data/<fingerprint>/` and
-includes:
+must not be committed. Pin that absolute path and the manifest SHA-256 on the private
+inference service (`INFERENCE_HDFS_COMPLETENESS_MANIFEST` and
+`INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256`) so live analysis can apply the
+reference-membership heuristic. The digest is calculated at deploy time and is not
+stored in Git.
+
+The cache entry includes:
 
 - `selected-block-ids.txt` — copy of the supplied ordered ID file
 - `shard-NNN.log` — bounded complete-history shards

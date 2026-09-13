@@ -25,13 +25,14 @@ milestone_status: open
 - **Intent:** Deliver the first protected workflow in which a Publisher can make an
   HDFS-compatible pretrained model available and an Operator can use it to analyze
   HDFS logs. It establishes the traceability and project boundaries needed for the
-  workflow without adding training or additional log sources. Finalized anomaly
-  results remain separate from provisional results when a block history is incomplete.
+  workflow without adding training or additional log sources. Heuristically final
+  anomaly results remain separate from provisional results when a block is absent
+  from the pinned F-03 reference catalog.
 - **Source materials:** `context/foundation/prd.md` (v1); technical-stack contract
   used as supplementary context.
 - **Done when:** every F-NN and S-NN below is `done`, and a Publisher can publish an
   eligible HDFS model that an authorized Operator can use to inspect traceable,
-  finalized results without provisional block histories cluttering anomalies.
+  heuristically final results without provisional block histories cluttering anomalies.
 - **Scope anchors:** US-01, US-02, US-03; FR-001–FR-008, FR-010–FR-013.
 
 ## Vision recap
@@ -41,8 +42,9 @@ pretrained anomaly-detection model or analyze new logs. This milestone turns the
 proven HDFS analysis path into a repeatable web workflow while keeping notebooks
 available for research and comparison. The workflow must preserve agreed notebook
 evaluation results, isolate every project, and make model and run actions traceable.
-Incomplete HDFS block histories must remain provisional rather than becoming final
-anomaly decisions.
+HDFS block histories that are not in the pinned F-03 selected-ID catalog must remain
+provisional rather than becoming heuristically final anomaly decisions. Catalog
+membership is triage evidence, not proof that an HDFS lifecycle ended.
 
 ## North star
 
@@ -65,7 +67,7 @@ controlled model lifecycle that every later analysis run requires.
 | S-03 | intake-hdfs-dataset | An Operator can upload or select an HDFS dataset and receive a clear whole-dataset acceptance or rejection result. | F-01, S-01 | US-02, FR-005, FR-008 | done |
 | S-04 | run-parity-hdfs-analysis | An Operator can start asynchronous analysis of an HDFS dataset with a compatible, published same-project model and see a terminal run status. | F-01, F-02, S-02, S-03 | US-02, FR-006, FR-010, FR-011 | done |
 | S-05 | inspect-hdfs-analysis-results | An Operator can inspect traceable detected anomalies and summaries for normal, rejected, and invalid outcomes. | S-04 | US-02, FR-007, FR-008 | done |
-| S-06 | separate-provisional-hdfs-results | An Operator can distinguish finalized anomalies from provisional incomplete HDFS block histories. | F-03, S-04, S-05 | US-03, FR-012 | planning |
+| S-06 | separate-provisional-hdfs-results | An Operator can distinguish heuristically final anomalies from provisional HDFS block histories absent from the pinned reference catalog. | F-03, S-04, S-05 | US-03, FR-012 | in-progress |
 
 ## Streams
 
@@ -78,7 +80,7 @@ across parallel tracks.
 | A | Durable analysis flow | `F-01` → `S-03` → `S-04` → `S-05` | Joins Stream B at `S-04`; keeps the operator path focused on the launch goal. |
 | B | Trusted model availability | `F-02` → `S-02` | Joins Stream A at `S-04`; resolves the model-entry decision before use. |
 | C | Account access | `S-01` | Enables the protected roles consumed by Streams A and B. |
-| D | Complete-history assurance | `F-03` → `S-06` | Joins Stream A at `S-05`; prevents incomplete block histories from becoming final anomaly decisions. |
+| D | Complete-history assurance | `F-03` → `S-06` | Joins Stream A at `S-05`; keeps non-catalog block histories provisional rather than mixing them into heuristically final anomaly decisions. |
 
 ## Baseline
 
@@ -138,11 +140,10 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 - **Prerequisites:** —
 - **Parallel with:** S-04
 - **Blockers:** —
-- **Unknowns:**
-  - What deterministic evidence establishes a complete HDFS block history? — Owner: user.
-    Block: yes.
+- **Unknowns:** —
 - **Risk:** A weak completeness rule can either suppress short genuine anomalies or allow
-  incomplete normal histories to create false anomaly decisions.
+  incomplete normal histories to create false anomaly decisions. F-03 completeness remains
+  within-corpus retention of selected IDs, not a live-upload lifecycle proof.
 - **Status:** done
 
 ## Slices
@@ -217,17 +218,18 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 
 ### S-06: Separate provisional HDFS results
 
-- **Outcome:** An Operator can distinguish finalized anomalies from provisional incomplete
-  HDFS block histories.
+- **Outcome:** An Operator can distinguish heuristically final anomalies from provisional
+  HDFS block histories that are absent from the pinned F-03 reference catalog.
 - **Change ID:** separate-provisional-hdfs-results
 - **PRD refs:** US-03, FR-012
 - **Prerequisites:** F-03, S-04, S-05
 - **Parallel with:** —
 - **Blockers:** —
 - **Unknowns:** —
-- **Risk:** Provisional block context must remain visible without presenting its score as a
-  final anomaly decision or including it in finalized result counts.
-- **Status:** planning
+- **Risk:** Block-ID catalog membership can falsely classify a truncated known ID as
+  heuristically final. Provisional context must remain visible without presenting a model
+  score as a decision or including it in heuristically final result counts.
+- **Status:** in-progress
 
 ## Backlog Handoff
 
@@ -257,8 +259,13 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 4. **Which notebook and configuration form the agreed parity baseline? (resolved 2026-09-09)** — Owner:
    user. Block: S-04. - This will be provided in due course as the baseline models needs to be trained first
 5. **What is the current user scale of the notebook system? (resolved 2026-09-09)** — One user, same as admin, owner of the solution and infrastructure
-6. **What deterministic evidence establishes that an HDFS block history is complete?** — Owner:
-   user. Block: F-03, S-06.
+6. **What deterministic evidence establishes that an HDFS block history is complete?
+   (resolved 2026-09-13)** — Membership in the checksum-pinned F-03
+   `selected-block-ids.txt` catalog is the documented reference-membership heuristic for
+   live analysis. Catalog members are labelled heuristically final; non-members are
+   provisional. This is not lifecycle-completeness proof. F-03 still only guarantees
+   within-corpus retention of selected source lines. Lifecycle-event detection, inactivity
+   watermarks, and backfill remain out of scope. — Owner: user. Block: none.
 
 ## Parked
 

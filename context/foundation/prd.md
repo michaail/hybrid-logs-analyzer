@@ -3,7 +3,7 @@ project: "Log Anomaly Detection System"
 version: 1
 status: draft
 created: 2026-08-31
-updated: 2026-09-12
+updated: 2026-09-13
 context_type: brownfield
 product_type: web-app
 target_scale:
@@ -32,11 +32,13 @@ The change is needed now to deliver a production-oriented MVP for the master's t
 
 Simply wrapping the notebooks is insufficient: orchestration, state, and traceability are implicit; extracting the analysis path risks changing validated numerical behavior; and authentication, isolation, model lifecycle, and auditability were outside the research prototype. The production workflow must preserve the validated anomaly-detection, data-preparation, and evaluation behavior and reproduce agreed notebook results for the same dataset and configuration within a defined numerical tolerance.
 
-An HDFS upload can end before a block's lifecycle is complete. A model score produced from
-such an incomplete block history is not a final anomaly decision: the same block can score
-as anomalous when truncated and normal when all of its source events are present. The MVP
-must distinguish finalized block results from provisional results with insufficient context
-so partial uploads do not clutter anomaly investigations or invalidate evaluation.
+An HDFS upload can contain block histories that are not in the pinned F-03 evaluation
+reference catalog. Membership in that catalog is a documented deterministic
+reference-membership heuristic: it is useful triage evidence, but it does not prove that an
+HDFS lifecycle ended. Catalog members are scored and labelled heuristically final; all
+other grouped block histories are provisional, never receive a model score, and never
+contribute to anomaly or normal counts. Parser-matched lines without a block identifier are
+counted as unassigned context rather than assigned to an invented owner.
 
 At one hundred times the initial user scale, the model eligibility, publication, and same-project-use rules remain unchanged; only capacity and operational needs change.
 
@@ -49,7 +51,7 @@ The primary persona is an SRE responsible for investigating unusual system-log b
 ### Primary
 
 - A Publisher can upload a pretrained model with its required metadata, metrics, source compatibility, and external-evaluation evidence; validate and register it as a versioned model; and explicitly publish an eligible version without executing or editing notebooks.
-- An Operator can submit HDFS logs to an asynchronous analysis run using a compatible published model from the same project and inspect finalized anomalies, scores or levels, threshold, log context, run identity, exact model version, and separate provisional results for incomplete block histories. Provisional results are excluded from finalized anomaly and normal counts.
+- An Operator can submit HDFS logs to an asynchronous analysis run using a compatible published model from the same project and inspect heuristically final anomalies, scores or levels, threshold, log context, run identity, exact model version, and separate provisional results for block histories absent from the pinned reference catalog. Provisional results are excluded from heuristically final anomaly and normal counts.
 
 ### Secondary
 
@@ -86,23 +88,26 @@ The primary persona is an SRE responsible for investigating unusual system-log b
 - A malformed or invalid dataset is rejected in full with a clear validation report and does not start analysis.
 - An unpublished, source-incompatible, or cross-project model cannot be used for the run.
 - Results identify the relevant HDFS block, anomaly score or level, decision threshold, contextual log information, analysis-run identifier, model identifier, and exact model version.
-- Only a finalized block history can be reported as an anomaly or a normal outcome.
-- A block with insufficient history is presented separately as provisional, with its available log context and an explanation that the decision is not final.
-- Provisional blocks do not contribute to anomaly or normal summary counts.
+- Only a heuristically final block history (a member of the pinned F-03 selected-ID catalog) can be reported as an anomaly or a normal outcome.
+- A block absent from that catalog is presented separately as provisional, with its available log context and an explanation that the decision is not heuristically final.
+- Provisional blocks do not contribute to heuristically final anomaly or normal summary counts.
 - The Operator can inspect detected anomalous records and summaries for normal, provisional, rejected, and invalid outcomes.
 - Detailed per-step progress and selected intermediate analysis outputs are nice-to-have.
 
 ### US-03: Operator separates provisional block results from anomalies
 
-- **Given** an Operator submits a valid HDFS dataset containing block histories that may extend outside the uploaded data
-- **When** analysis determines that a block lacks the context required for a final decision
-- **Then** the Operator can see it as a provisional result without it appearing among detected anomalies
+- **Given** an Operator submits a valid HDFS dataset containing block histories that may be absent from the pinned F-03 reference catalog
+- **When** analysis applies the documented reference-membership heuristic
+- **Then** the Operator can see catalog non-members as provisional results without them appearing among detected anomalies, and catalog members as heuristically final anomaly or normal outcomes
 
 #### Acceptance Criteria
 
+- A block whose identifier appears in the pinned selected-ID catalog is scored and labelled heuristically final; catalog membership is not proof of lifecycle completion.
+- A block absent from the catalog is provisional with reason `not_in_reference_catalog`, retains available source-log context, and has no model score or threshold.
 - The result states why it is provisional and retains the available source-log context.
 - The system does not invent, backfill, or silently omit missing block events.
-- The run can complete with both finalized and provisional block results.
+- The run can complete with both heuristically final and provisional block results.
+- A missing or checksum-mismatched catalog fails the run rather than classifying every block as provisional.
 
 ## Scope of Change
 
@@ -128,8 +133,8 @@ The primary persona is an SRE responsible for investigating unusual system-log b
   > Socrates: Counter-argument considered: maintaining active notebooks may constrain production refactoring. Resolution: kept; notebooks remain a separate R&D path and comparison baseline.
 - [preserved] FR-011: Operator can receive production-analysis results whose agreed metrics differ from notebook baselines by no more than one percentage point for the same dataset, model, and configuration. Priority: must-have
   > Socrates: Counter-argument considered: aggregate metrics can hide record-level differences or become ambiguous if the metric set is unnamed. Resolution: kept; every evaluation metric reported by the agreed notebook baseline is subject to the tolerance.
-- [new] FR-012: System can distinguish finalized HDFS block histories from histories with insufficient context according to a documented deterministic completeness policy. Only finalized histories can receive anomaly or normal outcomes; provisional histories remain separate from anomaly and normal summary counts. Priority: must-have
-  > Socrates: Counter-argument considered: suppressing partial results could hide urgent incidents. Resolution: kept; provisional results retain their available context without being represented as finalized anomalies.
+- [new] FR-012: System can distinguish heuristically final HDFS block histories from provisional histories according to a documented deterministic reference-membership heuristic (membership in the pinned F-03 selected-block-id catalog). Only heuristically final histories can receive anomaly or normal outcomes; provisional histories remain separate from anomaly and normal summary counts. Catalog membership is not proof that an HDFS lifecycle ended. Priority: must-have
+  > Socrates: Counter-argument considered: suppressing partial results could hide urgent incidents. Resolution: kept; provisional results retain their available context without being represented as heuristically final anomalies. The chosen evidence is catalog membership, not lifecycle-event detection.
 - [new] FR-013: System can create reproducible HDFS evaluation datasets from complete source histories of selected block identifiers, preserving chronological source events. Line-prefix samples are limited to parser or intake smoke tests and cannot support anomaly-quality evaluation. Priority: must-have
   > Socrates: Counter-argument considered: complete-history samples require more source-data processing than line-prefix samples. Resolution: kept; preserving complete histories is necessary for valid parity and detection-quality evaluation.
 
@@ -164,15 +169,16 @@ The primary persona is an SRE responsible for investigating unusual system-log b
 - Uploaded logs, models, run records, and results remain available until an authorized user deletes them.
 - No user can observe or act on logs, models, runs, or results outside an authorized project.
 - Invalid model packages and invalid HDFS datasets fail with a clear validation result and do not silently proceed.
-- A provisional block result never appears in the detected-anomaly list or contributes to finalized anomaly or normal counts.
+- A provisional block result never appears in the detected-anomaly list or contributes to heuristically final anomaly or normal counts.
 
 ## Business Logic Changes
 
 The existing notebook workflow scores HDFS block histories rather than independent log records. A
-finalized block is classified as anomalous only when its model-produced score crosses the model's
-decision threshold. A block whose available history is insufficient under the completeness policy
-is provisional: it has no final anomaly or normal decision and is excluded from finalized result
-counts.
+heuristically final block (present in the pinned F-03 selected-ID catalog) is classified as
+anomalous only when its model-produced score crosses the model's decision threshold. A block
+absent from that catalog is provisional: it has no anomaly or normal decision, no model score,
+and is excluded from heuristically final result counts. Catalog membership does not prove that
+the source HDFS lifecycle ended.
 
 The MVP preserves that classification rule and adds a lifecycle rule: a pretrained model can be published and used for anomaly analysis only when its package is complete and compatible with its declared log source, evidence of successful external evaluation is present, a Publisher explicitly publishes it, and the model and analyzed logs belong to the same project.
 
@@ -214,4 +220,4 @@ Input data, model artifacts, analysis runs, and results are isolated by project.
 2. **What exact model-package format and artifact contract can a Publisher upload?** — Resolved: pretrained PyTorch `.pt` state dict inside the package contract (format, architecture, input-normalization/scoring configuration, metrics with `best_threshold`, HDFS compatibility, evidence file). Publishers upload a complete HDFS package ZIP (`manifest.json` at archive root) through same-origin multipart registration. Ineligible packages receive a structured 422 and no row. Eligible versions still require an explicit publish. Isolated inference remains a later slice.
 3. **Which notebook and configuration form the agreed parity baseline?** — Owner: user. Resolve before parity acceptance testing.
 4. **What is the current user scale of the notebook system?** — Owner: user. Resolve before downstream stack assessment.
-5. **What deterministic evidence establishes that an HDFS block history is complete?** — Owner: user. Resolve whether this uses source-export boundaries, lifecycle events, inactivity watermarks, or a combination; it determines the provisional-result policy.
+5. **What deterministic evidence establishes that an HDFS block history is complete? (resolved 2026-09-13)** — Membership in the checksum-pinned F-03 `selected-block-ids.txt` catalog is the documented reference-membership heuristic. Catalog members are labelled heuristically final; non-members are provisional. This is not lifecycle-completeness proof. Lifecycle-event detection, inactivity watermarks, and backfill remain out of scope.

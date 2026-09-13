@@ -20,8 +20,13 @@ from src.api.object_store import (
     preprocessing_bundle_object_prefix,
 )
 from src.api.storage import ApiDatabase
+from src.inference_service.errors import (
+    InferenceExecutionError,
+    map_completeness_catalog_error,
+)
 from src.inference_service.main import create_app
 from src.inference_service.settings import InferenceSettings
+from src.modules.hdfs_completeness import CompletenessCatalogError
 from src.modules.inference_bundle import (
     DRAIN_CONFIG_NAME,
     DRAIN_PARSER_NAME,
@@ -51,12 +56,23 @@ def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _temporary_catalog_pin(tmp_path: Path) -> tuple[Path, str]:
+    manifest = tmp_path / "hdfs-completeness" / "manifest.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    payload = b'{"schema_version": 1}\n'
+    manifest.write_bytes(payload)
+    return manifest.resolve(), hashlib.sha256(payload).hexdigest()
+
+
 def _settings(tmp_path: Path) -> InferenceSettings:
+    manifest, digest = _temporary_catalog_pin(tmp_path)
     return InferenceSettings(
         database_url=f"sqlite:///{tmp_path / 'api.db'}",
         internal_token=TOKEN,
         code_root=REPO_ROOT,
         object_store_root=(tmp_path / "objects").resolve(),
+        hdfs_completeness_manifest=manifest,
+        hdfs_completeness_manifest_sha256=digest,
     )
 
 
@@ -491,6 +507,67 @@ def test_fresh_running_execute_is_noop(tmp_path: Path) -> None:
     assert current is not None
     assert current["status"] == "running"
     assert current["error_code"] is None
+
+
+def _clear_inference_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "INFERENCE_INTERNAL_TOKEN",
+        "DATABASE_URL",
+        "API_CODE_ROOT",
+        "API_OBJECT_STORE_ROOT",
+        "INFERENCE_STALE_RUNNING_SECONDS",
+        "INFERENCE_HDFS_COMPLETENESS_MANIFEST",
+        "INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256",
+        "API_OBJECT_STORE_ENDPOINT",
+        "API_OBJECT_STORE_BUCKET",
+        "API_OBJECT_STORE_ACCESS_KEY_ID",
+        "API_OBJECT_STORE_SECRET_ACCESS_KEY",
+        "API_OBJECT_STORE_REGION",
+    ):
+        monkeypatch.setenv(name, "")
+
+
+def test_inference_settings_reject_incomplete_catalog_pair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_inference_env(monkeypatch)
+    monkeypatch.setenv("INFERENCE_INTERNAL_TOKEN", TOKEN)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'env.db'}")
+    manifest, digest = _temporary_catalog_pin(tmp_path)
+
+    monkeypatch.setenv("INFERENCE_HDFS_COMPLETENESS_MANIFEST", str(manifest))
+    with pytest.raises(RuntimeError, match="must be set together"):
+        InferenceSettings.from_environment()
+
+    monkeypatch.setenv("INFERENCE_HDFS_COMPLETENESS_MANIFEST", "")
+    monkeypatch.setenv("INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256", digest)
+    with pytest.raises(RuntimeError, match="must be set together"):
+        InferenceSettings.from_environment()
+
+    monkeypatch.setenv("INFERENCE_HDFS_COMPLETENESS_MANIFEST", str(manifest))
+    monkeypatch.setenv("INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256", "not-a-digest")
+    with pytest.raises(RuntimeError, match="64-character hex SHA-256"):
+        InferenceSettings.from_environment()
+
+    monkeypatch.setenv("INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256", digest)
+    loaded = InferenceSettings.from_environment()
+    assert loaded.hdfs_completeness_manifest == manifest
+    assert loaded.hdfs_completeness_manifest_sha256 == digest
+
+
+def test_catalog_failures_map_to_safe_unavailable_error(tmp_path: Path) -> None:
+    error = CompletenessCatalogError(
+        f"catalog at {tmp_path / 'secret-catalog' / 'manifest.json'} failed",
+        reason="manifest_digest_mismatch",
+    )
+    mapped = map_completeness_catalog_error(error)
+    assert mapped.code == "COMPLETENESS_CATALOG_UNAVAILABLE"
+    assert mapped.cause == "manifest_digest_mismatch"
+    assert str(tmp_path) not in mapped.public_message
+    assert "secret-catalog" not in mapped.public_message
+    assert mapped.public_message == InferenceExecutionError(
+        "COMPLETENESS_CATALOG_UNAVAILABLE"
+    ).public_message
 
 
 def test_health_reclaims_stale_running_runs(tmp_path: Path) -> None:

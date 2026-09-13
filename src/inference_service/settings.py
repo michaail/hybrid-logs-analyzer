@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 DEFAULT_STALE_RUNNING_SECONDS = 1800
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_CATALOG_MANIFEST_ENV = "INFERENCE_HDFS_COMPLETENESS_MANIFEST"
+_CATALOG_SHA256_ENV = "INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256"
 
 
 @dataclass(frozen=True)
@@ -19,6 +23,8 @@ class InferenceSettings:
     internal_token: str
     code_root: Path
     object_store_root: Path
+    hdfs_completeness_manifest: Path
+    hdfs_completeness_manifest_sha256: str
     object_store_endpoint: str | None = None
     object_store_bucket: str | None = None
     object_store_access_key_id: str | None = None
@@ -56,11 +62,14 @@ class InferenceSettings:
         else:
             object_store_root = (Path.cwd() / ".api" / "objects").resolve()
         endpoint, bucket, access_key, secret_key = _bucket_credentials()
+        manifest, digest = _completeness_catalog_settings()
         return cls(
             database_url=database_url,
             internal_token=token,
             code_root=Path(os.environ.get("API_CODE_ROOT", ".")).resolve(),
             object_store_root=object_store_root,
+            hdfs_completeness_manifest=manifest,
+            hdfs_completeness_manifest_sha256=digest,
             object_store_endpoint=endpoint,
             object_store_bucket=bucket,
             object_store_access_key_id=access_key,
@@ -68,6 +77,30 @@ class InferenceSettings:
             object_store_region=_optional_env("API_OBJECT_STORE_REGION") or "auto",
             stale_running_seconds=_stale_running_seconds(),
         )
+
+
+def _completeness_catalog_settings() -> tuple[Path, str]:
+    manifest_raw = os.environ.get(_CATALOG_MANIFEST_ENV, "").strip()
+    digest_raw = os.environ.get(_CATALOG_SHA256_ENV, "").strip()
+    present = [
+        name
+        for name, value in (
+            (_CATALOG_MANIFEST_ENV, manifest_raw),
+            (_CATALOG_SHA256_ENV, digest_raw),
+        )
+        if value
+    ]
+    if len(present) != 2:
+        raise RuntimeError(
+            "INFERENCE_HDFS_COMPLETENESS_MANIFEST and "
+            "INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256 must be set together."
+        )
+    digest = digest_raw.lower()
+    if not _SHA256_RE.fullmatch(digest):
+        raise RuntimeError(
+            "INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256 must be a 64-character hex SHA-256."
+        )
+    return Path(manifest_raw).resolve(), digest
 
 
 def _bucket_credentials() -> tuple[str | None, str | None, str | None, str | None]:

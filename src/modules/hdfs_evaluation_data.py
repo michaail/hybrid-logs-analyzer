@@ -2,7 +2,9 @@
 
 This module projects an approved source corpus onto an explicit ordered list of
 block identifiers. Completeness means every first-match source line for a selected
-block is retained; it does not prove that a real HDFS lifecycle ended.
+block is retained; it does not prove that a real HDFS lifecycle ended. The published
+selected-ID file is the pinned reference catalog consumed by live inference as a
+membership heuristic, not as lifecycle proof.
 """
 
 from __future__ import annotations
@@ -473,8 +475,14 @@ def _parse_hdfs_timestamp(line: str) -> datetime | None:
         return None
 
 
-def _order_digest(block_ids: Sequence[str]) -> str:
+def selected_block_ids_order_sha256(block_ids: Sequence[str]) -> str:
+    """Return the SHA-256 digest of the ordered selected-block identifier sequence."""
+
     return hashlib.sha256("\n".join(block_ids).encode("utf-8")).hexdigest()
+
+
+def _order_digest(block_ids: Sequence[str]) -> str:
+    return selected_block_ids_order_sha256(block_ids)
 
 
 def _shard_name(index: int) -> str:
