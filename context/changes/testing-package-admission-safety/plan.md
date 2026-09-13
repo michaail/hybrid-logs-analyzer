@@ -348,9 +348,9 @@ unchanged. No schema change.
 
 #### Automated
 
-- [x] 3.1 `context/foundation/test-plan.md` §6.5 no longer states leftover-prefix cleanup as pending for model register
-- [x] 3.2 `python -m pytest tests/test_api.py tests/test_object_store.py -m "not ml"` still passes
+- [x] 3.1 `context/foundation/test-plan.md` §6.5 no longer states leftover-prefix cleanup as pending for model register — 6e8e198
+- [x] 3.2 `python -m pytest tests/test_api.py tests/test_object_store.py -m "not ml"` still passes — 6e8e198
 
 #### Manual
 
-- [x] 3.3 Read §6.5–§6.6: risk #4 tests still cited; dataset twin is explicit; no §2-style code anchors; Phase 2 ledger row is `complete`
+- [x] 3.3 Read §6.5–§6.6: risk #4 tests still cited; dataset twin is explicit; no §2-style code anchors; Phase 2 ledger row is `complete` — 6e8e198
