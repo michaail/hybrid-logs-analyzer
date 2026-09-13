@@ -1,8 +1,8 @@
 ---
 project: "Log Anomaly Detection System"
 researched_at: 2026-09-08T18:52:00Z
-updated_at: 2026-09-08T21:56:00+02:00
-recommended_platform: "Railway"
+updated_at: 2026-09-14T01:20:00+02:00
+recommended_platform: "local Compose (verified MVP proof); Railway unexecuted"
 runner_up: "Render"
 context_type: mvp
 tech_stack:
@@ -10,19 +10,29 @@ tech_stack:
   backend_framework: "FastAPI 0.115.12"
   frontend_language: "TypeScript"
   frontend_framework: "React"
-  persistence_target: "Railway PostgreSQL"
+  persistence_target: "PostgreSQL via local Compose (Railway PostgreSQL unexecuted)"
   runtime: "FastAPI API, React static build, finite on-demand inference service"
 ---
 
 ## Recommendation
 
-**Deploy the MVP on Railway.**
+**The verified MVP deployment proof is local Compose.**
 
-Railway fits the selected brownfield stack: the existing FastAPI control plane, a thin
-React/TypeScript UI, Railway PostgreSQL, and a private Railway Bucket can operate in one
-single-region project. The API and finite inference service can use Railway Serverless:
-they wake only for an HDFS request, then sleep when quiet. This aligns the cost model with
-rare thesis demonstrations rather than paying to retain a model-loaded worker.
+Do not read this file as “deploy the MVP on Railway” without that qualifier. Railway
+remains the unexecuted future hosting design from the 2026-09-08 platform research
+below. The comparison tables are historical research; they are not a claim that Railway
+staging, Bucket, private DNS, or cold start were validated.
+
+Local Compose (`compose.yaml`) runs postgres, migrate, web, inference, and
+model-validator with a named filesystem volume instead of a Bucket and Compose DNS
+instead of `*.railway.internal`. See `context/deployment/deploy-plan.md`.
+
+Railway still fits the selected brownfield stack if that future hosting is applied: the
+existing FastAPI control plane, a thin React/TypeScript UI, Railway PostgreSQL, and a
+private Railway Bucket can operate in one single-region project. The API and finite
+inference service can use Railway Serverless: they wake only for an HDFS request, then
+sleep when quiet. That cost model is research for rare thesis demonstrations, not
+executed MVP proof.
 
 Hobby has a $5/month minimum that includes the first $5 of resource usage; PostgreSQL
 remains a durable allocated service, while the sleeping API and inference services do not
@@ -189,7 +199,8 @@ cold-start invocation, a finite non-polling run contract, and notebook-parity ve
 ## Getting Started
 
 1. Use the selected stack in `context/foundation/tech-stack.md`: FastAPI control plane,
-   React/TypeScript UI, Railway PostgreSQL, Railway Bucket, and a finite inference service.
+   React/TypeScript UI, PostgreSQL, object storage, and a finite inference service.
+   Verified MVP proof is **local Compose**; Railway remains unexecuted future hosting.
    Do not deploy the notebook directory directly.
 2. On macOS, install the current Railway CLI with `brew install railway`, verify the
    installed version with `railway --version`, and authenticate using `railway login`.

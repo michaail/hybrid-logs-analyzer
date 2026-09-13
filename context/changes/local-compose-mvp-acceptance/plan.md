@@ -271,25 +271,25 @@ No schema migration. Existing `tests/postgres/compose.yaml` stays; operators mus
 
 #### Automated
 
-- [x] 1.1 `python -m pytest tests/test_compose_contract.py -m "not ml"` passes
-- [x] 1.2 `test -f compose.yaml compose.env.example` succeeds
-- [x] 1.3 `ruff check tests/test_compose_contract.py`
+- [x] 1.1 `python -m pytest tests/test_compose_contract.py -m "not ml"` passes — ac9ba13
+- [x] 1.2 `test -f compose.yaml compose.env.example` succeeds — ac9ba13
+- [x] 1.3 `ruff check tests/test_compose_contract.py` — ac9ba13
 
 #### Manual
 
-- [x] 1.4 Owner runs `docker compose --env-file compose.env config` and confirms validator has neither JWT nor object-store volume, and that only `8000` and `5433` are published
+- [x] 1.4 Owner runs `docker compose --env-file compose.env config` and confirms validator has neither JWT nor object-store volume, and that only `8000` and `5433` are published — ac9ba13
 
 ### Phase 2: Documentation reframe
 
 #### Automated
 
-- [ ] 2.1 `rg -n "unexecuted" context/deployment/deploy-plan.md README.md` matches
-- [ ] 2.2 `rg -n "local Compose" README.md context/deployment/deploy-plan.md context/foundation/infrastructure.md context/foundation/tech-stack.md` matches
-- [ ] 2.3 `rg -n "compose.env.example" README.md .env.example` matches
+- [x] 2.1 `rg -n "unexecuted" context/deployment/deploy-plan.md README.md` matches
+- [x] 2.2 `rg -n "local Compose" README.md context/deployment/deploy-plan.md context/foundation/infrastructure.md context/foundation/tech-stack.md` matches
+- [x] 2.3 `rg -n "compose.env.example" README.md .env.example` matches
 
 #### Manual
 
-- [ ] 2.4 Owner confirms README and deploy-plan lead with Compose as MVP proof and Railway as unexecuted future design, and that infrastructure.md no longer reads as “deploy the MVP on Railway” without that qualifier
+- [x] 2.4 Owner confirms README and deploy-plan lead with Compose as MVP proof and Railway as unexecuted future design, and that infrastructure.md no longer reads as “deploy the MVP on Railway” without that qualifier
 
 ### Phase 3: Evidence run and acceptance record
 

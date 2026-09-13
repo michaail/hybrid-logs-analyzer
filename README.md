@@ -318,11 +318,47 @@ The HDFS-only API provides administrator-provisioned accounts, project isolation
 model registration/publication, and analysis-run validation. It stores metadata in the database
 configured by `DATABASE_URL`. Publishers upload a complete HDFS model package ZIP; only
 declared package files are persisted in object storage (a local filesystem root by default, or
-a Railway Bucket when credentials are configured). The public API process never deserializes a
-model artifact.
+an S3-compatible Bucket when those credentials are configured). The public API process never
+deserializes a model artifact.
+
+### Local Compose (verified MVP proof)
+
+The verified HDFS MVP deployment proof is **local Compose**, not Railway. Copy
+`compose.env.example` to `compose.env`, set the F-03 catalog host path and SHA-256,
+generate high-entropy JWT and tokens, then:
+
+```bash
+cp compose.env.example compose.env
+# Fill API_JWT_SECRET, POSTGRES_PASSWORD, INFERENCE_INTERNAL_TOKEN,
+# MODEL_VALIDATOR_INTERNAL_TOKEN, HDFS_COMPLETENESS_CATALOG_DIR, and
+# INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256.
+
+docker compose --env-file compose.env up --build
+docker compose --env-file compose.env exec web python -m src.api.bootstrap --username admin
+```
+
+Wait for the one-shot `migrate` service to finish before bootstrap. The API is at
+`http://127.0.0.1:8000` (container 8080). Postgres is published on host `5433` so
+`pytest -m postgres` can use the same database; do not start
+`tests/postgres/compose.yaml` at the same time.
+
+A missing or mismatched catalog makes inference `/health` return 503 (not
+all-provisional). `compose.yaml` always sets the validator URL+token pair on `web`;
+omitting that pair would be a mis-template, and register would 503 with no model row.
+The validator has no JWT, database URL, or object-store volume.
+
+`scripts/e2e_serve.py` remains UI smoke (files-only validator, disposable SQLite). It is
+not Compose proof and not Torch-validator proof. Playwright is not Compose proof.
+
+Railway staging, Bucket, private DNS, and cold start are **unexecuted** future hosting
+design. Recorded Compose acceptance (after the evidence run) is
+`context/changes/local-compose-mvp-acceptance/acceptance-record.md`.
+
+### Host-process development
 
 Copy `.env.example` to `.env` and set a unique `API_JWT_SECRET`. Configure
-`DATABASE_URL` (for example, `sqlite:///.api/analyzer.db` locally).
+`DATABASE_URL` (for example, `sqlite:///.api/analyzer.db` locally). Do not feed that
+SQLite URL into Compose; Compose uses `compose.env` / `compose.yaml`.
 `API_TRUSTED_WORKSPACE_ROOT` is no longer the Operator log intake path; Operators
 upload object-kind HDFS datasets instead. Optional `API_OBJECT_STORE_ROOT` defaults to a
 sibling `.api/objects` directory for local object-kind model packages and admitted datasets:
@@ -391,11 +427,10 @@ process only. Leave them out of the public API, the React build, and model-valid
 packages.
 
 Locally, the manifest value is the absolute path to that ignored `manifest.json`.
-On Railway staging, the same variable is the Bucket object key
-`hdfs/reference-catalog/manifest.json`; upload that file and its sibling
-`selected-block-ids.txt` to the private `models` Bucket and pin the digest as the
-shared `INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256` variable. Inference `/health`
-verifies the catalog before reporting ready.
+Local Compose bind-mounts that directory read-only into `inference`. An unexecuted
+future Railway design would use the Bucket object key
+`hdfs/reference-catalog/manifest.json` plus sibling `selected-block-ids.txt`.
+Inference `/health` verifies the catalog before reporting ready.
 
 A missing or checksum-mismatched catalog fails the analysis run; it does not
 treat every block as provisional. Generated evaluation artifacts stay under ignored
@@ -632,8 +667,9 @@ Roll out S-06 in this order:
 1. Build and retain the F-03 artifact outside Git, then record the `manifest.json` SHA-256.
 2. Apply migration `008_provisional_hdfs_results` to the shared database.
 3. Configure and deploy the private inference service with the manifest location and exact
-   SHA-256 (filesystem path locally; Bucket object key `hdfs/reference-catalog/manifest.json`
-   on Railway); verify `/health` can load the catalog before admitting queued work.
+   SHA-256 (filesystem path or Compose bind-mount locally; Bucket object key
+   `hdfs/reference-catalog/manifest.json` only in the unexecuted Railway design); verify
+   `/health` can load the catalog before admitting queued work.
 4. Deploy the public API.
 5. Deploy the frontend.
 
@@ -667,9 +703,12 @@ Automated coverage uses `tests/test_hdfs_evaluation_data.py` plus the golden fix
 `tests/fixtures/hdfs_inference_release/`. The golden `release_gate` tests remain opt-in
 (`pytest tests/test_hdfs_inference_parity.py -m release_gate` in an ML venv).
 
-Optional PostgreSQL dialect tests use a local Compose database and stay out of default CI:
+Optional PostgreSQL dialect tests stay out of default CI. If the MVP stack is already
+up, point `TEST_DATABASE_URL` at host `5433` and do not start the harness below
+(both bind that port):
 
 ```bash
+# Thin dialect harness only — mutually exclusive with root compose.yaml on 5433.
 docker compose -f tests/postgres/compose.yaml up -d
 TEST_DATABASE_URL=postgresql://analyzer:analyzer@127.0.0.1:5433/analyzer python -m pytest tests/test_migrations.py tests/test_shared_state_repository.py -m postgres
 ```
@@ -689,10 +728,11 @@ cd frontend && npm install && npm run dev
 Vite proxies API paths to `http://127.0.0.1:8000` during local development (`E2E_API_ORIGIN`
 overrides the proxy target for Playwright). A deployed static
 build leaves `VITE_API_BASE_URL` unset when the API serves the client from the same origin.
-The Railway image builds `frontend/dist` and serves it through FastAPI. See the
-[Railway staging deployment guide](context/deployment/deploy-plan.md) for the two-service
-topology: public `web` plus a private on-demand `inference` service that shares PostgreSQL
-and the Bucket. There is no polling worker and no public inference route.
+The web image builds `frontend/dist` and serves it through FastAPI. See the
+[deployment guide](context/deployment/deploy-plan.md): verified MVP proof is **local Compose**
+(`web`, private `inference`, private `model-validator`, PostgreSQL, named object volume).
+Railway Bucket / private DNS / cold start remain unexecuted future hosting. There is no
+polling worker and no public inference route.
 
 The current API accepts a Publisher ZIP for model registration and an Operator HDFS log
 upload. The datasets panel admits a file; the analyze dialog selects an accepted
