@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,6 +62,7 @@ from src.api.storage import (
     DatabaseIntegrityError,
     ProvisionalResultPageQuery,
     ResultCursorError,
+    RunStatusConflict,
 )
 from src.api.validation import (
     MAX_HDFS_UPLOAD_BYTES,
@@ -70,6 +72,8 @@ from src.api.validation import (
     admit_uploaded_zip_package,
 )
 from src.modules.model_package import MAX_ZIP_COMPRESSED_BYTES
+
+logger = logging.getLogger(__name__)
 
 _NOT_IN_REFERENCE_CATALOG_REASON = (
     "This block is not in the pinned reference catalog, so its anomaly decision is provisional."
@@ -138,7 +142,24 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient project role.")
 
     def _dispatch_queued_run(run_id: UUID) -> None:
-        dispatch_analysis_run(run_id, resolved_settings)
+        outcome = dispatch_analysis_run(run_id, resolved_settings)
+        if outcome.accepted:
+            return
+        report = json.dumps({"execution": outcome.public_message}, sort_keys=True)
+        try:
+            database.transition_analysis_run(
+                run_id,
+                expected_status="queued",
+                next_status="failed",
+                actor_user_id=None,
+                error_code=outcome.error_code,
+                validation_report_json=report,
+            )
+        except RunStatusConflict:
+            logger.warning(
+                "Could not mark run %s as failed after dispatch; it is no longer queued",
+                run_id,
+            )
 
     app = FastAPI(
         title="HDFS Anomaly Detection API",

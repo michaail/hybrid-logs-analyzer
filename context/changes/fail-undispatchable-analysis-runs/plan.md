@@ -335,13 +335,13 @@ modifying historical state.
 
 #### Automated
 
-- [ ] 1.1 Implement typed dispatch outcomes and safe `INFERENCE_DISPATCH_FAILED` classification
-- [ ] 1.2 Terminalize failed dispatches through guarded `queued → failed` API transition
-- [ ] 1.3 Verify focused API, dispatcher, repository, Ruff, and mypy checks
+- [x] 1.1 Implement typed dispatch outcomes and safe `INFERENCE_DISPATCH_FAILED` classification
+- [x] 1.2 Terminalize failed dispatches through guarded `queued → failed` API transition
+- [x] 1.3 Verify focused API, dispatcher, repository, Ruff, and mypy checks
 
 #### Manual
 
-- [ ] 1.4 Confirm unreachable private inference produces a safe terminal failed run
+- [x] 1.4 Confirm unreachable private inference produces a safe terminal failed run
 
 ### Phase 2: Regression and boundary coverage
 
