@@ -16,7 +16,7 @@ Place reusable code in `src/modules/`, tests in `tests/`, experiment settings in
 
 ## Environment and Verification
 
-The locked Intel macOS runtime is intentional. Create `.venv` and install @requirements-macos-intel.lock.txt; change this lock only in an explicit compatibility task that checks Intel wheels and notebook parity. Run `python -m pytest`, `ruff check src tests scripts run_ablation.py`, and `mypy` before completing pipeline changes. Native NumPy/Torch paths can fail under Cursor's restricted sandbox because of shared-memory limits; verify those tests in a normal local terminal and distinguish environment crashes from assertion regressions. Use `python -m pip_audit -r requirements-macos-intel.lock.txt` to review the accepted legacy advisory set.
+The locked Intel macOS runtime is intentional. Create `.venv` and install @requirements-macos-intel.lock.txt; change this lock only in an explicit compatibility task that checks Intel wheels and notebook parity. Run `python -m pytest`, `ruff check src tests scripts run_ablation.py`, and `mypy` before completing pipeline changes. Playwright E2E (`npm --prefix frontend run test:e2e`) covers the HDFS model-publication browser flow; run it locally, in CI, or as pre-push verification — not after every agent edit. Native NumPy/Torch paths can fail under Cursor's restricted sandbox because of shared-memory limits; verify those tests in a normal local terminal and distinguish environment crashes from assertion regressions. Use `python -m pip_audit -r requirements-macos-intel.lock.txt` to review the accepted legacy advisory set.
 
 ## Code and Test Conventions
 

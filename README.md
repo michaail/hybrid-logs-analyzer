@@ -660,7 +660,8 @@ Run the API first, then start the development client in another terminal:
 cd frontend && npm install && npm run dev
 ```
 
-Vite proxies API paths to `http://127.0.0.1:8000` during local development. A deployed static
+Vite proxies API paths to `http://127.0.0.1:8000` during local development (`E2E_API_ORIGIN`
+overrides the proxy target for Playwright). A deployed static
 build leaves `VITE_API_BASE_URL` unset when the API serves the client from the same origin.
 The Railway image builds `frontend/dist` and serves it through FastAPI. See the
 [Railway staging deployment guide](context/deployment/deploy-plan.md) for the two-service
@@ -671,3 +672,58 @@ The current API accepts a Publisher ZIP for model registration and an Operator H
 upload. The datasets panel admits a file; the analyze dialog selects an accepted
 `dataset_id`. Inference-ready published v2 models queue an asynchronous run; the UI polls
 `queued` and `running` every five seconds until `completed` or `failed`.
+
+### Playwright E2E (HDFS model publication)
+
+Browser tests live in [`frontend/e2e/`](./frontend/e2e) and run through the frontend Playwright config. They
+start an isolated API (`scripts/e2e_serve.py`, disposable SQLite under `.e2e/`) and a Vite
+dev server on dedicated ports so they do not reuse a developer’s `.api/` database. Run them
+locally, in CI, or as pre-push verification — not after every agent edit.
+Use Node 22 (`nvm use 22`) so Playwright and the frontend toolchain match CI.
+
+```bash
+source .venv/bin/activate
+nvm use 22
+npm --prefix frontend install
+npx --prefix frontend playwright install chromium
+npm --prefix frontend run test:e2e
+npm --prefix frontend run test:e2e:headed
+npm --prefix frontend run test:e2e:seed
+npm --prefix frontend exec playwright test publish-eligible-hdfs-model.spec.ts
+```
+
+Prefer `npm --prefix frontend run …` from the repository root. That sets the
+working directory to `frontend/`, so Playwright loads `frontend/playwright.config.ts`
+(base URL, isolated servers, and auth setup). `npx --prefix frontend playwright test`
+keeps the current directory; a root `playwright.config.ts` re-exports the frontend
+config so that form also works.
+
+Optional non-secret environment variable names (values are generated into
+`playwright/.auth/`, which is gitignored):
+
+- `E2E_BASE_URL` (default `http://127.0.0.1:15173`)
+- `E2E_API_ORIGIN` / `E2E_API_PORT` (default `http://127.0.0.1:18000`)
+- `E2E_UI_PORT` (default `15173`)
+- `E2E_PYTHON` (defaults to `.venv/bin/python` when present, otherwise `python3`)
+- `E2E_ADMIN_USERNAME` / `E2E_ADMIN_PASSWORD`
+- `E2E_PUBLISHER_USERNAME` / `E2E_PUBLISHER_PASSWORD`
+- `E2E_PROJECT_B_USER_USERNAME` / `E2E_PROJECT_B_USER_PASSWORD`
+
+Authentication: `frontend/e2e/auth.setup.ts` provisions Publisher (project A) and Operator (project
+B) through the real admin HTTP API, then signs each role in through the UI and stores the
+session token under `playwright/.auth/`. Specs restore that token into `sessionStorage`
+(`logscope.access-token`) instead of logging in again. Refresh auth by re-running the suite
+(the API process wipes `.e2e/` on each start).
+
+Safe fixtures: committed files in `tests/fixtures/model_packages/valid_files/`. Each test
+rewrites unique `model_identifier` / `version` via `scripts/e2e_package.py`. Ineligible
+packages use empty `evidence.json`. The E2E API validator is the existing Torch-free
+`tests/support/files_only_validator.py` subprocess — it never `torch.load`s artifacts.
+
+Cleanup: there is no public model-delete API. Each suite start deletes `.e2e/` and creates
+a new SQLite file and object store. Tests also use unique identities so parallel workers
+cannot collide.
+
+Add a new E2E test only when the risk crosses UI, auth, routing, API, and persistence.
+Cross-project model isolation stays in `tests/test_api.py`; do not duplicate it in
+Playwright unless a UI/client-state regression can land independently.

@@ -6,7 +6,7 @@
 >
 > Refresh: re-run `/10x-test-plan --refresh` when stale (see §8).
 >
-> Last updated: 2026-09-10
+> Last updated: 2026-09-13
 
 ## 1. Strategy
 
@@ -90,8 +90,8 @@ of assuming access.
 | unit + integration | pytest | 9.1.1 | `tests/`; markers `ml` and `postgres`; FastAPI client via httpx 0.28.1 |
 | lint + types | ruff, mypy | 0.16.5 / 2.3.1 | already required in `.github/workflows/verify.yml` |
 | API runtime under test | FastAPI | 0.115.12 | control plane; do not load Torch in this process |
-| frontend unit | none yet — see Phase 3 | — | React 18 + Vite; no test runner in `frontend/package.json` |
-| e2e | none yet | — | not in this rollout; API isolation is cheaper |
+| frontend unit | none yet — see Phase 3 | — | React 18 + Vite; no component runner in `frontend/package.json` |
+| e2e | Playwright | 1.63.0 | HDFS publication UI; `npm --prefix frontend run test:e2e`; Node 22; not a per-edit hook |
 | (optional) AI-native | cursor-ide-browser — checked: 2026-09-10 | n/a | manual smoke only; do not replace HTTP isolation tests |
 
 **Stack grounding tools (current session):**
@@ -113,6 +113,7 @@ phase lands; before that, the gate is `planned`.
 | lint + typecheck | local + CI | required | syntactic / type drift |
 | unit + integration (Torch-free) | local + CI | required after §3 Phase 1 | isolation, role, eligibility, unpublished-use regressions |
 | frontend component tests | local + CI | required after §3 Phase 3 | UI success/deny copy that contradicts the API |
+| Playwright E2E (publication) | local + CI | required | Eligible publish and ineligible reject across UI, auth, API, and persistence |
 | CI pytest + frontend-test jobs | CI on PR | required after §3 Phase 4 | Phase 1–3 tests silently dropping out of Verify |
 
 ## 6. Cookbook Patterns
@@ -216,6 +217,33 @@ enough — assert `GET .../models == []` after register and still-`eligible`
 after publish. HTTP **201** means `eligible` only; analysis still requires
 `published` (existing `test_unpublished_eligible_model_cannot_start_analysis`).
 
+### 6.7 Adding a Playwright E2E test
+
+E2E belongs only on risks that cross UI, auth, routing, API, and persistence.
+Do not add E2E because it feels safer than an HTTP test. Do not run E2E after
+every agent edit; use `npm --prefix frontend run test:e2e` (or
+`test:e2e:headed`) locally, in CI
+(`.github/workflows/verify.yml` job `e2e`), or as pre-push verification.
+
+Start from `frontend/e2e/seed.spec.ts`. Auth tokens are restored from
+`playwright/.auth/` (gitignored). Unique `model_identifier` / `version` come
+from `scripts/e2e_package.py` over `tests/fixtures/model_packages/valid_files/`.
+The suite wipes `.e2e/` at process start; there is no model-delete API.
+
+Current specs:
+
+- `frontend/e2e/seed.spec.ts` — eligible ZIP appears as eligible under a unique identity.
+- `frontend/e2e/publish-eligible-hdfs-model.spec.ts` — explicit publish is confirmed in the UI.
+- `frontend/e2e/reject-ineligible-hdfs-model.spec.ts` — ineligible ZIP is rejected and cannot be published.
+
+Cross-project availability (Test C) is **not** an E2E spec. HTTP coverage in
+`tests/test_api.py` already proves foreign path **404**, IDOR **404**, and that
+a member of project B cannot use project A's model id. The SPA has no model
+routes; models are not stored in `sessionStorage`; the project selector is
+filled only from `GET /projects`. A duplicate browser test would wrap those
+oracles without an independent UI boundary. Revisit only if the client gains
+unscoped fetches, shared model caches, or deep links.
+
 ## 7. What We Deliberately Don't Test
 
 Exclusions agreed during the rollout (Phase 2 interview, Q5). Future
@@ -225,12 +253,12 @@ contributors should respect these unless the underlying assumption changes.
 - **`@ml` jobs on Ubuntu CI** — native Intel Torch paths are local; Verify stays Torch-free. Re-evaluate when a Linux inference image is the CI target.
 - **Notebook-parity within one percentage point** — High impact, Low likelihood until S-04 and a trained baseline exist. Re-evaluate when that slice opens.
 - **Invalid HDFS dataset intake** — S-03 is not implemented; do not invent that path in this rollout. Re-evaluate when intake is planned.
-- **Browser e2e and UI screenshot snapshots** — cost exceeds signal while the API remains the authorization boundary.
+- **Browser e2e outside the publication workflow** — analysis, intake, and screenshot snapshots stay out of Playwright. Publication E2E is limited to eligible publish and ineligible reject. Cross-project isolation stays at the HTTP layer (§6.7).
 
 ## 8. Freshness Ledger
 
-- Strategy (§1–§5) last reviewed: 2026-09-10
-- Stack versions last verified: 2026-09-10
+- Strategy (§1–§5) last reviewed: 2026-09-13
+- Stack versions last verified: 2026-09-13
 - AI-native tool references last verified: 2026-09-10
 
 Refresh (`/10x-test-plan --refresh`) when:
