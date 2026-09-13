@@ -420,11 +420,11 @@ legacy-order rule.
 
 #### Automated
 
-- [x] 3.1 Cover result traces, safe context, paging edge cases, migration, and isolation
-- [x] 3.2 Include affected non-ML result tests in the existing CI verification job
-- [x] 3.3 Pass the full local Python verification suite, Ruff, and mypy
+- [x] 3.1 Cover result traces, safe context, paging edge cases, migration, and isolation — 7670ddc
+- [x] 3.2 Include affected non-ML result tests in the existing CI verification job — 7670ddc
+- [x] 3.3 Pass the full local Python verification suite, Ruff, and mypy — 7670ddc
 
 #### Manual
 
-- [x] 3.4 Review result-inspection documentation against a completed HDFS run
-- [x] 3.5 Confirm project isolation for results, cursors, context, and provenance
+- [x] 3.4 Review result-inspection documentation against a completed HDFS run — 7670ddc
+- [x] 3.5 Confirm project isolation for results, cursors, context, and provenance — 7670ddc
