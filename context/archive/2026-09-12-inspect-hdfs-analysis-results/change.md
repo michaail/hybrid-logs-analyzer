@@ -1,10 +1,10 @@
 ---
 change_id: inspect-hdfs-analysis-results
 title: Inspect HDFS analysis results
-status: implemented
+status: archived
 created: 2026-09-12
 updated: 2026-09-13
-archived_at: null
+archived_at: 2026-09-13T08:19:40Z
 ---
 
 ## Notes
