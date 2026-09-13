@@ -354,27 +354,27 @@ them here.
 
 #### Automated
 
-- [x] 1.1 `test -f context/foundation/hdfs-parity-baseline.md` succeeds
-- [x] 1.2 `rg -n "Open Question 3"` shows Q3 resolved and pointing at `hdfs-parity-baseline.md`
-- [x] 1.3 `rg -n "every evaluation metric reported by the agreed notebook baseline" context/foundation/prd.md` has no matches
-- [x] 1.4 `rg -n "evidence of successful external evaluation" context/foundation/prd.md` has no matches
-- [x] 1.5 `rg -n "attribute-aware-gae-v2" context/foundation/prd.md` matches
-- [x] 1.6 `rg -n "retire-v1" context/foundation/prd.md` matches (follow-on named)
+- [x] 1.1 `test -f context/foundation/hdfs-parity-baseline.md` succeeds — fa30eab
+- [x] 1.2 `rg -n "Open Question 3"` shows Q3 resolved and pointing at `hdfs-parity-baseline.md` — fa30eab
+- [x] 1.3 `rg -n "every evaluation metric reported by the agreed notebook baseline" context/foundation/prd.md` has no matches — fa30eab
+- [x] 1.4 `rg -n "evidence of successful external evaluation" context/foundation/prd.md` has no matches — fa30eab
+- [x] 1.5 `rg -n "attribute-aware-gae-v2" context/foundation/prd.md` matches — fa30eab
+- [x] 1.6 `rg -n "retire-v1" context/foundation/prd.md` matches (follow-on named) — fa30eab
 
 #### Manual
 
-- [x] 1.7 Owner confirms the distilled checksum table and metric values match the archive baseline, and that Q1–Q4 read as resolved without reopening Current System Overview
+- [x] 1.7 Owner confirms the distilled checksum table and metric values match the archive baseline, and that Q1–Q4 read as resolved without reopening Current System Overview — fa30eab
 
 ### Phase 2: Satellite alignment and milestone close
 
 #### Automated
 
-- [ ] 2.1 `rg -n "one percentage point"` has no matches in the FR-011 sentences this phase rewrites
-- [ ] 2.2 `rg -n "hdfs-parity-baseline.md" configs/hdfs_baseline.yaml` matches
-- [ ] 2.3 `rg -n "context/changes/run-parity-hdfs-analysis/baseline.md" configs/hdfs_baseline.yaml` has no matches
-- [ ] 2.4 `rg -n "milestone_status: done" context/foundation/roadmap.md` matches
-- [ ] 2.5 `rg -n "prd-parity-contract"` in `mvp-alignment-plan.md` shows status `done`
+- [x] 2.1 `rg -n "one percentage point"` has no matches in the FR-011 sentences this phase rewrites
+- [x] 2.2 `rg -n "hdfs-parity-baseline.md" configs/hdfs_baseline.yaml` matches
+- [x] 2.3 `rg -n "context/changes/run-parity-hdfs-analysis/baseline.md" configs/hdfs_baseline.yaml` has no matches
+- [x] 2.4 `rg -n "milestone_status: done" context/foundation/roadmap.md` matches
+- [x] 2.5 `rg -n "prd-parity-contract"` in `mvp-alignment-plan.md` shows status `done`
 
 #### Manual
 
-- [ ] 2.6 Owner confirms M-1 history records closure without a new open milestone, and that README still documenting v1 upload is acceptable until `retire-v1`
+- [x] 2.6 Owner confirms M-1 history records closure without a new open milestone, and that README still documenting v1 upload is acceptable until `retire-v1`

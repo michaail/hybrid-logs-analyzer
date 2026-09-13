@@ -244,5 +244,5 @@ a later release gate and is not an Operator upload.
   bootstrap-only credentials.
 
 Before production data is enabled, add and test PostgreSQL backup/restore, bounded
-structured-log review, and HDFS notebook-parity checks within one percentage point of the
-agreed baseline.
+structured-log review, and the labelled FR-011 gate (exact `best_threshold` and test F1,
+PR-AUC, and ROC-AUC within `0.01` of `context/foundation/hdfs-parity-baseline.md`).

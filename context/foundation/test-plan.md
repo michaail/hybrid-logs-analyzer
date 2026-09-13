@@ -32,8 +32,10 @@ Hot-spot scope used for likelihood weighting: `src/api`, `src/modules`,
 
 Protect the HTTP isolation and model-lifecycle gates first. Add frontend
 role-signal tests only after those gates have a regression net. Do not spend
-rollout budget on notebooks, BGL, or `@ml` jobs on Ubuntu CI. Notebook
-parity within one percentage point waits for S-04 and a trained baseline.
+rollout budget on notebooks, BGL, or `@ml` jobs on Ubuntu CI. The agreed
+FR-011 gate exists as a manual labelled-release command
+(`scripts/verify_hdfs_parity.py`); it is not default Ubuntu CI and not an
+Operator upload.
 
 ## 2. Risk Map
 
@@ -251,7 +253,7 @@ contributors should respect these unless the underlying assumption changes.
 
 - **R&D notebooks and BGL research paths** — they remain a separate comparison workflow, not the web MVP. Re-evaluate if notebooks become the production execution path. (Source: Phase 2 interview Q5.)
 - **`@ml` jobs on Ubuntu CI** — native Intel Torch paths are local; Verify stays Torch-free. Re-evaluate when a Linux inference image is the CI target.
-- **Notebook-parity within one percentage point** — High impact, Low likelihood until S-04 and a trained baseline exist. Re-evaluate when that slice opens.
+- **Notebook-parity FR-011 labelled release** — The agreed gate is exact `best_threshold` and test F1 / PR-AUC / ROC-AUC within `0.01` of `context/foundation/hdfs-parity-baseline.md`. It is a manual labelled-release command, not default Ubuntu CI, and not an Operator upload. Re-evaluate if that command becomes a CI job.
 - **Invalid HDFS dataset intake** — S-03 is not implemented; do not invent that path in this rollout. Re-evaluate when intake is planned.
 - **Browser e2e outside the publication workflow** — analysis, intake, and screenshot snapshots stay out of Playwright. Publication E2E is limited to eligible publish and ineligible reject. Cross-project isolation stays at the HTTP layer (§6.7).
 

@@ -14,7 +14,7 @@ Make the HDFS MVP’s supported-package, parity, and deployment claims internall
 
 | ID | Outcome | Status |
 | --- | --- | --- |
-| prd-parity-contract | Align PRD to v2-only support and promote the checksum-pinned trusted parity baseline. | pending |
+| prd-parity-contract | Align PRD to v2-only support and promote the checksum-pinned trusted parity baseline. | done |
 | retire-v1 | Remove v1 package handling and convert fixtures, tests, UI, and active documentation to v2-only. | pending |
 | isolated-validator | Implement and test the private validator service and API client integration. | pending |
 | compose-acceptance | Add local Compose provisioning, artifact bootstrap, acceptance procedure, and truthful deployment documentation. | pending |

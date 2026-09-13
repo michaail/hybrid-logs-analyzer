@@ -4,12 +4,12 @@ version: 1
 status: draft
 created: 2026-09-09
 updated: 2026-09-13
-prd_version: 1
+prd_version: 2
 main_goal: speed
 top_blocker: decisions
 milestone_id: first-hdfs-publish-analyze
 milestone_seq: 1
-milestone_status: open
+milestone_status: done
 ---
 
 # Roadmap: Log Anomaly Detection System
@@ -20,7 +20,7 @@ milestone_status: open
 
 ## Milestone
 
-**M-1: First HDFS publish-and-analyze workflow** — Status: open
+**M-1: First HDFS publish-and-analyze workflow** — Status: done
 
 - **Intent:** Deliver the first protected workflow in which a Publisher can make an
   HDFS-compatible pretrained model available and an Operator can use it to analyze
@@ -196,9 +196,7 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 - **Prerequisites:** F-01, F-02, S-02, S-03
 - **Parallel with:** —
 - **Blockers:** —
-- **Unknowns:**
-  - Which notebook and configuration form the agreed parity baseline? — Owner: user.
-    Block: yes.
+- **Unknowns:** —
 - **Risk:** Without an agreed comparison baseline, the analysis result cannot be
   accepted as preserving the required notebook behavior.
 - **Status:** done
@@ -252,12 +250,18 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
    path. — Owner: user. Block: none.
 2. **What languages, frameworks, storage, and infrastructure make up the current
    notebook system? (resolved 2026-09-09)** — Jupyter notebooks in python, storage: local artifacts, infrastructure: local.
-3. **Model-package format decision (resolved 2026-09-09):** Publishers provide
-   pretrained PyTorch `.pt` models inside the package contract (metadata, metrics,
-   source compatibility, and external-evaluation evidence remain required). —
-   Owner: user. Block: none.
-4. **Which notebook and configuration form the agreed parity baseline? (resolved 2026-09-09)** — Owner:
-   user. Block: S-04. - This will be provided in due course as the baseline models needs to be trained first
+3. **Model-package format decision (resolved 2026-09-13):** The only accepted
+   Publisher package is `attribute-aware-gae-v2` bound to an immutable HDFS
+   preprocessing bundle. A non-empty JSON external-evaluation attestation is
+   required and is not scored. `attribute-aware-gae-v1` is unsupported; leftover
+   v1 handling is follow-on `retire-v1`. `feature_contract: notebook_raw_v1` is
+   graph-feature semantics, not a package format. — Owner: user. Block: none.
+4. **Which notebook and configuration form the agreed parity baseline?
+   (resolved 2026-09-13)** — Notebook `src/notebooks/6_GAE_Training_Colab.ipynb`,
+   config `configs/hdfs_baseline.yaml`, run `hdfs_gae_20260829_104013_baseline`.
+   The active pin is `context/foundation/hdfs-parity-baseline.md` (exact
+   `best_threshold`; test F1 / PR-AUC / ROC-AUC within `0.01`). Operator
+   uploads are not FR-011 proof. — Owner: user. Block: none.
 5. **What is the current user scale of the notebook system? (resolved 2026-09-09)** — One user, same as admin, owner of the solution and infrastructure
 6. **What deterministic evidence establishes that an HDFS block history is complete?
    (resolved 2026-09-13)** — Membership in the checksum-pinned F-03
@@ -285,6 +289,8 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
   nice-to-have and cannot delay the selected fast-launch path.
 
 ## Milestone History
+
+- **M-1: First HDFS publish-and-analyze workflow** (`first-hdfs-publish-analyze`) — closed 2026-09-13. A Publisher can publish an eligible HDFS model that an authorized Operator can use to inspect traceable, heuristically final results without provisional block histories cluttering anomalies.
 
 ## Done
 

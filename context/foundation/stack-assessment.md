@@ -93,7 +93,7 @@ Add the following to `AGENTS.md`:
 
 - Keep reusable pipeline logic in `src/modules/`; notebooks are for research, exploration, and comparison, not the sole implementation of production behavior.
 - Make every pipeline-stage input, output, configuration value, and terminal status explicit. Do not infer required inputs from the newest file or from notebook execution state.
-- Preserve the dataset and configuration semantics used by the agreed notebook baseline. For identical datasets, models, and configurations, every agreed evaluation metric must remain within one percentage point.
+- Preserve the dataset and configuration semantics used by the agreed notebook baseline. For identical datasets, models, and configurations, the controlled labelled FR-011 gate keeps `best_threshold` exact and test F1, PR-AUC, and ROC-AUC within `0.01` of `context/foundation/hdfs-parity-baseline.md`. Operator uploads are not FR-011 proof.
 - Use immutable run identifiers and record artifact provenance, configuration, and source revision for each run.
 ```
 

@@ -1,6 +1,6 @@
 # Selected HDFS experiment configuration for the parity baseline release.
 # Metrics, checksums, and ordered block IDs are recorded in
-# context/changes/run-parity-hdfs-analysis/baseline.md from the reviewed run —
+# context/foundation/hdfs-parity-baseline.md from the reviewed run —
 # never inferred here.
 #
 # All relative paths are resolved from --workspace-root, never from the
