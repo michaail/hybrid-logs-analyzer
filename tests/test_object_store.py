@@ -213,6 +213,10 @@ def _clear_bucket_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "API_OBJECT_STORE_ACCESS_KEY_ID",
         "API_OBJECT_STORE_SECRET_ACCESS_KEY",
         "API_OBJECT_STORE_REGION",
+        "MODEL_VALIDATOR_SERVICE_URL",
+        "MODEL_VALIDATOR_INTERNAL_TOKEN",
+        "MODEL_VALIDATOR_CONNECT_TIMEOUT_SECONDS",
+        "MODEL_VALIDATOR_READ_TIMEOUT_SECONDS",
     ):
         monkeypatch.setenv(name, "")
 

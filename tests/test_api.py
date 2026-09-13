@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import sqlite3
 import sys
+import threading
 import zipfile
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
 from uuid import UUID
@@ -42,16 +46,22 @@ def _api_settings(
     tmp_path: Path,
     workspace: Path,
     command: tuple[str, ...] | None = None,
+    *,
+    inject_files_only: bool = True,
 ) -> ApiSettings:
+    if command is not None:
+        resolved_command = command
+    elif inject_files_only:
+        resolved_command = (sys.executable, str(FILES_ONLY_VALIDATOR))
+    else:
+        resolved_command = None
     return ApiSettings(
         database_url=f"sqlite:///{tmp_path / 'api.db'}",
         jwt_secret="test-secret-not-for-production",
         trusted_workspace_root=workspace,
         code_root=REPO_ROOT,
         object_store_root=(tmp_path / "objects").resolve(),
-        model_validator_command=command
-        if command is not None
-        else (sys.executable, str(FILES_ONLY_VALIDATOR)),
+        model_validator_command=resolved_command,
     )
 
 
@@ -166,6 +176,48 @@ def _v2_zips(workspace: Path, **package_kwargs: Any) -> tuple[bytes, bytes]:
 
 def _v1_oracle_zip() -> bytes:
     return _zip_package(REPO_ROOT / "tests" / "fixtures" / "model_packages" / "rejected_v1")
+
+
+@contextmanager
+def _stub_validator_http(
+    *,
+    token: str,
+    status_code: int = 200,
+    payload: dict[str, Any] | None = None,
+    raw: bytes | None = None,
+):
+    encoded = (
+        raw
+        if raw is not None
+        else json.dumps(payload if payload is not None else {"valid": True, "issues": []}).encode()
+    )
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            if self.headers.get("Authorization", "") != f"Bearer {token}":
+                self.send_response(401)
+                self.end_headers()
+                return
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
 
 
 VALID_HDFS_LOG = (
@@ -1384,6 +1436,97 @@ def test_malformed_validator_report_does_not_insert_a_model(tmp_path: Path) -> N
         rejected = _register(client, headers, project_id, package_zip, bundle_zip)
         assert rejected.status_code == 503
         assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+
+
+def test_unconfigured_validator_does_not_insert_a_model(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    settings = _api_settings(tmp_path, workspace, inject_files_only=False)
+    ApiDatabase(settings.database_url).apply_migrations()
+    bootstrap_administrator(settings, "admin", PASSWORD)
+    with TestClient(create_app(settings)) as client:
+        api = ApiFixture(client=client, workspace=workspace, settings=settings)
+        _, headers, project_id = _publisher_client(api)
+        package_zip, bundle_zip = _v2_zips(workspace)
+        rejected = _register(client, headers, project_id, package_zip, bundle_zip)
+        assert rejected.status_code == 503
+        assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+
+
+def test_http_validator_admits_package_without_command(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    token = "validator-http-token"
+    with _stub_validator_http(token=token) as url:
+        settings = replace(
+            _api_settings(tmp_path, workspace, inject_files_only=False),
+            model_validator_service_url=url,
+            model_validator_internal_token=token,
+        )
+        ApiDatabase(settings.database_url).apply_migrations()
+        bootstrap_administrator(settings, "admin", PASSWORD)
+        with TestClient(create_app(settings)) as client:
+            api = ApiFixture(client=client, workspace=workspace, settings=settings)
+            _, headers, project_id = _publisher_client(api)
+            package_zip, bundle_zip = _v2_zips(workspace)
+            created = _register(client, headers, project_id, package_zip, bundle_zip)
+            assert created.status_code == 201, created.text
+            assert created.json()["status"] == "eligible"
+            listed = client.get(f"/projects/{project_id}/models", headers=headers)
+            assert listed.status_code == 200
+            assert listed.json()[0]["id"] == created.json()["id"]
+
+
+def test_http_validator_invalid_report_does_not_insert_a_model(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    token = "validator-http-token"
+    with _stub_validator_http(
+        token=token,
+        payload={
+            "valid": False,
+            "issues": [{"path": "manifest.json", "reason": "attribute-aware-gae-v1 is not accepted."}],
+        },
+    ) as url:
+        settings = replace(
+            _api_settings(tmp_path, workspace, inject_files_only=False),
+            model_validator_service_url=url,
+            model_validator_internal_token=token,
+        )
+        ApiDatabase(settings.database_url).apply_migrations()
+        bootstrap_administrator(settings, "admin", PASSWORD)
+        with TestClient(create_app(settings)) as client:
+            api = ApiFixture(client=client, workspace=workspace, settings=settings)
+            _, headers, project_id = _publisher_client(api)
+            package_zip, bundle_zip = _v2_zips(workspace)
+            rejected = _register(client, headers, project_id, package_zip, bundle_zip)
+            assert rejected.status_code == 422, rejected.text
+            assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+
+
+def test_http_validator_unavailable_status_does_not_insert_a_model(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    token = "super-secret-validator-token"
+    caplog.set_level(logging.DEBUG)
+    with _stub_validator_http(token=token, status_code=500, raw=b"nope") as url:
+        settings = replace(
+            _api_settings(tmp_path, workspace, inject_files_only=False),
+            model_validator_service_url=url,
+            model_validator_internal_token=token,
+        )
+        ApiDatabase(settings.database_url).apply_migrations()
+        bootstrap_administrator(settings, "admin", PASSWORD)
+        with TestClient(create_app(settings)) as client:
+            api = ApiFixture(client=client, workspace=workspace, settings=settings)
+            _, headers, project_id = _publisher_client(api)
+            package_zip, bundle_zip = _v2_zips(workspace)
+            rejected = _register(client, headers, project_id, package_zip, bundle_zip)
+            assert rejected.status_code == 503
+            assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+    assert token not in caplog.text
 
 
 def test_unpublished_eligible_model_cannot_start_analysis(api: ApiFixture) -> None:

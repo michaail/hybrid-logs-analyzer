@@ -4,7 +4,7 @@ platform: Railway
 environment: staging
 status: ready-for-manual-provisioning
 scope: HDFS-only control plane plus private on-demand inference
-updated_at: 2026-09-11
+updated_at: 2026-09-13
 ---
 
 # First Railway Staging Deployment
@@ -32,6 +32,10 @@ Boundaries that remain in this release:
   Python 3.10 image with `requirements-api.txt`.
 - `Dockerfile.inference` builds the private Linux ML service from `requirements-inference.txt`.
   It runs as a non-root user and does not receive `API_JWT_SECRET`.
+- `Dockerfile.validator` builds a private Torch HTTP validator from
+  `requirements-model-validator.txt`. That service is declared in `.railway/railway.ts` as
+  unexecuted future Railway design (see below). It must not receive `API_JWT_SECRET`,
+  `DATABASE_URL`, or Bucket credentials.
 - `.railway/railway.ts` is the current Railway Infrastructure as Code definition. It creates the
   PostgreSQL service, a private `models` Bucket, public `web`, and private `inference`, passes
   the database and Bucket credentials by reference, runs migrations before the web deployment,
@@ -79,6 +83,20 @@ Bucket. Inference loads `hdfs/reference-catalog/manifest.json` and its sibling
 `selected-block-ids.txt` from that Bucket; it does not expect a host-path catalog inside
 the image.
 
+## Unexecuted private model-validator
+
+`.railway/railway.ts` also names a private `model-validator` service built from
+`Dockerfile.validator`. It has no public domain, no PostgreSQL, no Bucket / `sharedStore`,
+and no `API_JWT_SECRET`. It receives only `MODEL_VALIDATOR_INTERNAL_TOKEN`. `web` receives
+`MODEL_VALIDATOR_SERVICE_URL` (`http://model-validator.railway.internal:8080`) and the
+same token. Sleep-when-idle is allowed.
+
+This wiring is an unexecuted future Railway design. It is not proof that Railway staging
+was provisioned, and it does not validate private DNS, cold start, or Bucket behavior.
+The MVP's reproducible deployment proof is the later Compose workstream, not this Railway
+file. Do not treat a future `railway up --service model-validator` as MVP acceptance
+evidence.
+
 ## Service variable contract
 
 Before applying this IaC, create two sealed Railway **shared environment variables**:
@@ -87,6 +105,9 @@ Before applying this IaC, create two sealed Railway **shared environment variabl
 - `INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256`: the lowercase SHA-256 of the retained
   F-03 `manifest.json` that will be uploaded to the Bucket. Calculate it at provision
   time; do not commit the digest.
+- `MODEL_VALIDATOR_INTERNAL_TOKEN`: a high-entropy validator invocation secret, distinct
+  from the JWT signing key. This shared variable is part of the unexecuted validator
+  wiring above; it is not evidence of a provisioned staging service.
 
 The IaC references both as `ctx.shared.*` for `inference` (the token is also on `web`).
 Do not create separate service-scoped copies. Do not put either value on the frontend

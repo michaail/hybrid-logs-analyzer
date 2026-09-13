@@ -337,6 +337,13 @@ python -m src.api.bootstrap --username admin
 uvicorn src.api.main:create_app --factory --reload
 ```
 
+Registering a model requires the private validator. Set
+`MODEL_VALIDATOR_SERVICE_URL` and `MODEL_VALIDATOR_INTERNAL_TOKEN` together on the API
+process, and the same token on the validator process. Local UI smoke without that HTTP
+service uses `scripts/e2e_serve.py`, which injects a files-only command. A factory
+`uvicorn` start with neither the URL/token pair nor an injected command fails closed
+on register (`503`) and inserts no model row.
+
 The API is then available at `http://127.0.0.1:8000`, with OpenAPI documentation at `/docs`.
 There is no public sign-up route. The first Administrator is created only by the
 interactive CLI bootstrap above; the browser never creates Administrators.
@@ -363,6 +370,13 @@ request still returns `202 queued` immediately. The API then retries activation 
 bounded interval. If both settings are unset, or activation cannot succeed, the run
 becomes `failed` with `INFERENCE_DISPATCH_FAILED` and a generic Operator-safe report.
 That public result does not include the inference URL, token, or exception text.
+
+For live model registration against this factory `uvicorn` path, also run the private
+validator (`python -m src.model_validator.service` from
+`requirements-model-validator.txt`) and set `MODEL_VALIDATOR_SERVICE_URL` (for example
+`http://127.0.0.1:8081`) with `MODEL_VALIDATOR_INTERNAL_TOKEN` on both the API and
+validator processes. Local UI smoke that only needs admission can skip that service
+and use `scripts/e2e_serve.py` instead.
 
 The private inference process also requires a pinned F-03 catalog pair:
 
@@ -445,8 +459,8 @@ finite `best_threshold`, `architecture` (`node_dim`, `edge_dim`, `hidden_dim`, `
 lowercase hex SHA-256 checksums of those files. Extra undeclared files are ignored for
 eligibility. `evidence.json` must be a non-empty JSON object; its contents are not scored.
 
-`model.pt` must be a tensor-only AttributeAwareGAE state dict. A dedicated
-package-validation process loads it with `torch.load(..., map_location="cpu", weights_only=True)`
+`model.pt` must be a tensor-only AttributeAwareGAE state dict. A dedicated private
+validator service loads it with `torch.load(..., map_location="cpu", weights_only=True)`
 and checks keys, shapes, and dtypes against the declared architecture. The public API never
 imports PyTorch, never calls `torch.load`, and never uses `weights_only=False` on an admitted
 artifact. Install `requirements-model-validator.txt` only for that isolated process; keep

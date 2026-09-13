@@ -167,6 +167,10 @@ def _clear_inference_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "INFERENCE_READ_TIMEOUT_SECONDS",
         "INFERENCE_RETRY_ATTEMPTS",
         "INFERENCE_RETRY_BACKOFF_SECONDS",
+        "MODEL_VALIDATOR_SERVICE_URL",
+        "MODEL_VALIDATOR_INTERNAL_TOKEN",
+        "MODEL_VALIDATOR_CONNECT_TIMEOUT_SECONDS",
+        "MODEL_VALIDATOR_READ_TIMEOUT_SECONDS",
         "API_OBJECT_STORE_ENDPOINT",
         "API_OBJECT_STORE_BUCKET",
         "API_OBJECT_STORE_ACCESS_KEY_ID",
@@ -192,3 +196,23 @@ def test_inference_settings_require_url_and_token_together(
     assert loaded.inference_service_url == "http://inference.test"
     assert loaded.inference_internal_token == "token-value"
     assert loaded.inference_retry_attempts == 5
+
+
+def test_validator_settings_require_url_and_token_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_inference_env(monkeypatch)
+    monkeypatch.setenv("API_JWT_SECRET", "test-secret-not-for-production")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'env.db'}")
+    monkeypatch.setenv("API_TRUSTED_WORKSPACE_ROOT", str(tmp_path / "workspace"))
+    monkeypatch.setenv("MODEL_VALIDATOR_SERVICE_URL", "http://validator.test")
+    with pytest.raises(RuntimeError, match="must be set together"):
+        ApiSettings.from_environment()
+
+    monkeypatch.setenv("MODEL_VALIDATOR_INTERNAL_TOKEN", "validator-token")
+    loaded = ApiSettings.from_environment()
+    assert loaded.model_validator_service_url == "http://validator.test"
+    assert loaded.model_validator_internal_token == "validator-token"
+    assert loaded.model_validator_connect_timeout_seconds == 2.0
+    assert loaded.model_validator_read_timeout_seconds == 120.0
+    assert loaded.model_validator_command is None

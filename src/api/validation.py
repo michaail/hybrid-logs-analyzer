@@ -7,7 +7,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -102,7 +101,9 @@ def run_private_package_validator(
 ) -> PackageValidationResult:
     """Ask the isolated validator process for a typed report. Never load the artifact here."""
 
-    command = list(settings.model_validator_command or (sys.executable, "-m", "src.model_validator"))
+    if not settings.model_validator_command:
+        raise ValidatorUnavailableError("Model package validator is unavailable.")
+    command = list(settings.model_validator_command)
     command.append(str(package_root))
     if bundle_root is not None:
         command.append(str(bundle_root))
@@ -114,7 +115,7 @@ def run_private_package_validator(
             text=True,
             env=allowed_validator_environment(os.environ, code_root=settings.code_root),
             cwd=str(settings.code_root),
-            timeout=120,
+            timeout=settings.model_validator_read_timeout_seconds,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ValidatorUnavailableError("Model package validator is unavailable.") from error
@@ -163,93 +164,149 @@ def admit_uploaded_zip_package(
     if bundle_size_issue is not None:
         return bundle_size_issue, None
 
-    with tempfile.TemporaryDirectory(prefix="model-upload-") as tmp:
-        tmp_root = Path(tmp)
-        extract_root = tmp_root / "package"
-        extract_root.mkdir()
-        unpack_report = unpack_zip_bytes(archive_bytes, extract_root)
-        if not unpack_report.valid:
-            return unpack_report, None
+    if settings.model_validator_command:
+        with tempfile.TemporaryDirectory(prefix="model-upload-") as tmp:
+            tmp_root = Path(tmp)
+            extract_root = tmp_root / "package"
+            bundle_root = tmp_root / "bundle"
+            unpack_report = _unpack_package_and_bundle(
+                archive_bytes, preprocessing_bundle_bytes, extract_root, bundle_root
+            )
+            if unpack_report is not None:
+                return unpack_report, None
+            report = run_private_package_validator(extract_root, settings, bundle_root)
+            if not report.valid:
+                return report, None
+            admitted = _persist_admitted_package(
+                tmp_root,
+                extract_root,
+                bundle_root,
+                object_store=object_store,
+                project_id=project_id,
+            )
+            return PackageValidationResult.from_issues([]), admitted
 
-        bundle_root = tmp_root / "bundle"
-        bundle_root.mkdir()
-        bundle_unpack = unpack_zip_bytes(preprocessing_bundle_bytes, bundle_root)
-        if not bundle_unpack.valid:
-            return bundle_unpack, None
+    if settings.model_validator_service_url and settings.model_validator_internal_token:
+        from src.api.validator_client import post_package_validation
 
-        report = run_private_package_validator(extract_root, settings, bundle_root)
+        report = post_package_validation(archive_bytes, preprocessing_bundle_bytes, settings)
         if not report.valid:
             return report, None
-        identity = _admitted_identity_from_directory(extract_root)
-        model_id = uuid4()
-        prefix = model_package_object_prefix(project_id, model_id, identity.version)
-        bundle_id = uuid4()
-        bundle_prefix = (
-            preprocessing_bundle_object_prefix(project_id, bundle_id, identity.preprocessing_bundle.version)
-            if identity.preprocessing_bundle is not None
-            else None
-        )
-        persist_root = tmp_root / "declared"
-        admitted_bundle: AdmittedPreprocessingBundle | None = None
-        try:
-            relatives = materialize_declared_package_files(extract_root, persist_root)
-            for relative in relatives:
+        with tempfile.TemporaryDirectory(prefix="model-upload-") as tmp:
+            tmp_root = Path(tmp)
+            extract_root = tmp_root / "package"
+            bundle_root = tmp_root / "bundle"
+            unpack_report = _unpack_package_and_bundle(
+                archive_bytes, preprocessing_bundle_bytes, extract_root, bundle_root
+            )
+            if unpack_report is not None:
+                return unpack_report, None
+            admitted = _persist_admitted_package(
+                tmp_root,
+                extract_root,
+                bundle_root,
+                object_store=object_store,
+                project_id=project_id,
+            )
+            return PackageValidationResult.from_issues([]), admitted
+
+    raise ValidatorUnavailableError("Model package validator is unavailable.")
+
+
+def _unpack_package_and_bundle(
+    archive_bytes: bytes,
+    bundle_bytes: bytes,
+    extract_root: Path,
+    bundle_root: Path,
+) -> PackageValidationResult | None:
+    extract_root.mkdir(parents=True, exist_ok=True)
+    bundle_root.mkdir(parents=True, exist_ok=True)
+    unpack_report = unpack_zip_bytes(archive_bytes, extract_root)
+    if not unpack_report.valid:
+        return unpack_report
+    bundle_unpack = unpack_zip_bytes(bundle_bytes, bundle_root)
+    if not bundle_unpack.valid:
+        return bundle_unpack
+    return None
+
+
+def _persist_admitted_package(
+    tmp_root: Path,
+    extract_root: Path,
+    bundle_root: Path,
+    *,
+    object_store: ObjectStore,
+    project_id: UUID,
+) -> AdmittedModelPackage:
+    identity = _admitted_identity_from_directory(extract_root)
+    model_id = uuid4()
+    prefix = model_package_object_prefix(project_id, model_id, identity.version)
+    bundle_id = uuid4()
+    bundle_prefix = (
+        preprocessing_bundle_object_prefix(project_id, bundle_id, identity.preprocessing_bundle.version)
+        if identity.preprocessing_bundle is not None
+        else None
+    )
+    persist_root = tmp_root / "declared"
+    admitted_bundle: AdmittedPreprocessingBundle | None = None
+    try:
+        relatives = materialize_declared_package_files(extract_root, persist_root)
+        for relative in relatives:
+            object_store.put(
+                model_package_object_key(project_id, model_id, identity.version, relative),
+                (persist_root / relative).read_bytes(),
+            )
+        if identity.preprocessing_bundle is not None and bundle_prefix is not None:
+            bundle_persist = tmp_root / "bundle-declared"
+            bundle_relatives = materialize_declared_bundle_files(bundle_root, bundle_persist)
+            for relative in bundle_relatives:
                 object_store.put(
-                    model_package_object_key(project_id, model_id, identity.version, relative),
-                    (persist_root / relative).read_bytes(),
+                    preprocessing_bundle_object_key(
+                        project_id,
+                        bundle_id,
+                        identity.preprocessing_bundle.version,
+                        relative,
+                    ),
+                    (bundle_persist / relative).read_bytes(),
                 )
-            if bundle_root is not None and identity.preprocessing_bundle is not None and bundle_prefix is not None:
-                bundle_persist = tmp_root / "bundle-declared"
-                bundle_relatives = materialize_declared_bundle_files(bundle_root, bundle_persist)
-                for relative in bundle_relatives:
-                    object_store.put(
-                        preprocessing_bundle_object_key(
-                            project_id,
-                            bundle_id,
-                            identity.preprocessing_bundle.version,
-                            relative,
-                        ),
-                        (bundle_persist / relative).read_bytes(),
-                    )
-                admitted_bundle = AdmittedPreprocessingBundle(
-                    bundle_id=bundle_id,
-                    identifier=identity.preprocessing_bundle.identifier,
-                    version=identity.preprocessing_bundle.version,
-                    object_prefix=bundle_prefix,
-                    manifest_checksum=identity.preprocessing_bundle.digest,
-                    metadata=identity.preprocessing_bundle.model_dump(),
-                )
-        except ValueError as error:
-            object_store.delete_prefix(prefix)
-            if bundle_prefix is not None:
-                object_store.delete_prefix(bundle_prefix)
-            raise ValidationError(str(error)) from error
-        except Exception:
-            object_store.delete_prefix(prefix)
-            if bundle_prefix is not None:
-                object_store.delete_prefix(bundle_prefix)
-            raise
-        artifact_key = model_package_object_key(
-            project_id,
-            model_id,
-            identity.version,
-            identity.files.artifact,
-        )
-        admitted = AdmittedModelPackage(
-            model_identifier=identity.model_identifier,
-            version=identity.version,
-            pipeline_run_id=identity.pipeline_run_id or identity.model_identifier,
-            package_reference=prefix,
-            artifact_reference=artifact_key,
-            artifact_sha256=identity.files.checksums[identity.files.artifact],
-            metrics=identity.metrics.model_dump(),
-            metadata=_package_metadata(identity),
-            external_evaluation_evidence=identity.files.evidence,
-            model_id=model_id,
-            storage_kind="object",
-            preprocessing_bundle=admitted_bundle,
-        )
-        return PackageValidationResult.from_issues([]), admitted
+            admitted_bundle = AdmittedPreprocessingBundle(
+                bundle_id=bundle_id,
+                identifier=identity.preprocessing_bundle.identifier,
+                version=identity.preprocessing_bundle.version,
+                object_prefix=bundle_prefix,
+                manifest_checksum=identity.preprocessing_bundle.digest,
+                metadata=identity.preprocessing_bundle.model_dump(),
+            )
+    except ValueError as error:
+        object_store.delete_prefix(prefix)
+        if bundle_prefix is not None:
+            object_store.delete_prefix(bundle_prefix)
+        raise ValidationError(str(error)) from error
+    except Exception:
+        object_store.delete_prefix(prefix)
+        if bundle_prefix is not None:
+            object_store.delete_prefix(bundle_prefix)
+        raise
+    artifact_key = model_package_object_key(
+        project_id,
+        model_id,
+        identity.version,
+        identity.files.artifact,
+    )
+    return AdmittedModelPackage(
+        model_identifier=identity.model_identifier,
+        version=identity.version,
+        pipeline_run_id=identity.pipeline_run_id or identity.model_identifier,
+        package_reference=prefix,
+        artifact_reference=artifact_key,
+        artifact_sha256=identity.files.checksums[identity.files.artifact],
+        metrics=identity.metrics.model_dump(),
+        metadata=_package_metadata(identity),
+        external_evaluation_evidence=identity.files.evidence,
+        model_id=model_id,
+        storage_kind="object",
+        preprocessing_bundle=admitted_bundle,
+    )
 
 
 def _zip_size_issue(archive_bytes: bytes, *, path: str) -> PackageValidationResult | None:

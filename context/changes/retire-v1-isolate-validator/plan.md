@@ -566,29 +566,29 @@ runs are retired in a later change. Audit history is retained with dangling
 
 #### Automated
 
-- [x] 2.1 `python -m pytest tests/test_model_package.py tests/test_inference_bundle.py tests/test_api.py tests/test_model_validator.py -m "not ml"` passes
-- [x] 2.2 `rg -n "V1 uses the" README.md` has no matches
-- [x] 2.3 `rg -n "legacy packages stay visible" frontend/src/App.tsx` has no matches
-- [x] 2.4 `rg -n "The running app may still admit v1" context/foundation/prd.md` has no matches
-- [x] 2.5 `ruff check src/modules/model_package.py src/modules/inference_bundle.py src/api/validation.py src/api/main.py tests/test_api.py tests/test_model_package.py`
-- [x] 2.7 `npm --prefix frontend run test:e2e`
+- [x] 2.1 `python -m pytest tests/test_model_package.py tests/test_inference_bundle.py tests/test_api.py tests/test_model_validator.py -m "not ml"` passes — d5e0a63
+- [x] 2.2 `rg -n "V1 uses the" README.md` has no matches — d5e0a63
+- [x] 2.3 `rg -n "legacy packages stay visible" frontend/src/App.tsx` has no matches — d5e0a63
+- [x] 2.4 `rg -n "The running app may still admit v1" context/foundation/prd.md` has no matches — d5e0a63
+- [x] 2.5 `ruff check src/modules/model_package.py src/modules/inference_bundle.py src/api/validation.py src/api/main.py tests/test_api.py tests/test_model_package.py` — d5e0a63
+- [x] 2.7 `npm --prefix frontend run test:e2e` — d5e0a63
 
 #### Manual
 
-- [x] 2.6 Owner confirms README and the register dialog describe only v2+bundle, and that a v1 ZIP is rejected with a structured issue (UI or API)
+- [x] 2.6 Owner confirms README and the register dialog describe only v2+bundle, and that a v1 ZIP is rejected with a structured issue (UI or API) — d5e0a63
 
 ### Phase 3: Private validator HTTP service
 
 #### Automated
 
-- [ ] 3.1 `python -m pytest tests/test_model_validator.py tests/test_api.py -m "not ml"` passes
-- [ ] 3.2 `test -f Dockerfile.validator` succeeds
-- [ ] 3.3 `rg -n "model-validator" .railway/railway.ts` matches
-- [ ] 3.4 `rg -n "MODEL_VALIDATOR_SERVICE_URL" src/api/settings.py` matches
-- [ ] 3.7 `rg -n "MODEL_VALIDATOR_SERVICE_URL" README.md .env.example` matches
-- [ ] 3.5 `ruff check src/model_validator src/api/settings.py src/api/validation.py`
+- [x] 3.1 `python -m pytest tests/test_model_validator.py tests/test_api.py -m "not ml"` passes
+- [x] 3.2 `test -f Dockerfile.validator` succeeds
+- [x] 3.3 `rg -n "model-validator" .railway/railway.ts` matches
+- [x] 3.4 `rg -n "MODEL_VALIDATOR_SERVICE_URL" src/api/settings.py` matches
+- [x] 3.7 `rg -n "MODEL_VALIDATOR_SERVICE_URL" README.md .env.example` matches
+- [x] 3.5 `ruff check src/model_validator src/api/settings.py src/api/validation.py`
 
 #### Manual
 
-- [ ] 3.6 Owner confirms deploy-plan/Railway text still reads as unexecuted future design (not a proven staging deployment), and that the validator service env in IaC has neither JWT nor object-store credentials
-- [ ] 3.8 Owner confirms the `@pytest.mark.ml` validator-app `weights_only=True` probe passed in a normal local ML venv (not Cursor’s sandbox, not Ubuntu CI)
+- [x] 3.6 Owner confirms deploy-plan/Railway text still reads as unexecuted future design (not a proven staging deployment), and that the validator service env in IaC has neither JWT nor object-store credentials
+- [x] 3.8 Owner confirms the `@pytest.mark.ml` validator-app `weights_only=True` probe passed in a normal local ML venv (not Cursor’s sandbox, not Ubuntu CI)
