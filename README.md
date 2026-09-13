@@ -443,6 +443,29 @@ Invalid uploads never become analysis runs. Isolated inference runs in a private
 built from `Dockerfile.inference`; the public API image stays on `requirements-api.txt`
 and never imports PyTorch. Do not SHA-256 Operator HDFS logs at analyze time.
 
+### Inspecting HDFS analysis results
+
+An authorized Operator can retrieve one bounded page of detected HDFS blocks with
+`GET /projects/{project_id}/analysis-runs/{analysis_run_id}/results`. Each anomaly identifies
+the HDFS `block_id` (also retained as the compatibility `record_reference`), score, decision
+threshold, level, and stored source-log context. Source context contains original source line
+numbers and raw text in scoring-sequence order. The response labels how many scored lines
+matched the block; it may show only the stored subset, so it must not be interpreted as the
+entire original source file.
+
+Result pages accept only `limit` (1–100, default 50), `sort` (`score_desc` or
+`block_id_asc`), `block_id_prefix`, `min_score`, and the opaque `cursor` returned by the
+previous page. Pagination is keyset-based and does not re-score the run or expose model
+artifacts. The `summary` counts apply to the complete run, not the selected filter or page.
+The response also records the selected model/version, pipeline run, dataset checksum, model
+artifact checksum, and preprocessing-bundle identity when present.
+
+Results are project-scoped: a caller without membership in the selected project receives
+`404`, including when presenting a cursor issued for another project. Invalid or rejected
+HDFS uploads remain a `422` validation report at dataset admission and create no analysis
+run or historical result row. These pages present finalized detected anomalies only; the
+separate S-06 / FR-012 work owns completeness and provisional HDFS block histories.
+
 S-04 analysis loads a frozen Drain3 FilePersistence snapshot with the bundle `drain.ini`
 via `DrainParser.load`, then calls `annotate_file` only. It does not fit Drain, re-enrich
 templates, or put parser files in the GAE package. Unmatched admitted lines fail the run

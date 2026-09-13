@@ -25,8 +25,8 @@ FEATURE_ATOL = 1.0e-5
 FEATURE_RTOL = 1.0e-5
 SCORE_ATOL = 1.0e-5
 SCORE_RTOL = 1.0e-5
-MAX_CONTEXT_LINES = 20
 MAX_RAW_CHARS = 500
+MAX_CONTEXT_LINES = 20
 MAX_SOURCE_LINES = 100_000
 MAX_BLOCKS = 25_000
 
@@ -42,7 +42,7 @@ class HdfsInferenceError(RuntimeError):
 
 @dataclass(frozen=True)
 class SourceLine:
-    """One capped raw log line retained as block evidence."""
+    """One raw log line retained as block evidence, truncated to MAX_RAW_CHARS."""
 
     line_number: int | None
     raw: str
@@ -406,11 +406,11 @@ def _block_snapshot(block: BlockInferenceSnapshot) -> dict[str, Any]:
 def _source_lines(frame: Any) -> tuple[SourceLine, ...]:
     rows = frame.to_dict("records") if hasattr(frame, "to_dict") else []
     evidence: list[SourceLine] = []
-    for row in rows[:MAX_CONTEXT_LINES]:
+    for row in rows:
         raw = str(row.get("raw") or "")[:MAX_RAW_CHARS]
         line_number = int(row["line_number"]) if row.get("line_number") is not None else None
         evidence.append(SourceLine(line_number=line_number, raw=raw))
-    return tuple(evidence)
+    return tuple(evidence[:MAX_CONTEXT_LINES])
 
 
 def _count_nonempty_lines(path: Path) -> int:

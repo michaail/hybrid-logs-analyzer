@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   AccountSummary,
@@ -8,10 +8,12 @@ import {
   ApiError,
   AuditEvent,
   Dataset,
+  HdfsAnomalyContext,
   Membership,
   ModelVersion,
   Project,
   ProjectRole,
+  ResultSort,
   User,
 } from "./api";
 
@@ -39,7 +41,7 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [showAnalysisDialog, setShowAnalysisDialog] = useState(false);
   const [showRegistrationDialog, setShowRegistrationDialog] = useState(false);
-  const [results, setResults] = useState<AnalysisResults | null>(null);
+  const [inspectedRun, setInspectedRun] = useState<AnalysisRun | null>(null);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
@@ -205,7 +207,7 @@ export default function App() {
     setMemberships([]);
     setSystemAuditEvents([]);
     setSelectedModelId(null);
-    setResults(null);
+    setInspectedRun(null);
     setPageError(null);
     setNotice(message ?? null);
   }
@@ -267,16 +269,12 @@ export default function App() {
     );
   }
 
-  async function showResults(run: AnalysisRun): Promise<void> {
+  function showResults(run: AnalysisRun): void {
     if (!selectedProject) {
       return;
     }
     setPageError(null);
-    try {
-      setResults(await api.getAnalysisResults(selectedProject.id, run.id));
-    } catch (error) {
-      handleRequestError(error);
-    }
+    setInspectedRun(run);
   }
 
   async function createProject(name: string): Promise<void> {
@@ -434,7 +432,15 @@ export default function App() {
           onStart={startAnalysis}
         />
       )}
-      {results && <ResultsDialog results={results} onClose={() => setResults(null)} />}
+      {inspectedRun && selectedProject && (
+        <ResultsDialog
+          key={`${selectedProject.id}:${inspectedRun.id}`}
+          projectId={selectedProject.id}
+          runId={inspectedRun.id}
+          onClose={() => setInspectedRun(null)}
+          onUnauthorized={handleRequestError}
+        />
+      )}
     </div>
   );
 }
@@ -672,7 +678,7 @@ function RunsView({
   datasets: Dataset[];
   selectedModel: ModelVersion | null;
   onOpenAnalysis: () => void;
-  onShowResults: (run: AnalysisRun) => Promise<void>;
+  onShowResults: (run: AnalysisRun) => void;
   onUploadDataset: (logFile: File) => Promise<void>;
   onUnauthorized: (error: unknown) => void;
 }): JSX.Element {
@@ -740,7 +746,7 @@ function RunsView({
                 </div>
                 <div className="run-outcome">
                   {run.error_code && <code>{run.error_code}</code>}
-                  <button className="secondary-button" type="button" onClick={() => void onShowResults(run)}>
+                  <button className="secondary-button" type="button" onClick={() => onShowResults(run)}>
                     View outcome
                   </button>
                 </div>
@@ -1487,70 +1493,356 @@ function AnalysisDialog({
 }
 
 function ResultsDialog({
-  results,
+  projectId,
+  runId,
   onClose,
+  onUnauthorized,
 }: {
-  results: AnalysisResults;
+  projectId: string;
+  runId: string;
   onClose: () => void;
+  onUnauthorized: (error: unknown) => void;
 }): JSX.Element {
-  const { run, summary } = results;
-  const validationExamples = run.validation_report?.examples ?? [];
+  const [sort, setSort] = useState<ResultSort>("score_desc");
+  const [draftPrefix, setDraftPrefix] = useState("");
+  const [draftMinScore, setDraftMinScore] = useState("");
+  const [appliedPrefix, setAppliedPrefix] = useState<string | null>(null);
+  const [appliedMinScore, setAppliedMinScore] = useState<number | null>(null);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [previousCursors, setPreviousCursors] = useState<Array<string | null>>([]);
+  const [results, setResults] = useState<AnalysisResults | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [filterError, setFilterError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const onUnauthorizedRef = useRef(onUnauthorized);
+  onUnauthorizedRef.current = onUnauthorized;
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true);
+    setError(null);
+
+    void api
+      .getAnalysisResults(projectId, runId, {
+        sort,
+        block_id_prefix: appliedPrefix,
+        min_score: appliedMinScore,
+        cursor,
+      })
+      .then((page) => {
+        if (!cancelled) {
+          setResults(page);
+        }
+      })
+      .catch((requestError: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        if (requestError instanceof ApiError && requestError.status === 401) {
+          onUnauthorizedRef.current(requestError);
+          return;
+        }
+        setError(messageFor(requestError));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [appliedMinScore, appliedPrefix, cursor, projectId, runId, sort]);
+
+  function resetPaging(): void {
+    setCursor(null);
+    setPreviousCursors([]);
+  }
+
+  function changeSort(nextSort: ResultSort): void {
+    setSort(nextSort);
+    resetPaging();
+  }
+
+  function applyFilters(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const parsedScore = parseFiniteScore(draftMinScore);
+    if (!parsedScore.ok) {
+      setFilterError(parsedScore.error);
+      return;
+    }
+    const prefix = draftPrefix.trim();
+    setFilterError(null);
+    setAppliedPrefix(prefix.length > 0 ? prefix : null);
+    setAppliedMinScore(parsedScore.value);
+    resetPaging();
+  }
+
+  function resetFilters(): void {
+    setDraftPrefix("");
+    setDraftMinScore("");
+    setFilterError(null);
+    setSort("score_desc");
+    setAppliedPrefix(null);
+    setAppliedMinScore(null);
+    resetPaging();
+  }
+
+  function goPrevious(): void {
+    if (isLoading || previousCursors.length === 0) {
+      return;
+    }
+    const previous = previousCursors[previousCursors.length - 1] ?? null;
+    setIsLoading(true);
+    setPreviousCursors((history) => history.slice(0, -1));
+    setCursor(previous);
+  }
+
+  function goNext(): void {
+    if (isLoading || !results?.next_cursor) {
+      return;
+    }
+    setIsLoading(true);
+    setPreviousCursors((history) => [...history, cursor]);
+    setCursor(results.next_cursor);
+  }
+
+  const run = results?.run;
+  const summary = results?.summary;
+  const trace = results?.trace;
+  const filtersActive = appliedPrefix !== null || appliedMinScore !== null;
+  const showInspectionControls =
+    run?.status === "completed" && summary !== undefined && summary.anomaly_count > 0;
+  const inspectionMessage = results
+    ? resultInspectionMessage(results.run, results.summary.anomaly_count, results.anomalies.length, filtersActive)
+    : null;
+  const validationExamples = run?.validation_report?.examples ?? [];
 
   return (
-    <Dialog title="Analysis outcome" onClose={onClose}>
-      <div className="results-dialog">
-        <div className="results-header">
-          <div>
-            <span className="summary-label">Run {shortId(run.id)}</span>
-            <h3>{run.log_reference}</h3>
-            {run.dataset_id && <p className="muted">Dataset {run.dataset_id}</p>}
-          </div>
-          <StatusBadge status={run.status} />
-        </div>
-
-        {(run.status === "queued" || run.status === "running") && (
-          <p className="muted">
-            This run is still in progress. Counts and anomaly rows appear when it completes.
+    <Dialog className="dialog-wide" title="Analysis outcome" onClose={onClose}>
+      <div aria-busy={isLoading} className="results-dialog">
+        {error && <Banner tone="error" message={error} onDismiss={() => setError(null)} />}
+        {isLoading && !results && <p className="muted">Loading analysis results…</p>}
+        {isLoading && results && (
+          <p aria-live="polite" className="muted">
+            Updating this page of results…
           </p>
         )}
-        {run.validation_report?.execution && (
-          <div className="warning-strip">{run.validation_report.execution}</div>
-        )}
-        {run.error_code && <p className="error-code">Error code: {run.error_code}</p>}
 
-        <div className="outcome-summary">
-          <SummaryMetric label="Anomalies" value={summary.anomaly_count} />
-          <SummaryMetric label="Normal" value={summary.normal_count} />
-          <SummaryMetric label="Rejected records" value={summary.rejected_records} />
-          <SummaryMetric label="Invalid records" value={summary.invalid_records} />
-        </div>
+        {run && trace && summary && (
+          <>
+            <div className="results-header">
+              <div>
+                <span className="summary-label">HDFS analysis run</span>
+                <h3>{run.log_reference}</h3>
+                {run.dataset_id && <p className="muted">Dataset {run.dataset_id}</p>}
+              </div>
+              <StatusBadge status={run.status} />
+            </div>
 
-        {validationExamples.length > 0 && (
-          <div className="validation-examples">
-            <h4>Validation details</h4>
-            <ul>
-              {validationExamples.map((example, index) => (
-                <li key={`${example.line_number ?? 0}-${index}`}>
-                  Line {example.line_number ?? "—"}: {example.reason ?? "Invalid record"}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+            <dl className="results-identity">
+              <div>
+                <dt>Run ID</dt>
+                <dd className="technical-id">{run.id}</dd>
+              </div>
+              <div>
+                <dt>Model</dt>
+                <dd>
+                  {trace.model_identifier} · {trace.version}
+                </dd>
+              </div>
+              <div>
+                <dt>Model version ID</dt>
+                <dd className="technical-id">{trace.model_version_id}</dd>
+              </div>
+            </dl>
 
-        {results.anomalies.length > 0 && (
-          <div className="anomaly-list">
-            <h4>Detected anomalies</h4>
-            {results.anomalies.map((anomaly) => (
-              <article key={anomaly.record_reference}>
-                <strong>{anomaly.record_reference}</strong>
-                <span>
-                  Score {formatMetric(anomaly.anomaly_score)} · threshold{" "}
-                  {formatMetric(anomaly.decision_threshold)}
-                </span>
-              </article>
-            ))}
-          </div>
+            <details className="results-disclosure">
+              <summary>More provenance</summary>
+              <dl className="results-provenance">
+                <div>
+                  <dt>Pipeline run</dt>
+                  <dd className="technical-id">{trace.pipeline_run_id}</dd>
+                </div>
+                <div>
+                  <dt>Dataset checksum</dt>
+                  <dd className="technical-id">{trace.dataset_checksum ?? "unavailable"}</dd>
+                </div>
+                <div>
+                  <dt>Model artifact checksum</dt>
+                  <dd className="technical-id">{trace.artifact_checksum ?? "unavailable"}</dd>
+                </div>
+                {trace.preprocessing_bundle ? (
+                  <>
+                    <div>
+                      <dt>Bundle identifier</dt>
+                      <dd className="technical-id">{trace.preprocessing_bundle.identifier}</dd>
+                    </div>
+                    <div>
+                      <dt>Bundle version</dt>
+                      <dd>{trace.preprocessing_bundle.version}</dd>
+                    </div>
+                    <div>
+                      <dt>Bundle digest</dt>
+                      <dd className="technical-id">{trace.preprocessing_bundle.digest}</dd>
+                    </div>
+                  </>
+                ) : (
+                  <div>
+                    <dt>Preprocessing bundle</dt>
+                    <dd>Not attached</dd>
+                  </div>
+                )}
+              </dl>
+            </details>
+
+            {inspectionMessage && (
+              <p className={`results-state results-state-${inspectionMessage.tone}`}>
+                {inspectionMessage.text}
+              </p>
+            )}
+            {run.validation_report?.execution && (
+              <div className="warning-strip">{run.validation_report.execution}</div>
+            )}
+            {run.error_code && <p className="error-code">Error code: {run.error_code}</p>}
+
+            <div className="outcome-summary">
+              <SummaryMetric label="Anomalies" value={summary.anomaly_count} />
+              <SummaryMetric label="Normal" value={summary.normal_count} />
+              <SummaryMetric label="Rejected records" value={summary.rejected_records} />
+              <SummaryMetric label="Invalid records" value={summary.invalid_records} />
+            </div>
+            <p className="results-summary-note">
+              These totals cover the entire run, not the current page or filters. Rejected and
+              invalid counts stay at zero for admitted HDFS runs; invalid uploads are rejected at
+              dataset admission and never become analysis results.
+            </p>
+
+            {validationExamples.length > 0 && (
+              <div className="validation-examples">
+                <h4>Validation details</h4>
+                <ul>
+                  {validationExamples.map((example, index) => (
+                    <li key={`${example.line_number ?? 0}-${index}`}>
+                      Line {example.line_number ?? "unavailable"}: {example.reason ?? "Invalid record"}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {showInspectionControls && results && (
+              <form className="results-filters" onSubmit={(event) => applyFilters(event)}>
+                {filterError && <Banner tone="error" message={filterError} />}
+                <label htmlFor="results-sort">
+                  Order
+                  <select
+                    disabled={isLoading}
+                    id="results-sort"
+                    onChange={(event) => changeSort(event.target.value as ResultSort)}
+                    value={sort}
+                  >
+                    <option value="score_desc">Score (highest first)</option>
+                    <option value="block_id_asc">Block ID (A–Z)</option>
+                  </select>
+                </label>
+                <label htmlFor="results-block-prefix">
+                  Block ID prefix
+                  <input
+                    disabled={isLoading}
+                    id="results-block-prefix"
+                    onChange={(event) => setDraftPrefix(event.target.value)}
+                    placeholder="e.g. blk_"
+                    value={draftPrefix}
+                  />
+                </label>
+                <label htmlFor="results-min-score">
+                  Minimum score
+                  <input
+                    disabled={isLoading}
+                    id="results-min-score"
+                    inputMode="decimal"
+                    onChange={(event) => setDraftMinScore(event.target.value)}
+                    placeholder="Leave blank for no minimum"
+                    value={draftMinScore}
+                  />
+                </label>
+                <div className="results-filter-actions">
+                  <button className="secondary-button" disabled={isLoading} type="submit">
+                    Apply filters
+                  </button>
+                  <button className="text-button" disabled={isLoading} onClick={resetFilters} type="button">
+                    Reset
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {showInspectionControls && results && (
+              <div className="results-pagination">
+                <button
+                  className="secondary-button"
+                  disabled={isLoading || previousCursors.length === 0}
+                  onClick={goPrevious}
+                  type="button"
+                >
+                  Previous page
+                </button>
+                <p>
+                  Page {previousCursors.length + 1}
+                  {results.next_cursor ? "" : ", last page"}
+                  {` · ${results.anomalies.length} HDFS blocks on this page`}
+                </p>
+                <button
+                  className="secondary-button"
+                  disabled={isLoading || !results.next_cursor}
+                  onClick={goNext}
+                  type="button"
+                >
+                  Next page
+                </button>
+              </div>
+            )}
+
+            {results.anomalies.length > 0 && (
+              <div className="anomaly-list">
+                <h4>Detected HDFS blocks</h4>
+                {results.anomalies.map((anomaly) => (
+                  <article className="anomaly-card" key={anomaly.block_id}>
+                    <div className="anomaly-heading">
+                      <span className="summary-label">HDFS block</span>
+                      <strong className="technical-id">{anomaly.block_id}</strong>
+                    </div>
+                    <p>
+                      Score {formatInspectedNumber(anomaly.anomaly_score)} · threshold{" "}
+                      {formatInspectedNumber(anomaly.decision_threshold)}
+                      {anomaly.anomaly_level ? ` · ${anomaly.anomaly_level}` : ""}
+                    </p>
+                    <details className="results-disclosure">
+                      <summary>{sourceEvidenceLabel(anomaly.context)}</summary>
+                      {anomaly.context.source_lines.length === 0 ? (
+                        <p className="muted">
+                          No stored source lines are available for this block.
+                        </p>
+                      ) : (
+                        <ol className="source-line-list">
+                          {anomaly.context.source_lines.map((line, index) => (
+                            <li key={`${line.line_number ?? "unavailable"}-${index}`}>
+                              <span className="source-line-number">
+                                Line {line.line_number ?? "unavailable"}
+                              </span>
+                              <pre className="source-line-raw">{line.raw}</pre>
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                    </details>
+                  </article>
+                ))}
+              </div>
+            )}
+          </>
         )}
 
         <div className="dialog-actions">
@@ -1565,16 +1857,23 @@ function ResultsDialog({
 
 function Dialog({
   children,
+  className,
   onClose,
   title,
 }: {
   children: ReactNode;
+  className?: string;
   onClose: () => void;
   title: string;
 }): JSX.Element {
   return (
     <div className="dialog-backdrop" role="presentation">
-      <section aria-modal="true" aria-labelledby="dialog-title" className="dialog" role="dialog">
+      <section
+        aria-labelledby="dialog-title"
+        aria-modal="true"
+        className={className ? `dialog ${className}` : "dialog"}
+        role="dialog"
+      >
         <div className="dialog-heading">
           <h2 id="dialog-title">{title}</h2>
           <button aria-label="Close dialog" className="icon-button" type="button" onClick={onClose}>
@@ -1655,6 +1954,80 @@ function SummaryMetric({ label, value }: { label: string; value: number }): JSX.
 
 function messageFor(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
+}
+
+function parseFiniteScore(
+  value: string,
+): { ok: true; value: number | null } | { ok: false; error: string } {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return { ok: true, value: null };
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    return { ok: false, error: "Minimum score must be a finite number." };
+  }
+  return { ok: true, value: parsed };
+}
+
+function formatInspectedNumber(value: number | null): string {
+  if (value === null) {
+    return "unavailable";
+  }
+  return formatMetric(value);
+}
+
+function sourceEvidenceLabel(context: HdfsAnomalyContext): string {
+  const shown = context.source_lines.length;
+  const matched = context.matched_line_count;
+  if (shown === 0 && matched === 0) {
+    return "Source evidence — no stored source lines";
+  }
+  if (shown >= matched && matched > 0) {
+    return `Source evidence — ${shown} scored log lines`;
+  }
+  return `Source evidence — showing ${shown} of ${matched} scored log lines`;
+}
+
+function resultInspectionMessage(
+  run: AnalysisRun,
+  anomalyCount: number,
+  pageSize: number,
+  filtered: boolean,
+): { tone: "progress" | "failed" | "empty"; text: string } | null {
+  if (run.status === "queued" || run.status === "running") {
+    return {
+      tone: "progress",
+      text: "This run is still in progress. Block-level anomalies and final counts appear when analysis completes.",
+    };
+  }
+  if (run.status === "failed") {
+    return {
+      tone: "failed",
+      text: "This analysis failed. The stored execution report is shown below; it is not a list of scored HDFS blocks.",
+    };
+  }
+  if (run.status === "rejected" || run.status === "not_supported") {
+    return {
+      tone: "failed",
+      text: `This run ended as ${run.status.split("_").join(" ")} and has no scored HDFS block anomalies.`,
+    };
+  }
+  if (run.status === "completed" && anomalyCount === 0) {
+    return {
+      tone: "empty",
+      text: "Analysis completed with no detected HDFS block anomalies. The totals below still cover the whole run.",
+    };
+  }
+  if (run.status === "completed" && pageSize === 0) {
+    return {
+      tone: "empty",
+      text: filtered
+        ? "No HDFS blocks on this page match the current filters. Run totals stay the same."
+        : "No HDFS block anomalies are on this page.",
+    };
+  }
+  return null;
 }
 
 function formatDate(value: string): string {

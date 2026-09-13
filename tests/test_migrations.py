@@ -12,6 +12,8 @@ from src.api.migrations import (
     OBJECT_CHECKSUM_VERSION,
     PACKAGE_ADMISSION_VERSION,
     PREPROCESSING_BUNDLE_VERSION,
+    RESULT_INSPECTION_INDEXES_VERSION,
+    RESULT_INSPECTION_SCORE_INDEX_VERSION,
     SHARED_STATE_VERSION,
     apply_migrations,
     _upgrade_shared_state_sqlite,
@@ -33,6 +35,42 @@ def _table_columns(database: ApiDatabase, table_name: str) -> set[str]:
         else:
             rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
         return {str(dict(row)["name"]) for row in rows}
+
+
+def _index_names(database: ApiDatabase, table_name: str) -> set[str]:
+    with database.session() as connection:
+        if database.uses_postgresql:
+            rows = connection.execute(
+                """
+                SELECT indexname AS name
+                FROM pg_indexes
+                WHERE schemaname = current_schema() AND tablename = ?
+                """,
+                (table_name,),
+            ).fetchall()
+        else:
+            rows = connection.execute(f"PRAGMA index_list({table_name})").fetchall()
+        return {str(dict(row)["name"]) for row in rows}
+
+
+def _index_definition(database: ApiDatabase, index_name: str) -> str:
+    with database.session() as connection:
+        if database.uses_postgresql:
+            row = connection.execute(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = current_schema() AND indexname = ?
+                """,
+                (index_name,),
+            ).fetchone()
+        else:
+            row = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+                (index_name,),
+            ).fetchone()
+    assert row is not None
+    return str(dict(row)["indexdef" if database.uses_postgresql else "sql"])
 
 
 def _applied_versions(database: ApiDatabase) -> set[str]:
@@ -61,7 +99,17 @@ def _assert_shared_state_schema(database: ApiDatabase) -> None:
         PACKAGE_ADMISSION_VERSION,
         OBJECT_CHECKSUM_VERSION,
         PREPROCESSING_BUNDLE_VERSION,
+        RESULT_INSPECTION_INDEXES_VERSION,
+        RESULT_INSPECTION_SCORE_INDEX_VERSION,
     } <= _applied_versions(database)
+    assert {
+        "idx_anomaly_results_run_id",
+        "idx_anomaly_results_run_score_desc",
+        "idx_anomaly_results_run_block_id",
+    } <= _index_names(database, "anomaly_results")
+    score_index = _index_definition(database, "idx_anomaly_results_run_score_desc").upper()
+    assert "CASE WHEN ANOMALY_SCORE IS NULL THEN 1 ELSE 0 END" in score_index
+    assert "ANOMALY_SCORE DESC" in score_index
     assert {
         "id",
         "project_id",
@@ -235,6 +283,67 @@ def test_seeded_initial_schema_preserves_ids_across_shared_state_upgrade(tmp_pat
     with database.session() as connection:
         dataset_count = connection.execute("SELECT COUNT(*) AS n FROM datasets").fetchone()
         assert int(dict(dataset_count)["n"]) == 1
+
+
+def test_result_inspection_indexes_are_idempotent_and_preserve_rows(tmp_path: Path) -> None:
+    database = ApiDatabase(f"sqlite:///{tmp_path / 'api.db'}")
+    apply_migrations(database, target=PREPROCESSING_BUNDLE_VERSION)
+    project_id, user_id, model_id = _seed_model(database)
+    dataset = database.upsert_dataset(
+        project_id=project_id,
+        storage_kind="workspace",
+        object_reference="data/stored-hdfs.log",
+        checksum=None,
+        actor_user_id=user_id,
+    )
+    run = database.create_analysis_run(
+        project_id=project_id,
+        model_version_id=model_id,
+        requested_by_user_id=user_id,
+        log_reference="data/stored-hdfs.log",
+        status="queued",
+        validation_report_json="{}",
+        error_code=None,
+        completed_at=None,
+        dataset_id=UUID(str(dataset["id"])),
+    )
+    run_id = UUID(str(run["id"]))
+    database.transition_analysis_run(
+        run_id,
+        expected_status="queued",
+        next_status="running",
+        actor_user_id=user_id,
+    )
+    anomaly_id = str(uuid4())
+    context_json = '{"matched_line_count": 2, "source_lines": []}'
+    database.transition_analysis_run(
+        run_id,
+        expected_status="running",
+        next_status="completed",
+        actor_user_id=user_id,
+        results_summary_json=(
+            '{"anomaly_count": 1, "invalid_records": 0, "normal_count": 0, "rejected_records": 0}'
+        ),
+        anomaly_results=[
+            {
+                "id": anomaly_id,
+                "record_reference": "blk_1",
+                "anomaly_score": 0.91,
+                "anomaly_level": "anomaly",
+                "decision_threshold": 0.5,
+                "context_json": context_json,
+            }
+        ],
+    )
+
+    apply_migrations(database)
+    apply_migrations(database)
+    _assert_shared_state_schema(database)
+    results = database.list_anomaly_results(run_id)
+    assert len(results) == 1
+    assert results[0]["id"] == anomaly_id
+    assert results[0]["record_reference"] == "blk_1"
+    assert results[0]["context_json"] == context_json
 
 
 def test_sqlite_rejects_object_kind_model_without_checksum(tmp_path: Path) -> None:

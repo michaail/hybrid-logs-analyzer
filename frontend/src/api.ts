@@ -42,6 +42,12 @@ export interface ProjectAccount {
   membership: Membership;
 }
 
+export interface PreprocessingBundleIdentity {
+  identifier: string;
+  version: string;
+  digest: string;
+}
+
 export interface ModelVersion {
   id: string;
   project_id: string;
@@ -62,11 +68,7 @@ export interface ModelVersion {
   storage_kind: StorageKind;
   checksum: string | null;
   inference_ready: boolean;
-  preprocessing_bundle: {
-    identifier: string;
-    version: string;
-    digest: string;
-  } | null;
+  preprocessing_bundle: PreprocessingBundleIdentity | null;
 }
 
 export interface AnalysisRun {
@@ -104,21 +106,67 @@ export interface ValidationReport {
   execution?: string;
 }
 
+export type ResultSort = "score_desc" | "block_id_asc";
+
+export interface AnalysisResultsQueryParams {
+  limit?: number;
+  sort?: ResultSort;
+  block_id_prefix?: string | null;
+  min_score?: number | null;
+  cursor?: string | null;
+}
+
+export interface AnalysisResultsQuery {
+  limit: number;
+  sort: ResultSort;
+  block_id_prefix: string | null;
+  min_score: number | null;
+  cursor: string | null;
+}
+
+export interface HdfsSourceLine {
+  line_number: number | null;
+  raw: string;
+}
+
+export interface HdfsAnomalyContext {
+  matched_line_count: number;
+  source_lines: HdfsSourceLine[];
+}
+
+export interface HdfsAnomalyResult {
+  block_id: string;
+  record_reference: string;
+  anomaly_score: number | null;
+  anomaly_level: string | null;
+  decision_threshold: number | null;
+  context: HdfsAnomalyContext;
+}
+
+export interface AnalysisResultSummary {
+  anomaly_count: number;
+  normal_count: number;
+  rejected_records: number;
+  invalid_records: number;
+}
+
+export interface AnalysisResultTrace {
+  model_identifier: string;
+  version: string;
+  model_version_id: string;
+  pipeline_run_id: string;
+  dataset_checksum: string | null;
+  artifact_checksum: string | null;
+  preprocessing_bundle: PreprocessingBundleIdentity | null;
+}
+
 export interface AnalysisResults {
   run: AnalysisRun;
-  summary: {
-    anomaly_count: number;
-    normal_count: number;
-    rejected_records: number;
-    invalid_records: number;
-  };
-  anomalies: Array<{
-    record_reference: string;
-    anomaly_score: number | null;
-    anomaly_level: string | null;
-    decision_threshold: number | null;
-    context: Record<string, unknown>;
-  }>;
+  summary: AnalysisResultSummary;
+  trace: AnalysisResultTrace;
+  anomalies: HdfsAnomalyResult[];
+  next_cursor: string | null;
+  query: AnalysisResultsQuery;
 }
 
 export interface AuditEvent {
@@ -235,8 +283,12 @@ export class ApiClient {
     return this.request<Dataset>(`/projects/${projectId}/datasets/${datasetId}`);
   }
 
-  getAnalysisResults(projectId: string, analysisRunId: string): Promise<AnalysisResults> {
-    return this.request<AnalysisResults>(`/projects/${projectId}/analysis-runs/${analysisRunId}/results`);
+  getAnalysisResults(
+    projectId: string,
+    analysisRunId: string,
+    query: AnalysisResultsQueryParams = {},
+  ): Promise<AnalysisResults> {
+    return this.request<AnalysisResults>(analysisResultsPath(projectId, analysisRunId, query));
   }
 
   listAuditEvents(projectId: string): Promise<AuditEvent[]> {
@@ -333,6 +385,32 @@ export class ApiClient {
     }
     return JSON.parse(payload) as T;
   }
+}
+
+export function analysisResultsPath(
+  projectId: string,
+  analysisRunId: string,
+  query: AnalysisResultsQueryParams = {},
+): string {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) {
+    params.set("limit", String(query.limit));
+  }
+  if (query.sort !== undefined) {
+    params.set("sort", query.sort);
+  }
+  if (query.block_id_prefix) {
+    params.set("block_id_prefix", query.block_id_prefix);
+  }
+  if (query.min_score !== undefined && query.min_score !== null) {
+    params.set("min_score", String(query.min_score));
+  }
+  if (query.cursor) {
+    params.set("cursor", query.cursor);
+  }
+  const encoded = params.toString();
+  const path = `/projects/${projectId}/analysis-runs/${analysisRunId}/results`;
+  return encoded.length > 0 ? `${path}?${encoded}` : path;
 }
 
 async function responseMessage(response: Response): Promise<string> {

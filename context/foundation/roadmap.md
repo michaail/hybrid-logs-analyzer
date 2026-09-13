@@ -3,7 +3,7 @@ project: "Log Anomaly Detection System"
 version: 1
 status: draft
 created: 2026-09-09
-updated: 2026-09-12
+updated: 2026-09-13
 prd_version: 1
 main_goal: speed
 top_blocker: decisions
@@ -64,7 +64,7 @@ controlled model lifecycle that every later analysis run requires.
 | S-02 | publish-hdfs-model-package | A Publisher can upload a complete HDFS-compatible model package, receive a clear rejection when ineligible, and explicitly publish the eligible version. | F-01, F-02, S-01 | US-01, FR-002, FR-003, FR-004, FR-008 | done |
 | S-03 | intake-hdfs-dataset | An Operator can upload or select an HDFS dataset and receive a clear whole-dataset acceptance or rejection result. | F-01, S-01 | US-02, FR-005, FR-008 | done |
 | S-04 | run-parity-hdfs-analysis | An Operator can start asynchronous analysis of an HDFS dataset with a compatible, published same-project model and see a terminal run status. | F-01, F-02, S-02, S-03 | US-02, FR-006, FR-010, FR-011 | done |
-| S-05 | inspect-hdfs-analysis-results | An Operator can inspect traceable detected anomalies and summaries for normal, rejected, and invalid outcomes. | S-04 | US-02, FR-007, FR-008 | proposed |
+| S-05 | inspect-hdfs-analysis-results | An Operator can inspect traceable detected anomalies and summaries for normal, rejected, and invalid outcomes. | S-04 | US-02, FR-007, FR-008 | done |
 | S-06 | separate-provisional-hdfs-results | An Operator can distinguish finalized anomalies from provisional incomplete HDFS block histories. | F-03, S-04, S-05 | US-03, FR-012 | proposed |
 
 ## Streams
@@ -213,7 +213,7 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 - **Unknowns:** —
 - **Risk:** Results must give useful log context without exposing a different
   project's runs, models, or data.
-- **Status:** proposed
+- **Status:** done
 
 ### S-06: Separate provisional HDFS results
 
@@ -288,3 +288,4 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
 - **S-03: An Operator can upload or select an HDFS dataset and receive a clear whole-dataset acceptance or rejection result.** — Archived 2026-09-10 → `context/archive/2026-09-10-intake-hdfs-dataset/`. Lesson: —.
 - **S-04: An Operator can start asynchronous analysis of an HDFS dataset with a compatible, published same-project model and see a terminal run status.** — Archived 2026-09-12 → `context/archive/2026-09-11-run-parity-hdfs-analysis/`. Lesson: —.
 - **F-03: (foundation) Complete HDFS block histories are available as reproducible evaluation inputs.** — Archived 2026-09-12 → `context/archive/2026-09-12-complete-hdfs-block-evaluation-data/`. Lesson: —.
+- **S-05: An Operator can inspect traceable detected anomalies and summaries for normal, rejected, and invalid outcomes.** — Archived 2026-09-13 → `context/archive/2026-09-12-inspect-hdfs-analysis-results/`. Lesson: —.

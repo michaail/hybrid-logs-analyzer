@@ -70,6 +70,25 @@ def test_inference_rejects_excess_source_lines_before_loading_ml_dependencies(
         )
 
 
+def test_source_lines_keep_the_bounded_scored_sequence() -> None:
+    from src.modules.hdfs_inference import MAX_CONTEXT_LINES, MAX_RAW_CHARS, _source_lines
+
+    class Frame:
+        def to_dict(self, orient: str) -> list[dict[str, object]]:
+            assert orient == "records"
+            return [
+                {"line_number": index, "raw": f"scored-line-{index}"}
+                for index in range(1, 28)
+            ] + [{"line_number": 28, "raw": "x" * (MAX_RAW_CHARS + 12)}]
+
+    lines = _source_lines(Frame())
+    assert len(lines) == MAX_CONTEXT_LINES
+    assert lines[0].line_number == 1
+    assert lines[0].raw == "scored-line-1"
+    assert lines[-1].line_number == MAX_CONTEXT_LINES
+    assert lines[-1].raw == f"scored-line-{MAX_CONTEXT_LINES}"
+
+
 def _mutate_graph_feature(expected: dict[str, Any]) -> dict[str, Any]:
     blocks = expected["blocks"]
     assert isinstance(blocks, list)
