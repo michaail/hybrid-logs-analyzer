@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import shutil
 from collections.abc import Mapping
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 from uuid import UUID
 
 _DELETE_BATCH_SIZE = 1000
+HDFS_REFERENCE_CATALOG_PREFIX = "hdfs/reference-catalog"
+_HDFS_REFERENCE_CATALOG_MANIFEST_NAME = "manifest.json"
+_HDFS_REFERENCE_CATALOG_SELECTED_IDS_NAME = "selected-block-ids.txt"
 
 
 class ObjectStoreConfig(Protocol):
@@ -122,6 +125,28 @@ def preprocessing_bundle_object_key(
 
     member = _require_relative_posix(relative)
     return f"projects/{project_id}/preprocessing-bundles/{bundle_id}/{version}/{member}"
+
+
+def hdfs_reference_catalog_manifest_key() -> str:
+    """Return the deployment-provisioned F-03 catalog manifest object key.
+
+    This prefix is not project-scoped. The catalog is a private inference pin, not
+    an Operator or Publisher upload.
+    """
+
+    return f"{HDFS_REFERENCE_CATALOG_PREFIX}/{_HDFS_REFERENCE_CATALOG_MANIFEST_NAME}"
+
+
+def hdfs_reference_catalog_selected_ids_key(manifest_key: str | None = None) -> str:
+    """Return the sibling selected-ID object key for a catalog manifest key."""
+
+    relative = _require_relative_posix(
+        manifest_key if manifest_key is not None else hdfs_reference_catalog_manifest_key()
+    )
+    parent = PurePosixPath(relative).parent
+    if str(parent) == ".":
+        return _HDFS_REFERENCE_CATALOG_SELECTED_IDS_NAME
+    return f"{parent}/{_HDFS_REFERENCE_CATALOG_SELECTED_IDS_NAME}"
 
 
 def build_object_store(
@@ -261,6 +286,12 @@ def _list_keys(client: S3Client, bucket: str, prefix: str) -> list[str]:
             break
         token = next_token
     return keys
+
+
+def normalize_object_store_key(value: str) -> str:
+    """Return a relative POSIX object key or raise ``ValueError``."""
+
+    return _require_relative_posix(value)
 
 
 def _require_relative_posix(value: str) -> str:

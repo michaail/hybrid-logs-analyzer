@@ -369,10 +369,19 @@ The private inference process also requires a pinned F-03 catalog pair:
 shasum -a 256 artifacts/cache/hdfs/evaluation-data/<fingerprint>/manifest.json
 ```
 
-Set both `INFERENCE_HDFS_COMPLETENESS_MANIFEST` (absolute path to that `manifest.json`)
-and `INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256` (lowercase hex) on the inference
+Set both `INFERENCE_HDFS_COMPLETENESS_MANIFEST` and
+`INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256` (lowercase hex) on the inference
 process only. Leave them out of the public API, the React build, and model-validator
-packages. A missing or checksum-mismatched catalog fails the analysis run; it does not
+packages.
+
+Locally, the manifest value is the absolute path to that ignored `manifest.json`.
+On Railway staging, the same variable is the Bucket object key
+`hdfs/reference-catalog/manifest.json`; upload that file and its sibling
+`selected-block-ids.txt` to the private `models` Bucket and pin the digest as the
+shared `INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256` variable. Inference `/health`
+verifies the catalog before reporting ready.
+
+A missing or checksum-mismatched catalog fails the analysis run; it does not
 treat every block as provisional. Generated evaluation artifacts stay under ignored
 workspace paths and must not be committed.
 
@@ -596,8 +605,9 @@ Roll out S-06 in this order:
 
 1. Build and retain the F-03 artifact outside Git, then record the `manifest.json` SHA-256.
 2. Apply migration `008_provisional_hdfs_results` to the shared database.
-3. Configure and deploy the private inference service with the manifest path and exact
-   SHA-256; verify that it can load the catalog before admitting queued work.
+3. Configure and deploy the private inference service with the manifest location and exact
+   SHA-256 (filesystem path locally; Bucket object key `hdfs/reference-catalog/manifest.json`
+   on Railway); verify `/health` can load the catalog before admitting queued work.
 4. Deploy the public API.
 5. Deploy the frontend.
 

@@ -22,6 +22,8 @@ from fastapi.testclient import TestClient
 
 from src.api.object_store import (
     FilesystemObjectStore,
+    hdfs_reference_catalog_manifest_key,
+    hdfs_reference_catalog_selected_ids_key,
     model_package_object_prefix,
     preprocessing_bundle_object_prefix,
 )
@@ -30,6 +32,7 @@ from src.inference_service.errors import (
     InferenceExecutionError,
     map_completeness_catalog_error,
 )
+from src.inference_service.runner import verify_pinned_catalog
 from src.inference_service.main import create_app
 from src.inference_service.settings import InferenceSettings
 from src.modules.hdfs_completeness import CompletenessCatalogError, REFERENCE_MEMBERSHIP_POLICY
@@ -607,6 +610,7 @@ def test_private_service_subprocess_persists_split_results(tmp_path: Path) -> No
         log_bytes=TRUNCATED_MIXED_LOG,
         catalog_block_ids=["blk_1"],
     )
+    assert settings.hdfs_completeness_manifest is not None
     port = _available_port()
     log_path = tmp_path / "inference-service.log"
     environment = os.environ.copy()
@@ -615,7 +619,9 @@ def test_private_service_subprocess_persists_split_results(tmp_path: Path) -> No
             "API_CODE_ROOT": str(REPO_ROOT),
             "API_OBJECT_STORE_ROOT": str(settings.object_store_root),
             "DATABASE_URL": settings.database_url,
-            "INFERENCE_HDFS_COMPLETENESS_MANIFEST": str(settings.hdfs_completeness_manifest),
+            "INFERENCE_HDFS_COMPLETENESS_MANIFEST": str(
+                settings.hdfs_completeness_manifest
+            ),
             "INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256": (
                 settings.hdfs_completeness_manifest_sha256
             ),
@@ -861,7 +867,67 @@ def test_inference_settings_reject_incomplete_catalog_pair(
     monkeypatch.setenv("INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256", digest)
     loaded = InferenceSettings.from_environment()
     assert loaded.hdfs_completeness_manifest == manifest
+    assert loaded.hdfs_completeness_manifest_object_key is None
     assert loaded.hdfs_completeness_manifest_sha256 == digest
+
+
+def test_inference_settings_treat_relative_key_as_object_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_inference_env(monkeypatch)
+    monkeypatch.setenv("INFERENCE_INTERNAL_TOKEN", TOKEN)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'env.db'}")
+    monkeypatch.setenv(
+        "INFERENCE_HDFS_COMPLETENESS_MANIFEST",
+        "hdfs/reference-catalog/manifest.json",
+    )
+    monkeypatch.setenv("INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256", "a" * 64)
+    loaded = InferenceSettings.from_environment()
+    assert loaded.hdfs_completeness_manifest is None
+    assert loaded.hdfs_completeness_manifest_object_key == (
+        "hdfs/reference-catalog/manifest.json"
+    )
+
+
+def test_health_returns_503_when_catalog_file_missing(tmp_path: Path) -> None:
+    missing = tmp_path / "absent-catalog" / "manifest.json"
+    client, _settings, _database = _client(
+        tmp_path,
+        catalog_manifest=missing,
+        catalog_sha256="a" * 64,
+    )
+    health = client.get("/health")
+    assert health.status_code == 503
+    detail = str(health.json()["detail"])
+    assert "catalog" in detail.lower()
+    assert "absent-catalog" not in detail
+
+
+def test_object_store_catalog_verifies_without_leaking_keys(tmp_path: Path) -> None:
+    manifest, digest = _write_catalog(tmp_path / "catalog-src", ["blk_1"])
+    store = FilesystemObjectStore(tmp_path / "objects")
+    key = hdfs_reference_catalog_manifest_key()
+    store.put(key, manifest.read_bytes())
+    store.put(
+        hdfs_reference_catalog_selected_ids_key(key),
+        (manifest.parent / "selected-block-ids.txt").read_bytes(),
+    )
+    verify_pinned_catalog(
+        store,
+        manifest_path=None,
+        manifest_object_key=key,
+        expected_sha256=digest,
+    )
+    with pytest.raises(InferenceExecutionError) as caught:
+        verify_pinned_catalog(
+            store,
+            manifest_path=None,
+            manifest_object_key="hdfs/reference-catalog/missing.json",
+            expected_sha256=digest,
+        )
+    assert caught.value.code == "COMPLETENESS_CATALOG_UNAVAILABLE"
+    assert "reference-catalog" not in caught.value.public_message
+    assert "missing.json" not in caught.value.public_message
 
 
 def test_catalog_failures_map_to_safe_unavailable_error(tmp_path: Path) -> None:

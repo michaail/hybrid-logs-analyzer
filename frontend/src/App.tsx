@@ -23,6 +23,7 @@ import {
 type View = "models" | "runs" | "administration";
 
 const tokenStorageKey = "logscope.access-token";
+const RESULTS_PAGE_SIZE = 20;
 const api = new ApiClient();
 
 export default function App() {
@@ -1538,6 +1539,7 @@ function ResultsDialog({
 
     void api
       .getAnalysisResults(projectId, runId, {
+        limit: RESULTS_PAGE_SIZE,
         sort,
         block_id_prefix: appliedPrefix,
         min_score: appliedMinScore,
@@ -1579,6 +1581,7 @@ function ResultsDialog({
 
     void api
       .getProvisionalResults(projectId, runId, {
+        limit: RESULTS_PAGE_SIZE,
         block_id_prefix: provisionalAppliedPrefix,
         cursor: provisionalCursor,
       })
@@ -1736,32 +1739,35 @@ function ResultsDialog({
             <div className="results-header">
               <div>
                 <span className="summary-label">HDFS analysis run</span>
-                <h3>{run.log_reference}</h3>
-                {run.dataset_id && <p className="muted">Dataset {run.dataset_id}</p>}
+                <h3>
+                  {fileNameFromReference(run.log_reference)} · {formatDateTime(run.created_at)}
+                </h3>
               </div>
               <StatusBadge status={run.status} />
             </div>
 
             <dl className="results-identity">
               <div>
-                <dt>Run ID</dt>
-                <dd className="technical-id">{run.id}</dd>
-              </div>
-              <div>
                 <dt>Model</dt>
-                <dd>
-                  {trace.model_identifier} · {trace.version}
-                </dd>
+                <dd>{trace.model_identifier}</dd>
               </div>
               <div>
-                <dt>Model version ID</dt>
-                <dd className="technical-id">{trace.model_version_id}</dd>
+                <dt>Model version</dt>
+                <dd>{trace.version}</dd>
               </div>
             </dl>
 
             <details className="results-disclosure">
               <summary>More provenance</summary>
               <dl className="results-provenance">
+                <div>
+                  <dt>Analysis run ID</dt>
+                  <dd className="technical-id">{run.id}</dd>
+                </div>
+                <div>
+                  <dt>Model version ID</dt>
+                  <dd className="technical-id">{trace.model_version_id}</dd>
+                </div>
                 <div>
                   <dt>Pipeline run</dt>
                   <dd className="technical-id">{trace.pipeline_run_id}</dd>
@@ -1921,29 +1927,16 @@ function ResultsDialog({
             )}
 
             {panel === "anomalies" && showInspectionControls && results && (
-              <div className="results-pagination">
-                <button
-                  className="secondary-button"
-                  disabled={isLoading || previousCursors.length === 0}
-                  onClick={goPrevious}
-                  type="button"
-                >
-                  Previous page
-                </button>
-                <p>
-                  Page {previousCursors.length + 1}
-                  {results.next_cursor ? "" : ", last page"}
-                  {` · ${results.anomalies.length} HDFS blocks on this page`}
-                </p>
-                <button
-                  className="secondary-button"
-                  disabled={isLoading || !results.next_cursor}
-                  onClick={goNext}
-                  type="button"
-                >
-                  Next page
-                </button>
-              </div>
+              <ResultPagination
+                hasNext={results.next_cursor !== null}
+                hasPrevious={previousCursors.length > 0}
+                isLoading={isLoading}
+                itemCount={results.anomalies.length}
+                itemLabel="HDFS blocks"
+                onNext={goNext}
+                onPrevious={goPrevious}
+                page={previousCursors.length + 1}
+              />
             )}
 
             {panel === "anomalies" && results.anomalies.length > 0 && (
@@ -1964,6 +1957,19 @@ function ResultsDialog({
                   </article>
                 ))}
               </div>
+            )}
+
+            {panel === "anomalies" && showInspectionControls && results && (
+              <ResultPagination
+                hasNext={results.next_cursor !== null}
+                hasPrevious={previousCursors.length > 0}
+                isLoading={isLoading}
+                itemCount={results.anomalies.length}
+                itemLabel="HDFS blocks"
+                onNext={goNext}
+                onPrevious={goPrevious}
+                page={previousCursors.length + 1}
+              />
             )}
 
             {panel === "provisional" && (
@@ -1995,29 +2001,16 @@ function ResultsDialog({
                   </div>
                 </form>
                 {provisionalResults && (
-                  <div className="results-pagination">
-                    <button
-                      className="secondary-button"
-                      disabled={isProvisionalLoading || provisionalPreviousCursors.length === 0}
-                      onClick={goProvisionalPrevious}
-                      type="button"
-                    >
-                      Previous page
-                    </button>
-                    <p>
-                      Page {provisionalPreviousCursors.length + 1}
-                      {provisionalResults.next_cursor ? "" : ", last page"}
-                      {` · ${provisionalResults.items.length} provisional histories on this page`}
-                    </p>
-                    <button
-                      className="secondary-button"
-                      disabled={isProvisionalLoading || !provisionalResults.next_cursor}
-                      onClick={goProvisionalNext}
-                      type="button"
-                    >
-                      Next page
-                    </button>
-                  </div>
+                  <ResultPagination
+                    hasNext={provisionalResults.next_cursor !== null}
+                    hasPrevious={provisionalPreviousCursors.length > 0}
+                    isLoading={isProvisionalLoading}
+                    itemCount={provisionalResults.items.length}
+                    itemLabel="provisional histories"
+                    onNext={goProvisionalNext}
+                    onPrevious={goProvisionalPrevious}
+                    page={provisionalPreviousCursors.length + 1}
+                  />
                 )}
                 {provisionalResults && provisionalResults.items.length > 0 && (
                   <div className="anomaly-list">
@@ -2026,6 +2019,18 @@ function ResultsDialog({
                       <ProvisionalHistoryCard key={item.block_id} item={item} />
                     ))}
                   </div>
+                )}
+                {provisionalResults && (
+                  <ResultPagination
+                    hasNext={provisionalResults.next_cursor !== null}
+                    hasPrevious={provisionalPreviousCursors.length > 0}
+                    isLoading={isProvisionalLoading}
+                    itemCount={provisionalResults.items.length}
+                    itemLabel="provisional histories"
+                    onNext={goProvisionalNext}
+                    onPrevious={goProvisionalPrevious}
+                    page={provisionalPreviousCursors.length + 1}
+                  />
                 )}
               </>
             )}
@@ -2039,6 +2044,42 @@ function ResultsDialog({
         </div>
       </div>
     </Dialog>
+  );
+}
+
+function ResultPagination({
+  hasNext,
+  hasPrevious,
+  isLoading,
+  itemCount,
+  itemLabel,
+  onNext,
+  onPrevious,
+  page,
+}: {
+  hasNext: boolean;
+  hasPrevious: boolean;
+  isLoading: boolean;
+  itemCount: number;
+  itemLabel: string;
+  onNext: () => void;
+  onPrevious: () => void;
+  page: number;
+}): JSX.Element {
+  return (
+    <div className="results-pagination">
+      <button className="secondary-button" disabled={isLoading || !hasPrevious} onClick={onPrevious} type="button">
+        Previous page
+      </button>
+      <p>
+        Page {page}
+        {hasNext ? "" : ", last page"}
+        {` · ${itemCount} ${itemLabel} on this page`}
+      </p>
+      <button className="secondary-button" disabled={isLoading || !hasNext} onClick={onNext} type="button">
+        Next page
+      </button>
+    </div>
   );
 }
 
@@ -2281,6 +2322,20 @@ function formatDate(value: string): string {
   }).format(date);
 }
 
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
 function formatMetric(value: unknown): string {
   if (typeof value === "number") {
     return Number.isInteger(value) ? String(value) : value.toFixed(4);
@@ -2299,8 +2354,13 @@ function shortId(value: string): string {
   return value.slice(0, 8);
 }
 
+function fileNameFromReference(reference: string): string {
+  const segments = reference.split("/").filter((segment) => segment.length > 0);
+  return segments[segments.length - 1] ?? reference;
+}
+
 function datasetOptionLabel(dataset: Dataset): string {
-  const segments = dataset.object_reference.split("/").filter((segment) => segment.length > 0);
-  const filename = segments[segments.length - 1] ?? dataset.object_reference;
-  return `${filename} · ${shortId(dataset.id)} · ${dataset.storage_kind}`;
+  return `${fileNameFromReference(dataset.object_reference)} · ${shortId(dataset.id)} · ${
+    dataset.storage_kind
+  }`;
 }

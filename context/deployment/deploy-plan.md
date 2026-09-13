@@ -38,8 +38,10 @@ Boundaries that remain in this release:
   starts Uvicorn on Railway's `PORT`, and probes `/health`. `web` uses `Dockerfile`;
   `inference` uses `Dockerfile.inference` and may sleep when idle. `INFERENCE_SERVICE_URL`
   points at the private DNS name `http://inference.railway.internal:8080`. Both services
-  reference one pre-created, environment-level `INFERENCE_INTERNAL_TOKEN` shared variable.
-  Non-staging apply still throws.
+  reference one pre-created, environment-level `INFERENCE_INTERNAL_TOKEN` shared variable
+  and a second shared `INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256` for the pinned F-03
+  catalog digest. Inference also receives `INFERENCE_HDFS_COMPLETENESS_MANIFEST` set to the
+  object key `hdfs/reference-catalog/manifest.json`. Non-staging apply still throws.
 - `src/api/migrations.py` applies versioned, idempotent schema migrations. PostgreSQL migrations
   hold an advisory transaction lock so concurrent deploys cannot race; the web process and
   administrator bootstrap command never create the schema at startup.
@@ -71,14 +73,24 @@ Create these resources in one Railway project and one `staging` environment:
    repository or the React build.
 5. A Hobby-plan spend limit and usage alert before the first deployment.
 
-The initial release intentionally has no Railway Volume. Model packages and Operator HDFS
-logs are admitted as uploads and stored as object-kind rows.
+The initial release intentionally has no Railway Volume. Model packages, Operator HDFS
+logs, and the pinned F-03 reference catalog are stored as object-kind data in the `models`
+Bucket. Inference loads `hdfs/reference-catalog/manifest.json` and its sibling
+`selected-block-ids.txt` from that Bucket; it does not expect a host-path catalog inside
+the image.
 
 ## Service variable contract
 
-Before applying this IaC, create one high-entropy sealed Railway **shared environment variable**
-named `INFERENCE_INTERNAL_TOKEN`. The IaC references it as `ctx.shared.INFERENCE_INTERNAL_TOKEN`
-for both services; do not create separate service-scoped copies.
+Before applying this IaC, create two sealed Railway **shared environment variables**:
+
+- `INFERENCE_INTERNAL_TOKEN`: a high-entropy invocation secret.
+- `INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256`: the lowercase SHA-256 of the retained
+  F-03 `manifest.json` that will be uploaded to the Bucket. Calculate it at provision
+  time; do not commit the digest.
+
+The IaC references both as `ctx.shared.*` for `inference` (the token is also on `web`).
+Do not create separate service-scoped copies. Do not put either value on the frontend
+build.
 
 Set these variables on `web` before deployment:
 
@@ -98,7 +110,15 @@ Set these variables on `web` before deployment:
 Set these variables on `inference` (never on the frontend build):
 
 - `DATABASE_URL` and the Bucket credentials, by the same Railway references as `web`.
+- `INFERENCE_HDFS_COMPLETENESS_MANIFEST`: declared in IaC as
+  `hdfs/reference-catalog/manifest.json`.
+- `INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256`: the shared digest variable above.
 - Do not set `API_JWT_SECRET` on `inference`.
+
+Upload the retained F-03 `manifest.json` and sibling `selected-block-ids.txt` to those
+Bucket keys before the inference service is expected to become healthy. `/health` on
+`inference` verifies the catalog (without exposing object keys) in addition to the
+database; a missing or mismatched catalog is `503`, not an all-provisional run.
 
 Do not set `API_DATABASE_PATH`, `AZURE_OPENAI_*`, or model credentials on this release. The
 React build has no secrets and must not receive any server variable, invocation token, or
@@ -137,7 +157,10 @@ railway up --service inference --detach
 ```
 
 Confirm that the deployment uses `.railway/railway.ts` and its pre-deploy migration command
-succeeds before exposing the domain. Railway's legacy `railway.toml`/`railway.json` deployment
+succeeds before exposing the domain. Before `inference` can pass `/health`, upload the
+pinned catalog objects (manifest + selected-block IDs) to the `models` Bucket at
+`hdfs/reference-catalog/` and confirm the shared digest variable matches `sha256sum` of
+`manifest.json`. Railway's legacy `railway.toml`/`railway.json` deployment
 format is not used because new services cannot opt into it. The IaC definition rejects all
 non-`staging` environments, preventing this first-release configuration from being applied to
 production by mistake.

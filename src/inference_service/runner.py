@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from src.api.object_store import ObjectStore
+from src.api.object_store import (
+    ObjectStore,
+    hdfs_reference_catalog_selected_ids_key,
+    normalize_object_store_key,
+)
 from src.api.storage import (
     PROVISIONAL_REASON_NOT_IN_CATALOG,
     ApiDatabase,
@@ -22,6 +26,7 @@ from src.api.storage import (
 from src.inference_service.errors import InferenceExecutionError, map_completeness_catalog_error
 from src.inference_service.settings import DEFAULT_STALE_RUNNING_SECONDS
 from src.modules.hdfs_completeness import CompletenessCatalogError, HdfsReferenceCatalog
+from src.modules.hdfs_evaluation_data import SELECTED_IDS_NAME
 from src.modules.inference_bundle import (
     DRAIN_CONFIG_NAME,
     DRAIN_PARSER_NAME,
@@ -52,8 +57,9 @@ def execute_analysis_run(
     object_store: ObjectStore,
     *,
     stale_running_seconds: int = DEFAULT_STALE_RUNNING_SECONDS,
-    hdfs_completeness_manifest: Path,
     hdfs_completeness_manifest_sha256: str,
+    hdfs_completeness_manifest: Path | None = None,
+    hdfs_completeness_manifest_object_key: str | None = None,
 ) -> dict[str, Any]:
     """Claim a queued run, score it, and persist a terminal outcome."""
 
@@ -86,6 +92,7 @@ def execute_analysis_run(
             job,
             object_store,
             catalog_manifest=hdfs_completeness_manifest,
+            catalog_manifest_object_key=hdfs_completeness_manifest_object_key,
             catalog_manifest_sha256=hdfs_completeness_manifest_sha256,
         )
         database.transition_analysis_run(
@@ -189,10 +196,16 @@ def _score_job(
     job: DatabaseRow,
     object_store: ObjectStore,
     *,
-    catalog_manifest: Path,
+    catalog_manifest: Path | None,
+    catalog_manifest_object_key: str | None,
     catalog_manifest_sha256: str,
 ) -> _CompletedInference:
-    catalog = _load_pinned_catalog(catalog_manifest, catalog_manifest_sha256)
+    catalog = load_pinned_catalog(
+        object_store,
+        manifest_path=catalog_manifest,
+        manifest_object_key=catalog_manifest_object_key,
+        expected_sha256=catalog_manifest_sha256,
+    )
     if str(job.get("model_status")) != "published":
         raise InferenceExecutionError("INFERENCE_FAILED", cause="model is not published")
     bundle_prefix = job.get("bundle_object_prefix")
@@ -344,6 +357,81 @@ def _infer_from_materialized(
         classification_policy=classification_policy,
         classification_catalog_sha256=classification_catalog_sha256,
     )
+
+
+def verify_pinned_catalog(
+    object_store: ObjectStore,
+    *,
+    manifest_path: Path | None,
+    manifest_object_key: str | None,
+    expected_sha256: str,
+) -> None:
+    """Load the pinned catalog so readiness checks fail closed without scoring."""
+
+    load_pinned_catalog(
+        object_store,
+        manifest_path=manifest_path,
+        manifest_object_key=manifest_object_key,
+        expected_sha256=expected_sha256,
+    )
+
+
+def load_pinned_catalog(
+    object_store: ObjectStore,
+    *,
+    manifest_path: Path | None,
+    manifest_object_key: str | None,
+    expected_sha256: str,
+) -> HdfsReferenceCatalog:
+    """Materialize an object-store catalog if needed, then validate the F-03 pin."""
+
+    if manifest_path is not None:
+        return _load_pinned_catalog(manifest_path, expected_sha256)
+    if not manifest_object_key:
+        raise map_completeness_catalog_error(
+            CompletenessCatalogError(
+                "The HDFS reference catalog configuration is invalid.",
+                reason="invalid_catalog_location",
+            )
+        )
+    try:
+        with tempfile.TemporaryDirectory(prefix="hdfs-catalog-") as tmp:
+            materialized = _materialize_catalog_from_object_store(
+                object_store,
+                manifest_object_key,
+                Path(tmp),
+            )
+            return _load_pinned_catalog(materialized, expected_sha256)
+    except CompletenessCatalogError as error:
+        raise map_completeness_catalog_error(error) from error
+
+
+def _materialize_catalog_from_object_store(
+    object_store: ObjectStore,
+    manifest_key: str,
+    destination: Path,
+) -> Path:
+    try:
+        key = normalize_object_store_key(manifest_key)
+        manifest_bytes = object_store.get(key)
+    except (OSError, ValueError, FileNotFoundError) as error:
+        raise CompletenessCatalogError(
+            "The HDFS reference catalog is missing or unreadable.",
+            reason="manifest_missing",
+        ) from error
+    selected_key = hdfs_reference_catalog_selected_ids_key(key)
+    try:
+        selected_bytes = object_store.get(selected_key)
+    except (OSError, ValueError, FileNotFoundError) as error:
+        raise CompletenessCatalogError(
+            "The HDFS reference catalog selected-block file is missing or unreadable.",
+            reason="selected_ids_missing",
+        ) from error
+    manifest_path = destination / "manifest.json"
+    selected_path = destination / SELECTED_IDS_NAME
+    manifest_path.write_bytes(manifest_bytes)
+    selected_path.write_bytes(selected_bytes)
+    return manifest_path
 
 
 def _load_pinned_catalog(manifest_path: Path, expected_sha256: str) -> HdfsReferenceCatalog:
