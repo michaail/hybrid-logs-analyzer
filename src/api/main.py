@@ -31,6 +31,8 @@ from src.api.schemas import (
     DatasetResponse,
     HdfsAnomalyContext,
     HdfsAnomalyResult,
+    HdfsProvisionalContext,
+    HdfsProvisionalResult,
     HdfsSourceLine,
     LoginRequest,
     MembershipCreate,
@@ -44,6 +46,8 @@ from src.api.schemas import (
     ProjectCreate,
     ProjectResponse,
     ProjectRole,
+    ProvisionalResultsQuery,
+    ProvisionalResultsResponse,
     TokenResponse,
     UserResponse,
 )
@@ -51,7 +55,13 @@ from src.api.inference_dispatch import dispatch_analysis_run
 from src.api.object_store import build_object_store, dataset_object_prefix
 from src.api.security import create_access_token, decode_access_token, hash_password, verify_password
 from src.api.settings import ApiSettings
-from src.api.storage import AnomalyResultPageQuery, ApiDatabase, DatabaseIntegrityError, ResultCursorError
+from src.api.storage import (
+    AnomalyResultPageQuery,
+    ApiDatabase,
+    DatabaseIntegrityError,
+    ProvisionalResultPageQuery,
+    ResultCursorError,
+)
 from src.api.validation import (
     MAX_HDFS_UPLOAD_BYTES,
     ValidationError,
@@ -60,6 +70,10 @@ from src.api.validation import (
     admit_uploaded_zip_package,
 )
 from src.modules.model_package import MAX_ZIP_COMPRESSED_BYTES
+
+_NOT_IN_REFERENCE_CATALOG_REASON = (
+    "This block is not in the pinned reference catalog, so its anomaly decision is provisional."
+)
 
 
 @dataclass(frozen=True)
@@ -649,6 +663,45 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         )
 
     @app.get(
+        "/projects/{project_id}/analysis-runs/{analysis_run_id}/provisional-results",
+        response_model=ProvisionalResultsResponse,
+        tags=["analysis"],
+    )
+    def get_provisional_results(
+        project_id: UUID,
+        analysis_run_id: UUID,
+        results_query: Annotated[ProvisionalResultsQuery, Query()],
+        user: CurrentUser = Depends(get_current_user),
+    ) -> ProvisionalResultsResponse:
+        """Return one typed page of unscored provisional HDFS histories."""
+        require_project_role(project_id, user, {ProjectRole.OPERATOR})
+        run = database.get_analysis_run(analysis_run_id)
+        if run is None or run["project_id"] != str(project_id):
+            raise _not_found("Analysis run")
+        model = database.get_model_version(UUID(str(run["model_version_id"])))
+        if model is None or str(model["project_id"]) != str(project_id):
+            raise _not_found("Analysis run")
+        try:
+            page = database.list_provisional_result_page(
+                analysis_run_id,
+                ProvisionalResultPageQuery(
+                    limit=results_query.limit,
+                    block_id_prefix=results_query.block_id_prefix,
+                    cursor=results_query.cursor,
+                ),
+            )
+        except ResultCursorError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Result cursor is invalid.",
+            ) from None
+        return ProvisionalResultsResponse(
+            items=[_provisional_response(item) for item in page.rows],
+            next_cursor=page.next_cursor,
+            query=results_query,
+        )
+
+    @app.get(
         "/projects/{project_id}/datasets",
         response_model=list[DatasetResponse],
         tags=["datasets"],
@@ -929,6 +982,22 @@ def _anomaly_response(row: Any) -> HdfsAnomalyResult:
     )
 
 
+def _provisional_response(row: Any) -> HdfsProvisionalResult:
+    try:
+        stored_context = json.loads(str(row["context_json"]))
+    except json.JSONDecodeError:
+        stored_context = {}
+    block_id = str(row["record_reference"])
+    context = _hdfs_provisional_context(stored_context)
+    return HdfsProvisionalResult(
+        block_id=block_id,
+        record_reference=block_id,
+        reason_code="not_in_reference_catalog",
+        reason=_NOT_IN_REFERENCE_CATALOG_REASON,
+        context=context,
+    )
+
+
 def _analysis_result_summary(run: Any, response: AnalysisRunResponse) -> AnalysisResultSummary:
     if run["results_summary_json"]:
         payload = json.loads(str(run["results_summary_json"]))
@@ -983,6 +1052,14 @@ def _hdfs_anomaly_context(value: Any) -> HdfsAnomalyContext:
             if projected is not None:
                 lines.append(projected)
     return HdfsAnomalyContext(matched_line_count=matched, source_lines=lines)
+
+
+def _hdfs_provisional_context(value: Any) -> HdfsProvisionalContext:
+    context = _hdfs_anomaly_context(value)
+    return HdfsProvisionalContext(
+        matched_line_count=context.matched_line_count,
+        source_lines=context.source_lines,
+    )
 
 
 def _hdfs_source_line(item: Any) -> HdfsSourceLine | None:

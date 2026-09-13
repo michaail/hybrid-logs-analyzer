@@ -603,28 +603,28 @@ keys.
 
 #### Automated
 
-- [x] 3.1 Golden parity remains unchanged without a scoring-ID selector
-- [x] 3.2 Mixed ML execution persists exclusive heuristic and provisional outcomes
-- [x] 3.3 Invalid catalog configuration fails without partial results
-- [x] 3.4 Existing terminal failures leave both result tables empty
+- [x] 3.1 Golden parity remains unchanged without a scoring-ID selector — 93b04b1
+- [x] 3.2 Mixed ML execution persists exclusive heuristic and provisional outcomes — 93b04b1
+- [x] 3.3 Invalid catalog configuration fails without partial results — 93b04b1
+- [x] 3.4 Existing terminal failures leave both result tables empty — 93b04b1
 
 #### Manual
 
-- [x] 3.5 Mixed private-service execution stores only scores for catalog IDs
-- [x] 3.6 Catalog errors preserve a safe public message
+- [x] 3.5 Mixed private-service execution stores only scores for catalog IDs — 93b04b1
+- [x] 3.6 Catalog errors preserve a safe public message — 93b04b1
 
 ### Phase 4: Expose Project-Scoped Provisional Inspection and the Results Panel
 
 #### Automated
 
-- [ ] 4.1 API/OpenAPI tests cover provisional route, summaries, cursor validation, and isolation
-- [ ] 4.2 Frontend lint, typecheck, and build pass
+- [x] 4.1 API/OpenAPI tests cover provisional route, summaries, cursor validation, and isolation
+- [x] 4.2 Frontend lint, typecheck, and build pass
 
 #### Manual
 
-- [ ] 4.3 Operator reviews and pages provisional histories without scores
-- [ ] 4.4 All-provisional and all-unassigned completed states are clear
-- [ ] 4.5 Cross-project access to either result page is denied
+- [x] 4.3 Operator reviews and pages provisional histories without scores
+- [x] 4.4 All-provisional and all-unassigned completed states are clear
+- [x] 4.5 Cross-project access to either result page is denied
 
 ### Phase 5: Prove Regression Safety and Document Deployment/Rollback
 
