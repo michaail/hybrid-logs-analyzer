@@ -617,24 +617,24 @@ keys.
 
 #### Automated
 
-- [x] 4.1 API/OpenAPI tests cover provisional route, summaries, cursor validation, and isolation
-- [x] 4.2 Frontend lint, typecheck, and build pass
+- [x] 4.1 API/OpenAPI tests cover provisional route, summaries, cursor validation, and isolation — b9230da
+- [x] 4.2 Frontend lint, typecheck, and build pass — b9230da
 
 #### Manual
 
-- [x] 4.3 Operator reviews and pages provisional histories without scores
-- [x] 4.4 All-provisional and all-unassigned completed states are clear
-- [x] 4.5 Cross-project access to either result page is denied
+- [x] 4.3 Operator reviews and pages provisional histories without scores — b9230da
+- [x] 4.4 All-provisional and all-unassigned completed states are clear — b9230da
+- [x] 4.5 Cross-project access to either result page is denied — b9230da
 
 ### Phase 5: Prove Regression Safety and Document Deployment/Rollback
 
 #### Automated
 
-- [ ] 5.1 Real private-service ML subprocess test passes
-- [ ] 5.2 Full Python, ML, Ruff, mypy, and frontend checks pass
+- [x] 5.1 Real private-service ML subprocess test passes
+- [x] 5.2 Full Python, ML, Ruff, mypy, and frontend checks pass
 
 #### Manual
 
-- [ ] 5.3 Disposable migration rollout preserves an existing run
-- [ ] 5.4 Catalog digest is traceable and altered catalog fails safely
-- [ ] 5.5 Notebook/parity release check remains within the agreed tolerance
+- [x] 5.3 Disposable migration rollout preserves an existing run
+- [x] 5.4 Catalog digest is traceable and altered catalog fails safely
+- [x] 5.5 Notebook/parity release check remains within the agreed tolerance

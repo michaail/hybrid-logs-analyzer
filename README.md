@@ -484,6 +484,23 @@ outcomes labelled **heuristically final**. That membership is useful triage evid
 proof that an HDFS lifecycle ended. Histories absent from the catalog are provisional
 and must not appear in the anomaly list or heuristic-final counts.
 
+`GET /projects/{project_id}/analysis-runs/{analysis_run_id}/provisional-results` provides
+the separate, operator-authorized page of those provisional histories. It accepts only
+`limit` (1–100, default 50), literal `block_id_prefix`, and the opaque `cursor` from the
+preceding provisional page; it has no score filter or score-based ordering. Each returned
+record contains a block ID, `not_in_reference_catalog` reason, server-owned explanation,
+and bounded source evidence. It never contains a model score, decision threshold, or
+anomaly level. The route returns an empty page for queued, failed, rejected, and historical
+runs, and rejects a malformed, mismatched, or anomaly-issued cursor with `422`.
+
+The result summary remains run-wide, including while either result page is filtered or
+paginated. Its four existing fields are heuristic anomaly count, heuristic normal count,
+rejected records, and invalid records; `provisional_count` and
+`unassigned_context_line_count` are additive run columns. A parser-matched line with no
+HDFS block ID belongs to neither result page and increments only the unassigned-context
+count. The React outcome view keeps provisional histories in a separate panel and labels
+all scored outcomes as **heuristically final**.
+
 S-04 analysis loads a frozen Drain3 FilePersistence snapshot with the bundle `drain.ini`
 via `DrainParser.load`, then calls `annotate_file` only. It does not fit Drain, re-enrich
 templates, or put parser files in the GAE package. Unmatched admitted lines fail the run
@@ -572,6 +589,40 @@ The cache entry includes:
 Unchanged inputs, shard limits, and git revision reuse the same cache entry. Changing
 corpus, label, or selected-ID bytes produces a distinct artifact even if a path, size, or
 mtime is reused.
+
+### S-06 rollout, verification, and rollback
+
+Roll out S-06 in this order:
+
+1. Build and retain the F-03 artifact outside Git, then record the `manifest.json` SHA-256.
+2. Apply migration `008_provisional_hdfs_results` to the shared database.
+3. Configure and deploy the private inference service with the manifest path and exact
+   SHA-256; verify that it can load the catalog before admitting queued work.
+4. Deploy the public API.
+5. Deploy the frontend.
+
+The catalog is an immutable deployment input, not a browser or API upload. If its manifest
+or selected-ID file changes after the digest is pinned, a new run fails with
+`COMPLETENESS_CATALOG_UNAVAILABLE`; it must not silently classify every block as
+provisional. Retain the exact catalog artifact and digest for every completed run.
+
+Code rollback never drops migration 008's table, index, or columns. The original
+four-field `results_summary_json` remains unchanged, so an older API can still read
+completed runs after a code rollback. Do not remove provisional records or the catalog
+artifact while any run may need inspection.
+
+Run the regression checks in a normal local ML environment or the Linux inference
+environment, not Cursor's restricted native-library sandbox:
+
+```bash
+python -m pytest
+python -m pytest -m ml
+ruff check src tests scripts run_ablation.py
+mypy
+npm --prefix frontend run lint
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
+```
 
 The approved 11,167,740-line corpus build and the controlled `scripts/verify_hdfs_parity.py`
 run against the v3 release are documented manual release checks. They need the

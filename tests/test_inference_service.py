@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import http.client
 import io
 import json
+import os
+import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -62,6 +68,9 @@ UNASSIGNED_LOG = (
     "081109 203615 148 INFO dfs.DataNode$DataXceiver: "
     "Receiving block none src: /10.0.0.1:50010 dest: /10.0.0.2:50010\n"
 ).encode("utf-8")
+TRUNCATED_MIXED_LOG = b"\n".join(
+    (TINY_LOG.splitlines()[0], TINY_LOG.splitlines()[2], UNASSIGNED_LOG.strip())
+) + b"\n"
 UNMATCHED_LOG = (
     "081109 203615 148 INFO dfs.UnknownComponent: xyzzy-unmatched-line blk_9\n"
 ).encode("utf-8")
@@ -196,6 +205,74 @@ def test_strict_annotation_fails_unmatched_lines(tmp_path: Path) -> None:
 
 def _auth() -> dict[str, str]:
     return {"Authorization": f"Bearer {TOKEN}"}
+
+
+def _available_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+def _service_log(log_path: Path) -> str:
+    try:
+        return log_path.read_text(encoding="utf-8")
+    except OSError as error:
+        return f"<unable to read service log: {type(error).__name__}>"
+
+
+def _wait_for_service_health(
+    process: subprocess.Popen[Any],
+    port: int,
+    log_path: Path,
+    *,
+    timeout_seconds: float = 20.0,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "no connection attempt made"
+    while time.monotonic() < deadline:
+        return_code = process.poll()
+        if return_code is not None:
+            raise AssertionError(
+                f"Private inference service exited before becoming healthy ({return_code}).\n"
+                f"{_service_log(log_path)}"
+            )
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1.0)
+        try:
+            connection.request("GET", "/health")
+            response = connection.getresponse()
+            body = response.read().decode("utf-8", errors="replace")
+            if response.status == 200 and body == '{"status":"ok"}':
+                return
+            last_error = f"health returned {response.status}: {body}"
+        except OSError as error:
+            last_error = f"{type(error).__name__}: {error}"
+        finally:
+            connection.close()
+        time.sleep(0.1)
+    raise AssertionError(
+        f"Private inference service did not become healthy: {last_error}\n{_service_log(log_path)}"
+    )
+
+
+def _post_to_service(port: int, path: str) -> tuple[int, str]:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=20.0)
+    try:
+        connection.request("POST", path, body=b"", headers=_auth())
+        response = connection.getresponse()
+        return response.status, response.read().decode("utf-8", errors="replace")
+    finally:
+        connection.close()
+
+
+def _stop_service(process: subprocess.Popen[Any]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=10)
 
 
 def _architecture(embed_dim: int = 2) -> dict[str, Any]:
@@ -519,6 +596,86 @@ def test_mixed_run_persists_exclusive_heuristic_and_provisional_outcomes(tmp_pat
     assert "decision_threshold" not in context
     assert context["matched_line_count"] >= 1
     assert context["source_lines"]
+
+
+@pytest.mark.ml
+def test_private_service_subprocess_persists_split_results(tmp_path: Path) -> None:
+    _client, run_id, database, settings = _seed_queued_job(
+        tmp_path,
+        # blk_1 has only one retained line here: catalog membership remains a
+        # heuristic, so it is still eligible for scoring rather than provisional.
+        log_bytes=TRUNCATED_MIXED_LOG,
+        catalog_block_ids=["blk_1"],
+    )
+    port = _available_port()
+    log_path = tmp_path / "inference-service.log"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "API_CODE_ROOT": str(REPO_ROOT),
+            "API_OBJECT_STORE_ROOT": str(settings.object_store_root),
+            "DATABASE_URL": settings.database_url,
+            "INFERENCE_HDFS_COMPLETENESS_MANIFEST": str(settings.hdfs_completeness_manifest),
+            "INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256": (
+                settings.hdfs_completeness_manifest_sha256
+            ),
+            "INFERENCE_INTERNAL_TOKEN": TOKEN,
+            "PORT": str(port),
+            "PYTHONUNBUFFERED": "1",
+            # The test exercises the shared filesystem store. Do not let a local
+            # .env enable Bucket mode in the child process.
+            "API_OBJECT_STORE_ACCESS_KEY_ID": "",
+            "API_OBJECT_STORE_BUCKET": "",
+            "API_OBJECT_STORE_ENDPOINT": "",
+            "API_OBJECT_STORE_REGION": "",
+            "API_OBJECT_STORE_SECRET_ACCESS_KEY": "",
+        }
+    )
+    with log_path.open("w", encoding="utf-8") as output:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "src.inference_service"],
+            cwd=REPO_ROOT,
+            env=environment,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        try:
+            _wait_for_service_health(process, port, log_path)
+            status_code, body = _post_to_service(
+                port,
+                f"/internal/analysis-runs/{run_id}/execute",
+            )
+            assert status_code == 200, body
+            assert json.loads(body) == {"id": str(run_id), "status": "completed"}
+
+            run = database.get_analysis_run(run_id)
+            assert run is not None
+            assert json.loads(str(run["results_summary_json"])) == {
+                "anomaly_count": 0,
+                "invalid_records": 0,
+                "normal_count": 1,
+                "rejected_records": 0,
+            }
+            assert int(run["provisional_count"] or 0) == 1
+            assert int(run["unassigned_context_line_count"] or 0) == 1
+            assert run["classification_policy"] == REFERENCE_MEMBERSHIP_POLICY
+            assert run["classification_catalog_sha256"] == settings.hdfs_completeness_manifest_sha256
+            assert database.list_anomaly_results(run_id) == []
+
+            provisional = database.list_provisional_results(run_id)
+            assert len(provisional) == 1
+            assert provisional[0]["record_reference"] == "blk_2"
+            assert provisional[0]["reason_code"] == "not_in_reference_catalog"
+            assert "anomaly_score" not in provisional[0].keys()
+            assert "decision_threshold" not in provisional[0].keys()
+        except BaseException as error:
+            output.flush()
+            raise AssertionError(
+                f"{error}\nPrivate inference service output:\n{_service_log(log_path)}"
+            ) from error
+        finally:
+            _stop_service(process)
 
 
 @pytest.mark.ml
