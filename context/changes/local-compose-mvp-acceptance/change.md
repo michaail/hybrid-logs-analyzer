@@ -1,7 +1,7 @@
 ---
 change_id: local-compose-mvp-acceptance
 title: Add local Compose MVP environment and acceptance evidence
-status: implementing
+status: implemented
 created: 2026-09-14
 updated: 2026-09-14
 archived_at: null

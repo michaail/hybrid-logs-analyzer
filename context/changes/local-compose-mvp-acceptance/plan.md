@@ -295,11 +295,11 @@ No schema migration. Existing `tests/postgres/compose.yaml` stays; operators mus
 
 #### Automated
 
-- [x] 3.1 `test -f context/changes/local-compose-mvp-acceptance/acceptance-record.md` succeeds
-- [x] 3.2 `rg -n "compose-acceptance" context/foundation/mvp-alignment-plan.md` shows `done`
-- [x] 3.3 `rg -n "verify-evidence" context/foundation/mvp-alignment-plan.md` shows `done`
+- [x] 3.1 `test -f context/changes/local-compose-mvp-acceptance/acceptance-record.md` succeeds — bd8f8af
+- [x] 3.2 `rg -n "compose-acceptance" context/foundation/mvp-alignment-plan.md` shows `done` — bd8f8af
+- [x] 3.3 `rg -n "verify-evidence" context/foundation/mvp-alignment-plan.md` shows `done` — bd8f8af
 
 #### Manual
 
-- [x] 3.4 Owner confirms `verify_hdfs_parity.py` passed in a normal local ML venv and that `parity-report.json` is not staged
-- [x] 3.5 Owner confirms Compose happy path (v3 publish + golden fixture log) plus validator 503 and catalog mismatch, and that `git status` shows no binaries under `releases/`, `artifacts/`, or `data/`
+- [x] 3.4 Owner confirms `verify_hdfs_parity.py` passed in a normal local ML venv and that `parity-report.json` is not staged — bd8f8af
+- [x] 3.5 Owner confirms Compose happy path (v3 publish + golden fixture log) plus validator 503 and catalog mismatch, and that `git status` shows no binaries under `releases/`, `artifacts/`, or `data/` — bd8f8af
