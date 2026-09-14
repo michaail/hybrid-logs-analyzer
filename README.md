@@ -1,61 +1,165 @@
 # Hybrid Logs Analyzer
 
-HDFS log anomaly detection control plane: FastAPI API, private inference worker,
-isolated model-package validator, and React UI.
+Hybrid Logs Analyzer is an HDFS-only anomaly-detection control plane. It includes
+a FastAPI API, a private inference worker, an isolated model-package validator,
+and a React UI. The public API never deserializes uploaded model artifacts.
+
+## Reproduce a clean checkout
+
+This is the canonical setup path after a fresh clone or `git pull`. It
+distinguishes versioned code from the external artifacts intentionally kept out
+of Git.
+
+### Prerequisites
+
+- Git with submodule support
+- Python 3.10+; the full ML lock is verified on Intel (`x86_64`) macOS
+- Node.js 22 for the React toolchain and Playwright
+- Docker Desktop with Compose v2 to run the full local MVP stack
+
+### 1. Clone or update
 
 Research notebooks (training, ablation, Colab) live in the
 [`research/`](research/) git submodule
 ([hybrid-logs-analyzer-research](https://github.com/michaail/hybrid-logs-analyzer-research)).
-Clone this repository and initialize the submodule so notebooks can import
-`src.modules` from this checkout:
+Clone recursively so notebooks can import `src.modules` from this checkout:
 
 ```bash
+# New checkout
 git clone --recurse-submodules https://github.com/michaail/hybrid-logs-analyzer.git
-# or, in an existing clone:
-git submodule update --init
+cd hybrid-logs-analyzer
+```
+
+For an existing checkout, update both the parent repository and the pinned
+research revision:
+
+```bash
+git pull --ff-only
+git submodule sync --recursive
+git submodule update --init --recursive
 ```
 
 See [`research/README.md`](research/README.md) and
-[`research/notebooks/PROCESS.md`](research/notebooks/PROCESS.md) to run the
-R&D path. Production-facing pipeline behavior stays in `src/modules/` and
-`run_ablation.py` here.
+[`research/notebooks/PROCESS.md`](research/notebooks/PROCESS.md) for the R&D
+path. Production-facing pipeline behavior stays in `src/modules/` and
+`run_ablation.py`.
 
-## Local environment
-
-The local development baseline targets Python 3.10+ on Intel (`x86_64`) macOS. Runtime
-versions are intentionally pinned; do not upgrade them as part of routine environment setup,
-because newer ML releases may not publish Intel macOS builds.
+### 2. Install the reproducible local test environment
 
 ```bash
-# Verify the expected architecture, then create an isolated environment.
-uname -m  # expected: x86_64
+# The full lock intentionally includes the native ML stack.
+uname -m  # expected for the locked local environment: x86_64
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Recreate the exact Intel-compatible runtime and development environment.
 python -m pip install --upgrade pip
 python -m pip install -r requirements-macos-intel.lock.txt
 
-# Verify the local development gates.
+# Frontend and browser test dependencies use the committed lockfile.
+# For nvm users: nvm use 22
+node --version  # expected: v22.x
+npm --prefix frontend ci
+npx --prefix frontend playwright install chromium
+```
+
+Do not regenerate `requirements-macos-intel.lock.txt` during setup. It is the
+verified Intel-compatible environment; updating it requires a dedicated
+compatibility and parity check.
+
+### 3. Verify the checkout before running services
+
+```bash
+source .venv/bin/activate
 python -m pytest
 ruff check src tests scripts run_ablation.py
 mypy
-python -m pip_audit -r requirements.txt
+npm --prefix frontend test
+npm --prefix frontend run build
+npm --prefix frontend run test:e2e
 ```
 
-`pyproject.toml` is the single configuration source for pytest, Ruff, mypy, and the Pydantic
-mypy plugin. Pydantic provides runtime validation for typed boundary models; mypy performs
-static checking. `requirements.txt`, `requirements-macos-intel.txt`, and
-`requirements-dev.txt` are the maintained input pins. `requirements-macos-intel.lock.txt`
-captures the complete environment verified on the Intel development machine. Regenerate
-that lock only as an explicit compatibility task. Colab dependency ranges live in
-`research/requirements-colab.txt`.
+The Playwright command starts an isolated API, SQLite database, object store,
+and Vite server under ignored `.e2e/`; it does not use local `.env` or Compose
+services.
 
-HDFS corpora used for labelled parity remain under ignored `data/raw/`. Copy `.env.example`
-to `.env` for local secrets. Azure OpenAI keys are only required for optional LLM
-enrichment in the research path.
+### 4. Supply external runtime inputs
 
-## FastAPI foundation
+Git intentionally does **not** contain HDFS corpora, generated evaluation
+catalogs, trusted release ZIPs, runtime databases, object-store data, or
+secrets. A clean clone can run the checks above, but a fully working inference
+stack also needs:
+
+- a generated F-03 catalog directory with `manifest.json` and sibling
+  `selected-block-ids.txt`;
+- the catalog manifest's SHA-256; and
+- trusted model-package and preprocessing-bundle ZIPs to exercise the full
+  Publisher upload workflow.
+
+HDFS corpora remain under ignored `data/raw/`. Build the catalog from explicit
+corpus, label, and selected-block-ID inputs as documented in
+[Complete-history HDFS evaluation data](#complete-history-hdfs-evaluation-data).
+
+## Run the verified local Compose MVP
+
+The verified MVP deployment proof is **local Compose**, not Railway. Compose
+uses PostgreSQL, private inference, a private validator, and a named object
+volume. It requires the external F-03 catalog described above.
+
+```bash
+CATALOG_DIR="/absolute/path/to/f03-catalog"
+CATALOG_SHA="$(shasum -a 256 "$CATALOG_DIR/manifest.json" | awk '{print $1}')"
+
+cp compose.env.example compose.env
+export CATALOG_DIR CATALOG_SHA
+python - <<'PY'
+import os
+import re
+import secrets
+from pathlib import Path
+
+path = Path("compose.env")
+values = {
+    "API_JWT_SECRET": secrets.token_urlsafe(48),
+    "POSTGRES_PASSWORD": secrets.token_urlsafe(32),
+    "INFERENCE_INTERNAL_TOKEN": secrets.token_urlsafe(48),
+    "MODEL_VALIDATOR_INTERNAL_TOKEN": secrets.token_urlsafe(48),
+    "HDFS_COMPLETENESS_CATALOG_DIR": os.environ["CATALOG_DIR"],
+    "INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256": os.environ["CATALOG_SHA"],
+}
+text = path.read_text(encoding="utf-8")
+for key, value in values.items():
+    text = re.sub(rf"^{key}=.*$", f"{key}={value}", text, flags=re.MULTILINE)
+path.write_text(text, encoding="utf-8")
+PY
+
+docker compose --env-file compose.env up --build --detach --wait
+docker compose --env-file compose.env ps
+curl --fail http://127.0.0.1:8000/health
+docker compose --env-file compose.env exec web python -m src.api.bootstrap --username admin
+```
+
+Store the bootstrap password outside Git. To stop and remove the local runtime,
+run `docker compose --env-file compose.env down`; add `--volumes` only when you
+intend to delete all local database and object-store data.
+
+`compose.env` is for Compose interpolation and secrets only. Do not copy the
+host-process `DATABASE_URL` from `.env` into it. The Compose stack uses its
+internal PostgreSQL URL. `compose.env.example` documents all required values.
+PostgreSQL is published on host `5433`; do not start
+`tests/postgres/compose.yaml` at the same time because it uses that port too.
+
+### What each local path proves
+
+- **Verification commands:** code, API, inference, frontend, and isolated
+  browser checks from the repository.
+- **Compose:** the full service topology with a real private validator and
+  pinned catalog.
+- **Host-process development:** faster local iteration; described below. It
+  still requires private validator and inference processes for live register
+  and analysis.
+
+## Development and architecture
+
+### FastAPI control plane
 
 The HDFS-only API provides administrator-provisioned accounts, project isolation, auditable
 model registration/publication, and analysis-run validation. It stores metadata in the database
@@ -63,39 +167,6 @@ configured by `DATABASE_URL`. Publishers upload a complete HDFS model package ZI
 declared package files are persisted in object storage (a local filesystem root by default, or
 an S3-compatible Bucket when those credentials are configured). The public API process never
 deserializes a model artifact.
-
-### Local Compose (verified MVP proof)
-
-The verified HDFS MVP deployment proof is **local Compose**, not Railway. Copy
-`compose.env.example` to `compose.env`, set the F-03 catalog host path and SHA-256,
-generate high-entropy JWT and tokens, then:
-
-```bash
-cp compose.env.example compose.env
-# Fill API_JWT_SECRET, POSTGRES_PASSWORD, INFERENCE_INTERNAL_TOKEN,
-# MODEL_VALIDATOR_INTERNAL_TOKEN, HDFS_COMPLETENESS_CATALOG_DIR, and
-# INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256.
-
-docker compose --env-file compose.env up --build
-docker compose --env-file compose.env exec web python -m src.api.bootstrap --username admin
-```
-
-Wait for the one-shot `migrate` service to finish before bootstrap. The API is at
-`http://127.0.0.1:8000` (container 8080). Postgres is published on host `5433` so
-`pytest -m postgres` can use the same database; do not start
-`tests/postgres/compose.yaml` at the same time.
-
-A missing or mismatched catalog makes inference `/health` return 503 (not
-all-provisional). `compose.yaml` always sets the validator URL+token pair on `web`;
-omitting that pair would be a mis-template, and register would 503 with no model row.
-The validator has no JWT, database URL, or object-store volume.
-
-`scripts/e2e_serve.py` remains UI smoke (files-only validator, disposable SQLite). It is
-not Compose proof and not Torch-validator proof. Playwright is not Compose proof.
-
-Railway staging, Bucket, private DNS, and cold start are **unexecuted** future hosting
-design. Recorded Compose acceptance (after the evidence run) is
-`context/changes/local-compose-mvp-acceptance/acceptance-record.md`.
 
 ### Host-process development
 
@@ -139,7 +210,7 @@ uvicorn src.api.main:create_app --factory --reload
 python -m src.inference_service
 
 # Terminal 3 — React client
-cd frontend && npm install && npm run dev
+cd frontend && npm ci && npm run dev
 ```
 
 Set `INFERENCE_SERVICE_URL` (for example `http://127.0.0.1:8080`) and the same
@@ -247,11 +318,17 @@ from the validator file.
 
 Publishers register with `POST /projects/{project_id}/models` as multipart ZIP (`package` and
 `preprocessing_bundle`) and explicitly
-publish an eligible version. Operators admit a UTF-8 HDFS log with
+publish an eligible version. A same-project Publisher can remove an unused eligible or
+published version with `DELETE /projects/{project_id}/models/{model_version_id}` (204).
+Operators admit a UTF-8 HDFS log with
 `POST /projects/{project_id}/datasets` (multipart field `log`, 32 MiB cap). A valid file
 becomes a new `storage_kind=object` dataset with a SHA-256 checksum. Invalid, empty,
 oversize, or non-UTF-8 payloads return 422 with a validation report, persist no object, and
-insert no row. Analysis starts with `POST /projects/{project_id}/analysis-runs` using
+insert no row. A same-project Operator (Publisher satisfies Operator) can remove an unused
+uploaded dataset with `DELETE /projects/{project_id}/datasets/{dataset_id}` (204). Either
+DELETE returns 409 when analysis runs still reference the resource; rows and objects stay
+unchanged, and runs, results, and audit history are not deleted. Analysis starts with
+`POST /projects/{project_id}/analysis-runs` using
 `{ model_version_id, dataset_id }` only. Missing or foreign datasets return 404. The API
 copies the dataset object key into `log_reference`; it does not re-scan the log at analyze
 time. An unpublished model returns 409 before any run
@@ -465,7 +542,7 @@ request through the selected project, and leaves authorization decisions to the 
 Run the API first, then start the development client in another terminal:
 
 ```bash
-cd frontend && npm install && npm run dev
+cd frontend && npm ci && npm run dev
 ```
 
 Vite proxies API paths to `http://127.0.0.1:8000` during local development (`E2E_API_ORIGIN`
@@ -531,9 +608,9 @@ use empty `evidence.json`. The E2E API validator is the existing Torch-free
 `tests/support/files_only_validator.py` subprocess. A committed v1 directory
 `tests/fixtures/model_packages/rejected_v1/` is a 422 oracle, not an upload fixture.
 
-Cleanup: there is no public model-delete API. Each suite start deletes `.e2e/` and creates
-a new SQLite file and object store. Tests also use unique identities so parallel workers
-cannot collide.
+Cleanup: E2E isolation still wipes `.e2e/` rather than calling the public DELETE routes.
+Each suite start deletes `.e2e/` and creates a new SQLite file and object store. Tests also
+use unique identities so parallel workers cannot collide.
 
 Add a new E2E test only when the risk crosses UI, auth, routing, API, and persistence.
 Cross-project model isolation stays in `tests/test_api.py`; do not duplicate it in

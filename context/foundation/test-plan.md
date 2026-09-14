@@ -63,7 +63,7 @@ research's job, see §1 principle #3).
 | #3 | Ineligible ZIP → structured reject + no row; unpublished version cannot start analysis | HTTP 201 on upload means the version is usable | Eligibility vs publish vs analysis gate | integration (ZIP + status) | Snapshot of validator internals; expected `issues[]` copied from current code |
 | #4 | Control plane admits/rejects without loading the `.pt`; validator environment has no app secrets | “Validator ran” means Torch in the API process is acceptable | Where the artifact is probed vs stored; env-scrub contract | integration / contract | Importing Torch in API tests “to be realistic” |
 | #5 | Duplicate or failed insert leaves only the first declared prefix, or nothing | HTTP 409/5xx implies storage was cleaned | put vs insert vs delete-prefix; Bucket error list | integration against the store adapter | Mocking the store so cleanup never runs |
-| #6 | Success copy only after an allowed 2xx; 403 shows the API error (Register/Publish stay visible and still send). Select is local published-only state, not a role 403 | A disabled Select means the Operator was denied | Current-user identity has no project role; which calls fire for register/publish; how 403 is shown | component tests with a fake API (bootstrap runner if needed) | Browser e2e; treating disabled Select as the role oracle; hiding buttons as the security control |
+| #6 | Operators do not see Register/Publish/Remove. If those actions are shown, success copy only after an allowed 2xx and 403 shows the API error. Select is local published-only state, not a role 403 | A disabled Select means the Operator was denied | Current-user identity has no project role; which calls fire for register/publish; how 403 is shown | component tests with a fake API (bootstrap runner if needed) | treating disabled Select as the role oracle; treating hidden buttons as the only security control |
 | #7 | Queued or failed runs are readable without fake anomaly pages; exhausted dispatch stays queued; provisional pages omit score/threshold and do not change heuristically-final counts | HTTP 200 on a result page means the run succeeded; catalog membership means every block is scored | Run status vs result vs provisional collections; immutable admitted inputs vs live settings; heuristic catalog vs lifecycle proof | existing HTTP/integration tests (name in §6; do not add new ones in this refresh) | Parity checksums as oracles; browser e2e; copying current scorer output as the expected value |
 
 ## 3. Phased Rollout
@@ -188,17 +188,19 @@ Do not duplicate dataset IDOR
 `/projects/{id}/audit-events` for member isolation (admin-only, different
 403).
 
-Risk #7 oracles already exist; cite them, do not rewrite them. Queued
-dispatch is non-terminal; exhausted activation preserves queued; result
-reads of queued or failed runs stay **200** with empty pages and zero
-summaries; cursor pages are project-scoped and keep run-wide summaries;
-provisional uses a separate page, omits score/threshold, and does not
-change heuristically-final counts.
+Risk #7 oracles already exist; cite them, do not rewrite them. A newly
+created run is initially `queued`; exhausted activation transitions a
+still-queued run to terminal `failed` with `INFERENCE_DISPATCH_FAILED`.
+Result reads of queued or failed runs stay **200** with empty pages and
+zero summaries; cursor pages are project-scoped and keep run-wide
+summaries; provisional uses a separate page, omits score/threshold, and
+does not change heuristically-final counts.
 
 - `test_published_v2_model_queues_and_schedules_dispatch` — published v2
   model creates a `queued` run and schedules dispatch.
-- `test_exhausted_dispatch_preserves_queued_run` — exhausted activation
-  leaves the run `queued`.
+- `test_exhausted_dispatch_marks_queued_run_failed` — exhausted activation
+  changes the still-queued run to `failed` with
+  `INFERENCE_DISPATCH_FAILED`.
 - `test_result_pages_expose_empty_queued_and_failed_run_states` — queued
   and failed runs return empty result pages and zero summaries.
 - `test_result_pages_are_typed_project_scoped_and_keep_run_wide_summaries`
@@ -226,12 +228,15 @@ To add a Register/Publish (or similar) deny test:
 3. Assert `role="alert"` contains that detail, `role="status"` success copy is
    absent (`was registered as eligible` / `is now published`), and the stub was
    called.
-4. Leave Register/Publish visible. Do not hide buttons by role. Hiding is not
-   the security control.
+4. Operators do not see Register / Publish / Remove on Models. Those controls
+   stay on the Publisher (and Administrator) surface. HTTP 403 remains the
+   security control if the action is invoked.
 
 Reference: `frontend/src/App.role-deny.test.tsx` —
-`shows a Register 403 alert and does not render success status` (dialog alert)
-and `shows a Publish 403 alert and does not render success status` (page alert).
+`shows a Register 403 alert and does not render success status` (dialog alert),
+`shows a Publish 403 alert and does not render success status` (page alert when
+the action is shown), and
+`hides register, publish, and remove when the caller cannot manage models`.
 
 Select is published-only local state. Do not assert `disabled` as Operator deny.
 
@@ -247,9 +252,9 @@ HTTP 403 / no-row oracles stay in pytest — cite, do not rewrite:
 paths. They are not this unauthorized-role UI oracle and not the HTTP isolation
 oracle.
 
-The shell check for Operator deny copy is
-`frontend/e2e/operator-denied-register-publish.spec.ts` (Banner-only; pytest
-remains the no-row / still-eligible oracle).
+The shell check for Operator model-action visibility is
+`frontend/e2e/operator-denied-register-publish.spec.ts` (buttons absent;
+pytest remains the no-row / still-eligible oracle).
 
 ### 6.4 Adding a test for a new API endpoint
 
@@ -337,7 +342,8 @@ every agent edit; use `npm --prefix frontend run test:e2e` (or
 Start from `frontend/e2e/seed.spec.ts`. Auth tokens are restored from
 `playwright/.auth/` (gitignored). Unique `model_identifier` / `version` come
 from `scripts/e2e_package.py` over `tests/fixtures/model_packages/valid_files/`.
-The suite wipes `.e2e/` at process start; there is no model-delete API.
+The suite wipes `.e2e/` at process start rather than relying on public
+model or dataset DELETE routes for isolation.
 
 Current specs:
 

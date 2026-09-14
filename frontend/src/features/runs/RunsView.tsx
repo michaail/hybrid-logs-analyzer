@@ -12,6 +12,7 @@ export function RunsView({
   onOpenAnalysis,
   onShowResults,
   onUploadDataset,
+  onRemoveDataset,
   onUnauthorized,
 }: {
   models: ModelVersion[];
@@ -21,6 +22,7 @@ export function RunsView({
   onOpenAnalysis: () => void;
   onShowResults: (run: AnalysisRun) => void;
   onUploadDataset: (logFile: File) => Promise<void>;
+  onRemoveDataset: (dataset: Dataset) => Promise<void>;
   onUnauthorized: (error: unknown) => void;
 }): JSX.Element {
   return (
@@ -28,78 +30,110 @@ export function RunsView({
       <div className="section-heading">
         <div>
           <p className="eyebrow">Analysis workspace</p>
-          <h2>Validate an HDFS log dataset</h2>
+          <h2>HDFS analysis</h2>
           <p className="muted">
-            {selectedModel
-              ? `Using ${selectedModel.model_identifier} ${selectedModel.version}${
-                  selectedModel.inference_ready ? "." : ". This published model is not inference-ready."
-                }`
-              : "Select a published model in the Models view before starting an analysis."}
+            Upload datasets, start a run with a published model, and review outcomes as separate
+            steps.
           </p>
         </div>
-        <button className="primary-button" disabled={!selectedModel} type="button" onClick={onOpenAnalysis}>
-          Start analysis
-        </button>
       </div>
 
-      {selectedModel && (
-        <div className="selection-summary">
-          <div>
-            <span className="summary-label">Selected model</span>
-            <strong>
-              {selectedModel.model_identifier} <span>·</span> {selectedModel.version}
-            </strong>
+      <div className="workspace-stack">
+        <section className="workspace-panel" aria-labelledby="analysis-starter-heading">
+          <div className="workspace-panel-heading">
+            <div className="workspace-panel-copy">
+              <p className="eyebrow">Run starter</p>
+              <h3 id="analysis-starter-heading">Start analysis</h3>
+              <p className="muted">
+                {selectedModel
+                  ? `Using ${selectedModel.model_identifier} ${selectedModel.version}${
+                      selectedModel.inference_ready
+                        ? "."
+                        : ". This published model is not inference-ready."
+                    }`
+                  : "Select a published model in the Models view before starting an analysis."}
+              </p>
+            </div>
+            <button
+              className="primary-button"
+              disabled={!selectedModel}
+              type="button"
+              onClick={onOpenAnalysis}
+            >
+              Start analysis
+            </button>
           </div>
-          <StatusBadge status={selectedModel.status} />
-        </div>
-      )}
+          {selectedModel && (
+            <div className="selection-summary">
+              <div>
+                <span className="summary-label">Selected model</span>
+                <strong>
+                  {selectedModel.model_identifier} <span>·</span> {selectedModel.version}
+                </strong>
+              </div>
+              <StatusBadge status={selectedModel.status} />
+            </div>
+          )}
+        </section>
 
-      <DatasetPanel
-        datasets={datasets}
-        onUpload={onUploadDataset}
-        onUnauthorized={onUnauthorized}
-      />
-
-      {runs.length === 0 ? (
-        <EmptyState
-          title="No analysis runs yet"
-          description="Start with a published model and an accepted HDFS dataset from this project."
+        <DatasetPanel
+          datasets={datasets}
+          onUpload={onUploadDataset}
+          onRemove={onRemoveDataset}
+          onUnauthorized={onUnauthorized}
         />
-      ) : (
-        <div className="runs-list">
-          {runs.map((run) => {
-            const model = models.find((candidate) => candidate.id === run.model_version_id);
-            return (
-              <article className="run-card" key={run.id}>
-                <div className="run-primary">
-                  <div className="run-status-line">
-                    <StatusBadge status={run.status} />
-                    <span className="run-id">Run {shortId(run.id)}</span>
-                  </div>
-                  <strong>{run.log_reference}</strong>
-                  {run.dataset_id && (
-                    <span className="muted">Dataset {shortId(run.dataset_id)}</span>
-                  )}
-                  <span className="muted">
-                    {model ? `${model.model_identifier} ${model.version}` : "Model version unavailable"} ·{" "}
-                    {formatDate(run.created_at)}
-                  </span>
-                </div>
-                <div className="run-outcome">
-                  {run.error_code && <code>{run.error_code}</code>}
-                  <button className="secondary-button" type="button" onClick={() => onShowResults(run)}>
-                    View outcome
-                  </button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      )}
 
-      {(runs.some((run) => run.status === "queued") || runs.some((run) => run.status === "running")) && (
-        <p className="auto-refresh-note">In-progress runs refresh automatically every five seconds.</p>
-      )}
+        <section className="workspace-panel" aria-labelledby="analysis-runs-heading">
+          <div className="workspace-panel-copy">
+            <p className="eyebrow">History</p>
+            <h3 id="analysis-runs-heading">Analysis runs</h3>
+            <p className="muted">
+              Queued and finished validations for this project. Open an outcome to inspect the
+              durable report.
+            </p>
+          </div>
+          {runs.length === 0 ? (
+            <EmptyState
+              title="No analysis runs yet"
+              description="Start with a published model and an accepted HDFS dataset from this project."
+            />
+          ) : (
+            <div className="runs-list">
+              {runs.map((run) => {
+                const model = models.find((candidate) => candidate.id === run.model_version_id);
+                return (
+                  <article className="run-card" key={run.id}>
+                    <div className="run-primary">
+                      <div className="run-status-line">
+                        <StatusBadge status={run.status} />
+                        <span className="run-id">Run {shortId(run.id)}</span>
+                      </div>
+                      <strong>{run.log_reference}</strong>
+                      {run.dataset_id && (
+                        <span className="muted">Dataset {shortId(run.dataset_id)}</span>
+                      )}
+                      <span className="muted">
+                        {model ? `${model.model_identifier} ${model.version}` : "Model version unavailable"}{" "}
+                        · {formatDate(run.created_at)}
+                      </span>
+                    </div>
+                    <div className="run-outcome">
+                      {run.error_code && <code>{run.error_code}</code>}
+                      <button className="secondary-button" type="button" onClick={() => onShowResults(run)}>
+                        View outcome
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+          {(runs.some((run) => run.status === "queued") ||
+            runs.some((run) => run.status === "running")) && (
+            <p className="auto-refresh-note">In-progress runs refresh automatically every five seconds.</p>
+          )}
+        </section>
+      </div>
     </section>
   );
 }

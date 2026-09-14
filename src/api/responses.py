@@ -72,12 +72,13 @@ def account_summary(row: Any) -> AccountSummary:
     )
 
 
-def project_response(row: Any) -> ProjectResponse:
+def project_response(row: Any, *, role: ProjectRole | None = None) -> ProjectResponse:
     """Map a stored project row to the public project schema."""
     return ProjectResponse(
         id=UUID(str(row["id"])),
         name=str(row["name"]),
         created_at=str(row["created_at"]),
+        role=role,
     )
 
 

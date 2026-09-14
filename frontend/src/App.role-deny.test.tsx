@@ -3,14 +3,23 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { ApiError, ModelVersion } from "./api";
+import { ApiError, Dataset, ModelVersion } from "./api";
 import { Banner } from "./components/Banner";
 import { ModelRegistrationDialog } from "./features/models/ModelRegistrationDialog";
 import { ModelsView } from "./features/models/ModelsView";
-import { publishedStatusMessage, publishModelWithStatus, registeredStatusMessage } from "./features/models/status";
+import {
+  deletedStatusMessage,
+  publishedStatusMessage,
+  publishModelWithStatus,
+  registeredStatusMessage,
+} from "./features/models/status";
+import { DatasetPanel } from "./features/runs/DatasetPanel";
 import { messageFor } from "./lib/errors";
+import { shortId } from "./lib/format";
 
 const ROLE_DENIED = "Insufficient project role.";
+const MODEL_REFERENCED = "This model version is referenced by analysis runs.";
+const DATASET_REFERENCED = "This dataset is referenced by analysis runs.";
 
 function eligibleModel(): ModelVersion {
   return {
@@ -37,8 +46,24 @@ function eligibleModel(): ModelVersion {
   };
 }
 
+function sampleDataset(): Dataset {
+  return {
+    id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    project_id: "project-a",
+    storage_kind: "object",
+    object_reference: "datasets/project-a/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/log",
+    checksum: "abc",
+    source_compatibility: "hdfs",
+    created_at: "2026-09-14T00:00:00Z",
+  };
+}
+
 function roleDeniedError(): ApiError {
   return new ApiError(ROLE_DENIED, 403);
+}
+
+function conflictError(detail: string): ApiError {
+  return new ApiError(detail, 409);
 }
 
 function PublishModelHarness({
@@ -70,9 +95,86 @@ function PublishModelHarness({
       <ModelsView
         models={[model]}
         selectedModelId={null}
+        canManageModels
         onPublish={onPublish}
         onRegister={() => undefined}
+        onRemove={async () => undefined}
         onSelectModel={() => undefined}
+      />
+    </div>
+  );
+}
+
+function RemoveModelHarness({
+  model,
+  deleteModel,
+}: {
+  model: ModelVersion;
+  deleteModel: (model: ModelVersion) => Promise<void>;
+}): JSX.Element {
+  const [notice, setNotice] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
+
+  async function onRemove(target: ModelVersion): Promise<void> {
+    setPageError(null);
+    try {
+      await deleteModel(target);
+      setNotice(deletedStatusMessage(target));
+    } catch (error) {
+      setPageError(messageFor(error));
+    }
+  }
+
+  return (
+    <div>
+      {notice ? <Banner tone="success" message={notice} onDismiss={() => setNotice(null)} /> : null}
+      {pageError ? (
+        <Banner tone="error" message={pageError} onDismiss={() => setPageError(null)} />
+      ) : null}
+      <ModelsView
+        models={[model]}
+        selectedModelId={null}
+        canManageModels
+        onPublish={async () => undefined}
+        onRegister={() => undefined}
+        onRemove={onRemove}
+        onSelectModel={() => undefined}
+      />
+    </div>
+  );
+}
+
+function RemoveDatasetHarness({
+  dataset,
+  deleteDataset,
+}: {
+  dataset: Dataset;
+  deleteDataset: (dataset: Dataset) => Promise<void>;
+}): JSX.Element {
+  const [notice, setNotice] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
+
+  async function onRemove(target: Dataset): Promise<void> {
+    setPageError(null);
+    try {
+      await deleteDataset(target);
+      setNotice(`HDFS dataset ${shortId(target.id)} was removed.`);
+    } catch (error) {
+      setPageError(messageFor(error));
+    }
+  }
+
+  return (
+    <div>
+      {notice ? <Banner tone="success" message={notice} onDismiss={() => setNotice(null)} /> : null}
+      {pageError ? (
+        <Banner tone="error" message={pageError} onDismiss={() => setPageError(null)} />
+      ) : null}
+      <DatasetPanel
+        datasets={[dataset]}
+        onUpload={async () => undefined}
+        onRemove={onRemove}
+        onUnauthorized={() => undefined}
       />
     </div>
   );
@@ -115,6 +217,25 @@ describe("Register and Publish role-deny copy", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("hides register, publish, and remove when the caller cannot manage models", () => {
+    render(
+      <ModelsView
+        models={[eligibleModel()]}
+        selectedModelId={null}
+        canManageModels={false}
+        onPublish={async () => undefined}
+        onRegister={() => undefined}
+        onRemove={async () => undefined}
+        onSelectModel={() => undefined}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Register trained model" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Publish version" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Select model" })).toBeTruthy();
+  });
+
   it("shows a Publish 403 alert and does not render success status", async () => {
     const user = userEvent.setup();
     const model = eligibleModel();
@@ -129,5 +250,83 @@ describe("Register and Publish role-deny copy", () => {
     expect((await screen.findByRole("alert")).textContent).toContain(ROLE_DENIED);
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.queryByText(publishedStatusMessage(model))).toBeNull();
+  });
+});
+
+describe("Remove deny copy", () => {
+  it("shows a model Remove 403 alert and keeps the action visible", async () => {
+    const user = userEvent.setup();
+    const model = eligibleModel();
+    const deleteModel = vi.fn().mockRejectedValue(roleDeniedError());
+
+    render(<RemoveModelHarness model={model} deleteModel={deleteModel} />);
+
+    expect(screen.getByRole("button", { name: "Remove" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    expect(screen.getByRole("dialog").textContent).toContain(
+      `${model.model_identifier} version ${model.version}`,
+    );
+    await user.click(screen.getByRole("button", { name: "Remove model" }));
+
+    expect(deleteModel).toHaveBeenCalledTimes(1);
+    expect(deleteModel).toHaveBeenCalledWith(model);
+    expect((await screen.findByRole("alert")).textContent).toContain(ROLE_DENIED);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(deletedStatusMessage(model))).toBeNull();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeTruthy();
+  });
+
+  it("shows a model Remove 409 alert and does not render success status", async () => {
+    const user = userEvent.setup();
+    const model = eligibleModel();
+    const deleteModel = vi.fn().mockRejectedValue(conflictError(MODEL_REFERENCED));
+
+    render(<RemoveModelHarness model={model} deleteModel={deleteModel} />);
+
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await user.click(screen.getByRole("button", { name: "Remove model" }));
+
+    expect(deleteModel).toHaveBeenCalledTimes(1);
+    expect((await screen.findByRole("alert")).textContent).toContain(MODEL_REFERENCED);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(deletedStatusMessage(model))).toBeNull();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeTruthy();
+  });
+
+  it("shows a dataset Remove 403 alert and keeps the action visible", async () => {
+    const user = userEvent.setup();
+    const dataset = sampleDataset();
+    const deleteDataset = vi.fn().mockRejectedValue(roleDeniedError());
+
+    render(<RemoveDatasetHarness dataset={dataset} deleteDataset={deleteDataset} />);
+
+    expect(screen.getByRole("button", { name: "Remove" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    expect(screen.getByRole("dialog").textContent).toContain(shortId(dataset.id));
+    await user.click(screen.getByRole("button", { name: "Remove dataset" }));
+
+    expect(deleteDataset).toHaveBeenCalledTimes(1);
+    expect(deleteDataset).toHaveBeenCalledWith(dataset);
+    expect((await screen.findByRole("alert")).textContent).toContain(ROLE_DENIED);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(`HDFS dataset ${shortId(dataset.id)} was removed.`)).toBeNull();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeTruthy();
+  });
+
+  it("shows a dataset Remove 409 alert and does not render success status", async () => {
+    const user = userEvent.setup();
+    const dataset = sampleDataset();
+    const deleteDataset = vi.fn().mockRejectedValue(conflictError(DATASET_REFERENCED));
+
+    render(<RemoveDatasetHarness dataset={dataset} deleteDataset={deleteDataset} />);
+
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await user.click(screen.getByRole("button", { name: "Remove dataset" }));
+
+    expect(deleteDataset).toHaveBeenCalledTimes(1);
+    expect((await screen.findByRole("alert")).textContent).toContain(DATASET_REFERENCED);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(`HDFS dataset ${shortId(dataset.id)} was removed.`)).toBeNull();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeTruthy();
   });
 });

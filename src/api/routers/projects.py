@@ -15,8 +15,9 @@ from src.api.schemas import (
     MembershipRoleUpdate,
     ProjectCreate,
     ProjectResponse,
+    ProjectRole,
 )
-from src.api.storage import ApiDatabase, DatabaseIntegrityError
+from src.api.storage import ApiDatabase, DatabaseIntegrityError, DatabaseRow
 
 router = APIRouter(tags=["projects"])
 
@@ -28,7 +29,7 @@ def list_projects(
 ) -> list[ProjectResponse]:
     """List projects visible through the caller's membership or administration role."""
     return [
-        project_response(project)
+        project_response(project, role=_project_viewer_role(database, project, user))
         for project in database.list_projects_for_user(user.id, user.is_administrator)
     ]
 
@@ -152,3 +153,15 @@ def list_project_memberships(
     if database.get_project(project_id) is None:
         raise not_found("Project")
     return [membership_response(item) for item in database.list_memberships(project_id)]
+
+
+def _project_viewer_role(
+    database: ApiDatabase, project: DatabaseRow, user: CurrentUser
+) -> ProjectRole | None:
+    """Return the caller's membership role, or None for administrators."""
+    if user.is_administrator:
+        return None
+    membership = database.get_membership(UUID(str(project["id"])), user.id)
+    if membership is None:
+        return None
+    return ProjectRole(str(membership["role"]))

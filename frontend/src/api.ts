@@ -20,6 +20,7 @@ export interface Project {
   id: string;
   name: string;
   created_at: string;
+  role: ProjectRole | null;
 }
 
 export interface AccountSummary {
@@ -288,6 +289,10 @@ export class ApiClient {
     });
   }
 
+  deleteModel(projectId: string, modelId: string): Promise<void> {
+    return this.request<void>(`/projects/${projectId}/models/${modelId}`, { method: "DELETE" });
+  }
+
   listAnalysisRuns(projectId: string): Promise<AnalysisRun[]> {
     return this.request<AnalysisRun[]>(`/projects/${projectId}/analysis-runs`);
   }
@@ -314,6 +319,10 @@ export class ApiClient {
 
   getDataset(projectId: string, datasetId: string): Promise<Dataset> {
     return this.request<Dataset>(`/projects/${projectId}/datasets/${datasetId}`);
+  }
+
+  deleteDataset(projectId: string, datasetId: string): Promise<void> {
+    return this.request<void>(`/projects/${projectId}/datasets/${datasetId}`, { method: "DELETE" });
   }
 
   getAnalysisResults(

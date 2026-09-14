@@ -1,59 +1,39 @@
 // operator-denied-register-publish.spec.ts
-// Risk: the UI shows Register/Publish as successful when the API denies an
-// Operator (test-plan risk #6). Banner-only oracle; pytest remains the no-row
-// / still-eligible check. Seeded from seed.spec.ts locators. Same-project
+// Risk: an Operator is offered Publisher model actions (test-plan risk #6).
+// Banner-only 403 oracles remain in Vitest for when those actions are shown.
+// pytest remains the HTTP no-row / still-eligible check. Same-project
 // Operator token — not project-b-user (that actor is 404 on project A).
 
 import { expect, test } from "./fixtures";
 import {
   modelArticle,
-  openPublisherWorkspace,
+  openWorkspace,
   operatorPublishSeedPackage,
-  operatorRegisterPackage,
   registerEligibleViaPublisherApi,
-  registerPackage,
 } from "./helpers/publication";
 
-const ROLE_DENIED = "Insufficient project role.";
-
-test.describe("operator role-deny banners", () => {
+test.describe("operator model-action visibility", () => {
   test.use({ role: "operator" });
 
-  test("operator register 403 shows dialog alert and no success status", async ({ page }) => {
-    const pkg = operatorRegisterPackage();
-    await openPublisherWorkspace(page);
+  test("operator does not see register or remove model actions", async ({ page }) => {
+    await openWorkspace(page);
 
-    const response = await registerPackage(page, pkg.zipPath, pkg.bundleZipPath);
-    expect(response.status()).toBe(403);
-
-    const dialog = page.getByRole("dialog", { name: "Register trained model" });
-    await expect(dialog.getByRole("alert")).toContainText(ROLE_DENIED);
-    await expect(dialog.getByRole("button", { name: "Register model" })).toBeVisible();
-    await expect(
-      page.getByRole("status").filter({ hasText: "was registered as eligible" }),
-    ).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Register trained model" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Remove" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Publish version" })).toHaveCount(0);
   });
 
-  test("operator publish 403 shows page alert and no success status", async ({ page, request }) => {
+  test("operator does not see publish on an eligible same-project model", async ({
+    page,
+    request,
+  }) => {
     const pkg = operatorPublishSeedPackage();
     await registerEligibleViaPublisherApi(request, pkg.zipPath, pkg.bundleZipPath);
-    await openPublisherWorkspace(page);
+    await openWorkspace(page);
 
     const article = modelArticle(page, pkg.identifier, pkg.version);
-    await expect(article.getByRole("button", { name: "Publish version" })).toBeVisible();
-
-    const pendingPublish = page.waitForResponse((response) => {
-      return (
-        response.request().method() === "POST" &&
-        /\/projects\/[^/]+\/models\/[^/]+\/publish$/.test(new URL(response.url()).pathname)
-      );
-    });
-    await article.getByRole("button", { name: "Publish version" }).click();
-    expect((await pendingPublish).status()).toBe(403);
-
-    await expect(page.getByRole("alert")).toContainText(ROLE_DENIED);
-    await expect(
-      page.getByRole("status").filter({ hasText: `${pkg.identifier} ${pkg.version} is now published.` }),
-    ).toHaveCount(0);
+    await expect(article).toBeVisible();
+    await expect(article.getByRole("button", { name: "Publish version" })).toHaveCount(0);
+    await expect(article.getByRole("button", { name: "Remove" })).toHaveCount(0);
   });
 });

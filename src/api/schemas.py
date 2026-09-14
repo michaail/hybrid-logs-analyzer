@@ -127,6 +127,7 @@ class ProjectResponse(ApiModel):
     id: UUID
     name: str
     created_at: str
+    role: ProjectRole | None = None
 
 
 class MembershipCreate(ApiModel):
