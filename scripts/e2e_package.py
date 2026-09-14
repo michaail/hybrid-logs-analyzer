@@ -2,7 +2,7 @@
 
 Rewrites only identity fields. Never loads or executes ``model.pt``.
 Requires numpy (see ``requirements-e2e.txt``) because the shared bundle fixture
-writes ``embeddings.npz``.
+writes ``embeddings.npz``. Does not import pytest test modules.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tests.test_inference_bundle import _v2_package, _write_bundle  # noqa: E402
+from tests.support.hdfs_v2_release import _v2_package, _write_bundle  # noqa: E402
 
 
 def _sha256(path: Path) -> str:

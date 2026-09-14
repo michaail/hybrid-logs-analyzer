@@ -3,123 +3,31 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 import io
 import json
 import zipfile
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
 from src.modules.inference_bundle import (
-    BUNDLE_FORMAT,
     DRAIN_CONFIG_NAME,
     DRAIN_PARSER_NAME,
     EMBEDDINGS_NAME,
-    NODE_FEATURE_EXTRA_DIM,
-    bundle_digest,
     validate_packaged_release,
     validate_preprocessing_bundle,
     validate_preprocessing_bundle_source,
 )
-from src.modules.model_package import MANIFEST_NAME, PACKAGE_FORMAT_V1, PACKAGE_FORMAT_V2, PackageArchitecture
-from tests.test_model_package import TINY_ARCHITECTURE, _assert_has_issue, _write_package
-
-V2_ARCHITECTURE = {
-    **TINY_ARCHITECTURE,
-    "node_dim": 2 + NODE_FEATURE_EXTRA_DIM,
-}
-
-
-def _sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def _embeddings_bytes(
-    *,
-    cluster_ids: list[int] | None = None,
-    width: int = 2,
-    values: np.ndarray | None = None,
-) -> bytes:
-    ids = np.asarray(cluster_ids if cluster_ids is not None else [1, 2], dtype=np.int64)
-    vectors = values if values is not None else np.ones((ids.size, width), dtype=np.float32)
-    buffer = io.BytesIO()
-    np.savez_compressed(buffer, cluster_ids=ids, embeddings=vectors)
-    return buffer.getvalue()
-
-
-def _bundle_manifest(checksums: dict[str, str], **overrides: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "identifier": "attribute-gae-preprocessing",
-        "version": "v2",
-        "source_compatibility": "hdfs",
-        "format": BUNDLE_FORMAT,
-        "digest": bundle_digest(checksums),
-        "files": {
-            "drain_config": DRAIN_CONFIG_NAME,
-            "drain_parser": DRAIN_PARSER_NAME,
-            "embeddings": EMBEDDINGS_NAME,
-            "checksums": checksums,
-        },
-    }
-    payload.update(overrides)
-    return payload
-
-
-def _write_bundle(
-    root: Path,
-    *,
-    embeddings: bytes | None = None,
-    extra_files: dict[str, bytes] | None = None,
-    checksum_override: dict[str, str] | None = None,
-    manifest_overrides: dict[str, Any] | None = None,
-) -> Path:
-    bundle = root / "bundle"
-    bundle.mkdir(parents=True, exist_ok=True)
-    drain_config = b"[DRAIN]\nst=0.4\n"
-    drain_parser = b"drain-state"
-    embeddings_bytes = embeddings if embeddings is not None else _embeddings_bytes()
-    (bundle / DRAIN_CONFIG_NAME).write_bytes(drain_config)
-    (bundle / DRAIN_PARSER_NAME).write_bytes(drain_parser)
-    (bundle / EMBEDDINGS_NAME).write_bytes(embeddings_bytes)
-    checksums = {
-        DRAIN_CONFIG_NAME: _sha256(drain_config),
-        DRAIN_PARSER_NAME: _sha256(drain_parser),
-        EMBEDDINGS_NAME: _sha256(embeddings_bytes),
-    }
-    if checksum_override:
-        checksums.update(checksum_override)
-    payload = _bundle_manifest(checksums, **(manifest_overrides or {}))
-    if checksum_override and "digest" not in (manifest_overrides or {}):
-        payload["digest"] = bundle_digest(checksums)
-    (bundle / MANIFEST_NAME).write_text(json.dumps(payload), encoding="utf-8")
-    for name, content in (extra_files or {}).items():
-        extra_path = bundle / name
-        extra_path.parent.mkdir(parents=True, exist_ok=True)
-        extra_path.write_bytes(content)
-    return bundle
-
-
-def _v2_package(root: Path, digest: str, **package_kwargs: Any) -> Path:
-    manifest = {
-        "model_identifier": "attribute-gae",
-        "version": "v2",
-        "source_compatibility": "hdfs",
-        "format": PACKAGE_FORMAT_V2,
-        "metrics": {"best_threshold": 0.147},
-        "architecture": dict(V2_ARCHITECTURE),
-        "scoring": {"alpha": 1.0, "beta": 1.0, "gamma": 0.0},
-        "files": {"artifact": "model.pt", "evidence": "evidence.json", "checksums": {}},
-        "preprocessing_bundle": {
-            "identifier": "attribute-gae-preprocessing",
-            "version": "v2",
-            "digest": digest,
-        },
-    }
-    if "manifest" in package_kwargs:
-        return _write_package(root, **package_kwargs)
-    return _write_package(root, manifest=manifest, **package_kwargs)
+from src.modules.model_package import MANIFEST_NAME, PACKAGE_FORMAT_V1, PackageArchitecture
+from tests.support.hdfs_v2_release import (
+    V2_ARCHITECTURE,
+    _embeddings_bytes,
+    _manifest_payload,
+    _v2_package,
+    _write_bundle,
+    _write_package,
+)
+from tests.test_model_package import _assert_has_issue
 
 
 def test_inference_bundle_source_does_not_import_torch() -> None:
@@ -219,8 +127,6 @@ def test_zip_slip_bundle_is_rejected(tmp_path: Path) -> None:
 
 
 def test_v1_package_is_rejected_even_with_companion_bundle(tmp_path: Path) -> None:
-    from tests.test_model_package import _manifest_payload
-
     package = _write_package(tmp_path, manifest=_manifest_payload(format=PACKAGE_FORMAT_V1))
     bundle = _write_bundle(tmp_path)
     result = validate_packaged_release(package, bundle)

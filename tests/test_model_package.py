@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 import io
 import json
 import zipfile
@@ -17,7 +16,6 @@ from src.modules.model_package import (
     MAX_ZIP_COMPRESSED_BYTES,
     MAX_ZIP_UNCOMPRESSED_BYTES,
     PACKAGE_FORMAT_V1,
-    PACKAGE_FORMAT_V2,
     PackageArchitecture,
     expected_state_dict_spec,
     materialize_declared_package_files,
@@ -26,22 +24,12 @@ from src.modules.model_package import (
     validate_model_package_source,
     validate_state_dict,
 )
-
-TINY_ARCHITECTURE = {
-    "node_dim": 2,
-    "edge_dim": 1,
-    "hidden_dim": 2,
-    "latent_dim": 2,
-    "gine_aggregation": "sum",
-    "node_transformation": "mlp",
-    "edge_mean": [0.0],
-    "edge_std": [0.2],
-}
-DEFAULT_PREPROCESSING_BUNDLE = {
-    "identifier": "attribute-gae-preprocessing",
-    "version": "v2",
-    "digest": "a" * 64,
-}
+from tests.support.hdfs_v2_release import (
+    TINY_ARCHITECTURE,
+    _manifest_payload,
+    _sha256,
+    _write_package,
+)
 
 
 class FakeTensor:
@@ -50,62 +38,6 @@ class FakeTensor:
     def __init__(self, shape: tuple[int, ...], dtype: str = "float32") -> None:
         self.shape = shape
         self.dtype = dtype
-
-
-def _sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def _manifest_payload(**overrides: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "model_identifier": "attribute-gae",
-        "version": "v1",
-        "source_compatibility": "hdfs",
-        "format": PACKAGE_FORMAT_V2,
-        "metrics": {"best_threshold": 0.147, "test_roc_auc": 0.97},
-        "architecture": dict(TINY_ARCHITECTURE),
-        "scoring": {"alpha": 1.0, "beta": 1.0, "gamma": 0.0},
-        "files": {
-            "artifact": "model.pt",
-            "evidence": "evidence.json",
-            "checksums": {},
-        },
-        "preprocessing_bundle": dict(DEFAULT_PREPROCESSING_BUNDLE),
-    }
-    payload.update(overrides)
-    return payload
-
-
-def _write_package(
-    root: Path,
-    *,
-    manifest: dict[str, Any] | None = None,
-    artifact: bytes = b"dummy-artifact",
-    evidence: dict[str, Any] | None = None,
-    extra_files: dict[str, bytes] | None = None,
-) -> Path:
-    package = root / "package"
-    package.mkdir(parents=True, exist_ok=True)
-    evidence_payload = {"evaluation": "notebook baseline", "status": "passed"}
-    if evidence is not None:
-        evidence_payload = evidence
-    artifact_bytes = artifact
-    evidence_bytes = json.dumps(evidence_payload).encode("utf-8")
-    (package / "model.pt").write_bytes(artifact_bytes)
-    (package / "evidence.json").write_text(json.dumps(evidence_payload), encoding="utf-8")
-    payload = _manifest_payload() if manifest is None else manifest
-    files = dict(payload["files"])
-    files["checksums"] = {
-        files["artifact"]: _sha256(artifact_bytes),
-        files["evidence"]: _sha256(evidence_bytes),
-    }
-    payload = {**payload, "files": files}
-    (package / MANIFEST_NAME).write_text(json.dumps(payload), encoding="utf-8")
-    for name, content in (extra_files or {}).items():
-        extra_path = package / name
-        extra_path.parent.mkdir(parents=True, exist_ok=True)
-        extra_path.write_bytes(content)
-    return package
 
 
 def _complete_state_dict(
