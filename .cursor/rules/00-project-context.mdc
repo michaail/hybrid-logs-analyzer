@@ -12,3 +12,4 @@ alwaysApply: true
 
 ## Environment
 - **Do not regenerate `requirements-macos-intel.lock.txt`**
+- **Research notebooks live in the `research/` git submodule; do not reintroduce `src/notebooks/` here**

@@ -24,7 +24,7 @@ bundle.
 
 | Field | Value |
 | --- | --- |
-| Notebook | `src/notebooks/6_GAE_Training_Colab.ipynb` |
+| Notebook | `research/notebooks/6_GAE_Training_Colab.ipynb` |
 | Configuration | `configs/hdfs_baseline.yaml` |
 | Pipeline run id | `hdfs_gae_20260829_104013_baseline` |
 | Code commit | Unrecovered — waived (Colab output never recorded it) |

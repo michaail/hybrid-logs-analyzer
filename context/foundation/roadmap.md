@@ -257,7 +257,7 @@ user-confirmed). Foundations below assume these are present and do not re-scaffo
    v1 handling is follow-on `retire-v1`. `feature_contract: notebook_raw_v1` is
    graph-feature semantics, not a package format. — Owner: user. Block: none.
 4. **Which notebook and configuration form the agreed parity baseline?
-   (resolved 2026-09-13)** — Notebook `src/notebooks/6_GAE_Training_Colab.ipynb`,
+   (resolved 2026-09-13)** — Notebook `research/notebooks/6_GAE_Training_Colab.ipynb`,
    config `configs/hdfs_baseline.yaml`, run `hdfs_gae_20260829_104013_baseline`.
    The active pin is `context/foundation/hdfs-parity-baseline.md` (exact
    `best_threshold`; test F1 / PR-AUC / ROC-AUC within `0.01`). Operator

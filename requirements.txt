@@ -1,5 +1,5 @@
 # PyTorch and torch-geometric are intentionally omitted.  Google Colab ships
-# PyTorch; scripts/install_colab.py installs PyG wheels compatible with it.
+# PyTorch; research/scripts/install_colab.py installs PyG wheels compatible with it.
 drain3==0.9.11
 fastapi==0.115.12
 fastparquet==2024.11.0
