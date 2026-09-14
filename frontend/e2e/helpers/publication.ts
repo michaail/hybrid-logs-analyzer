@@ -1,6 +1,10 @@
-import type { Page, Response } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
+
+import type { APIRequestContext, Page, Response } from "@playwright/test";
 
 import { expect } from "../fixtures";
+import { readAccounts, readAuthToken } from "./accounts";
 import { uniquePackageIdentity, writePackageZip } from "./packages";
 
 export function eligiblePackage(): ReturnType<typeof writePackageZip> {
@@ -9,6 +13,14 @@ export function eligiblePackage(): ReturnType<typeof writePackageZip> {
 
 export function ineligiblePackage(): ReturnType<typeof writePackageZip> {
   return writePackageZip("ineligible", uniquePackageIdentity("e2e.reject"));
+}
+
+export function operatorRegisterPackage(): ReturnType<typeof writePackageZip> {
+  return writePackageZip("eligible", uniquePackageIdentity("e2e.op.reg"));
+}
+
+export function operatorPublishSeedPackage(): ReturnType<typeof writePackageZip> {
+  return writePackageZip("eligible", uniquePackageIdentity("e2e.op.pub"));
 }
 
 export function modelArticle(page: Page, identifier: string, version: string) {
@@ -39,4 +51,30 @@ export async function registerPackage(
   });
   await dialog.getByRole("button", { name: "Register model" }).click();
   return pending;
+}
+
+export async function registerEligibleViaPublisherApi(
+  request: APIRequestContext,
+  zipPath: string,
+): Promise<void> {
+  const accounts = readAccounts();
+  const headers = { Authorization: `Bearer ${readAuthToken("publisher")}` };
+  const listed = await request.get(`${accounts.apiOrigin}/projects`, { headers });
+  expect(listed.ok(), await listed.text()).toBeTruthy();
+  const projects = (await listed.json()) as Array<{ id: string; name: string }>;
+  const projectA = projects.find((project) => project.name === accounts.projectAName);
+  if (!projectA) {
+    throw new Error(`Project ${accounts.projectAName} was not listed for the publisher.`);
+  }
+  const created = await request.post(`${accounts.apiOrigin}/projects/${projectA.id}/models`, {
+    headers,
+    multipart: {
+      package: {
+        name: path.basename(zipPath),
+        mimeType: "application/zip",
+        buffer: fs.readFileSync(zipPath),
+      },
+    },
+  });
+  expect(created.status(), await created.text()).toBe(201);
 }

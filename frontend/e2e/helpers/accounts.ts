@@ -11,10 +11,11 @@ export interface E2EAccounts {
   projectBName: string;
   admin: { username: string; password: string };
   publisherA: { username: string; password: string };
+  operatorA: { username: string; password: string };
   projectBUser: { username: string; password: string };
 }
 
-export type E2ERole = "publisher" | "project-b-user";
+export type E2ERole = "publisher" | "operator" | "project-b-user";
 
 export function readAccounts(): E2EAccounts {
   const accountsPath = path.join(authDir, "accounts.json");

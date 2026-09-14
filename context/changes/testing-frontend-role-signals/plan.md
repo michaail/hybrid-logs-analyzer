@@ -355,22 +355,22 @@ Operator; isolated `.e2e/` DB is wiped each suite start.
 
 #### Automated
 
-- [x] 1.1 `npm --prefix frontend test` passes, including Register and Publish 403 tests
-- [x] 1.2 `npm --prefix frontend run typecheck` and `npm --prefix frontend run lint` pass
+- [x] 1.1 `npm --prefix frontend test` passes, including Register and Publish 403 tests — feca89c
+- [x] 1.2 `npm --prefix frontend run typecheck` and `npm --prefix frontend run lint` pass — feca89c
 
 #### Manual
 
-- [x] 1.3 Confirm tests stub `registerModel`/`publishModel` (or equivalent), assert alert + no success status, and do not treat Select disabled as the oracle
+- [x] 1.3 Confirm tests stub `registerModel`/`publishModel` (or equivalent), assert alert + no success status, and do not treat Select disabled as the oracle — feca89c
 
 ### Phase 2: Same-project Operator Playwright spec
 
 #### Automated
 
-- [ ] 2.1 `npm --prefix frontend run test:e2e` passes, including the new Operator deny spec and existing Publisher specs
+- [x] 2.1 `npm --prefix frontend run test:e2e` passes, including the new Operator deny spec and existing Publisher specs
 
 #### Manual
 
-- [ ] 2.2 Confirm the spec uses a same-project Operator token, asserts Banner copy only, and does not use `project-b-user` or screenshots as the oracle
+- [x] 2.2 Confirm the spec uses a same-project Operator token, asserts Banner copy only, and does not use `project-b-user` or screenshots as the oracle
 
 ### Phase 3: CI and cookbook
 

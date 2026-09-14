@@ -78,6 +78,10 @@ def prepare_environment(api_port: int) -> ApiSettings:
             "username": _username("E2E_PUBLISHER_USERNAME", "e2e.publisher.a"),
             "password": _password("E2E_PUBLISHER_PASSWORD"),
         },
+        "operatorA": {
+            "username": _username("E2E_OPERATOR_USERNAME", "e2e.operator.a"),
+            "password": _password("E2E_OPERATOR_PASSWORD"),
+        },
         "projectBUser": {
             "username": _username("E2E_PROJECT_B_USER_USERNAME", "e2e.operator.b"),
             "password": _password("E2E_PROJECT_B_USER_PASSWORD"),
