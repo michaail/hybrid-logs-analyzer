@@ -1258,6 +1258,48 @@ def test_openapi_exposes_administration_lifecycle_without_legacy_user_create(
     assert "ModelRegistrationRequest" not in schema["components"]["schemas"]
 
 
+_OPENAPI_TAG_MAP: dict[str, dict[str, list[str]]] = {
+    "/health": {"get": ["health"]},
+    "/auth/token": {"post": ["authentication"]},
+    "/users/me": {"get": ["users"]},
+    "/admin/project-accounts": {"post": ["administration"]},
+    "/admin/users": {"get": ["administration"]},
+    "/admin/users/{user_id}/activation": {"patch": ["administration"]},
+    "/admin/audit-events": {"get": ["administration"]},
+    "/projects/{project_id}/audit-events": {"get": ["administration"]},
+    "/projects": {"get": ["projects"], "post": ["projects"]},
+    "/projects/{project_id}/members": {"get": ["projects"], "post": ["projects"]},
+    "/projects/{project_id}/members/{user_id}": {
+        "patch": ["projects"],
+        "delete": ["projects"],
+    },
+    "/projects/{project_id}/models": {"get": ["models"], "post": ["models"]},
+    "/projects/{project_id}/models/{model_version_id}": {"get": ["models"]},
+    "/projects/{project_id}/models/{model_version_id}/publish": {"post": ["models"]},
+    "/projects/{project_id}/analysis-runs": {"get": ["analysis"], "post": ["analysis"]},
+    "/projects/{project_id}/analysis-runs/{analysis_run_id}": {"get": ["analysis"]},
+    "/projects/{project_id}/analysis-runs/{analysis_run_id}/results": {"get": ["analysis"]},
+    "/projects/{project_id}/analysis-runs/{analysis_run_id}/provisional-results": {
+        "get": ["analysis"]
+    },
+    "/projects/{project_id}/datasets": {"get": ["datasets"], "post": ["datasets"]},
+    "/projects/{project_id}/datasets/{dataset_id}": {"get": ["datasets"]},
+}
+
+
+def test_openapi_tags_match_domain_routers(api: ApiFixture) -> None:
+    schema = api.client.get("/openapi.json").json()
+    paths = schema["paths"]
+    for path, methods in _OPENAPI_TAG_MAP.items():
+        assert path in paths, path
+        for method, tags in methods.items():
+            assert method in paths[path], f"{method} {path}"
+            assert paths[path][method]["tags"] == tags, f"{method} {path}"
+    assert "/register" not in paths
+    assert "/signup" not in paths
+    assert "/auth/register" not in paths
+
+
 def _publisher_client(api: ApiFixture) -> tuple[TestClient, dict[str, str], str]:
     administrator = _login(api.client, "admin")
     project = _create_project(api.client, administrator, "incident-a")
@@ -1639,7 +1681,7 @@ def test_published_v2_model_queues_and_schedules_dispatch(
         dispatched.append(run_id)
         return DispatchOutcome.ok()
 
-    monkeypatch.setattr("src.api.main.dispatch_analysis_run", fake_dispatch)
+    monkeypatch.setattr("src.api.routers.analysis.dispatch_analysis_run", fake_dispatch)
     client = api.client
     administrator = _login(client, "admin")
     project = _create_project(client, administrator, "incident-a")
@@ -1768,7 +1810,7 @@ def _queued_v2_run(
     log_content: bytes = VALID_HDFS_LOG,
 ) -> tuple[TestClient, dict[str, str], dict[str, Any], dict[str, Any], str]:
     monkeypatch.setattr(
-        "src.api.main.dispatch_analysis_run",
+        "src.api.routers.analysis.dispatch_analysis_run",
         lambda *args, **kwargs: DispatchOutcome.ok(),
     )
     client = api.client

@@ -1,14 +1,14 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ApiError, ModelVersion } from "./api";
-import {
-  ModelRegistrationDialog,
-  PublishModelHarness,
-  publishedStatusMessage,
-  registeredStatusMessage,
-} from "./App";
+import { Banner } from "./components/Banner";
+import { ModelRegistrationDialog } from "./features/models/ModelRegistrationDialog";
+import { ModelsView } from "./features/models/ModelsView";
+import { publishedStatusMessage, publishModelWithStatus, registeredStatusMessage } from "./features/models/status";
+import { messageFor } from "./lib/errors";
 
 const ROLE_DENIED = "Insufficient project role.";
 
@@ -39,6 +39,43 @@ function eligibleModel(): ModelVersion {
 
 function roleDeniedError(): ApiError {
   return new ApiError(ROLE_DENIED, 403);
+}
+
+function PublishModelHarness({
+  model,
+  publishModel,
+}: {
+  model: ModelVersion;
+  publishModel: (model: ModelVersion) => Promise<void>;
+}): JSX.Element {
+  const [notice, setNotice] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
+
+  async function onPublish(target: ModelVersion): Promise<void> {
+    setPageError(null);
+    try {
+      const status = await publishModelWithStatus(() => publishModel(target), target);
+      setNotice(status);
+    } catch (error) {
+      setPageError(messageFor(error));
+    }
+  }
+
+  return (
+    <div>
+      {notice ? <Banner tone="success" message={notice} onDismiss={() => setNotice(null)} /> : null}
+      {pageError ? (
+        <Banner tone="error" message={pageError} onDismiss={() => setPageError(null)} />
+      ) : null}
+      <ModelsView
+        models={[model]}
+        selectedModelId={null}
+        onPublish={onPublish}
+        onRegister={() => undefined}
+        onSelectModel={() => undefined}
+      />
+    </div>
+  );
 }
 
 describe("Register and Publish role-deny copy", () => {
