@@ -1,4 +1,4 @@
-"""Dispatch configuration, bounded retry, and non-terminal activation failures."""
+"""Dispatch configuration, bounded retry, and activation-failure outcomes."""
 
 from __future__ import annotations
 
@@ -10,7 +10,11 @@ from uuid import uuid4
 
 import pytest
 
-from src.api.inference_dispatch import dispatch_analysis_run
+from src.api.inference_dispatch import (
+    INFERENCE_DISPATCH_FAILED,
+    DispatchOutcome,
+    dispatch_analysis_run,
+)
 from src.api.settings import ApiSettings
 
 
@@ -42,7 +46,8 @@ def test_retries_after_first_startup_failure_then_succeeds(tmp_path: Path) -> No
             raise ConnectionRefusedError("connection refused")
         return 200
 
-    dispatch_analysis_run(run_id, _settings(tmp_path), post=post, sleep=lambda _: None)
+    outcome = dispatch_analysis_run(run_id, _settings(tmp_path), post=post, sleep=lambda _: None)
+    assert outcome == DispatchOutcome.ok()
     assert len(attempts) == 2
 
 
@@ -54,7 +59,8 @@ def test_retries_transient_http_then_succeeds(tmp_path: Path) -> None:
         statuses.append(503 if not statuses else 200)
         return statuses[-1]
 
-    dispatch_analysis_run(uuid4(), _settings(tmp_path), post=post, sleep=lambda _: None)
+    outcome = dispatch_analysis_run(uuid4(), _settings(tmp_path), post=post, sleep=lambda _: None)
+    assert outcome == DispatchOutcome.ok()
     assert statuses == [503, 200]
 
 
@@ -66,7 +72,9 @@ def test_exhausted_retry_does_not_raise(tmp_path: Path) -> None:
         calls["n"] += 1
         raise TimeoutError("connect timed out")
 
-    dispatch_analysis_run(uuid4(), _settings(tmp_path), post=post, sleep=lambda _: None)
+    outcome = dispatch_analysis_run(uuid4(), _settings(tmp_path), post=post, sleep=lambda _: None)
+    assert outcome == DispatchOutcome.failed()
+    assert outcome.error_code == INFERENCE_DISPATCH_FAILED
     assert calls["n"] == 3
 
 
@@ -80,17 +88,32 @@ def test_network_errors_are_logged_without_secrets(
         raise ConnectionError("network down")
 
     with caplog.at_level(logging.WARNING, logger="src.api.inference_dispatch"):
-        dispatch_analysis_run(
+        outcome = dispatch_analysis_run(
             uuid4(),
             _settings(tmp_path, inference_internal_token=token),
             post=post,
             sleep=lambda _: None,
         )
+    assert outcome == DispatchOutcome.failed()
     assert caplog.records
     combined = "\n".join(record.getMessage() for record in caplog.records)
     assert token not in combined
     assert "Authorization" not in combined
     assert "Bearer" not in combined
+
+
+def test_exhausted_transient_http_is_a_failure(tmp_path: Path) -> None:
+    calls = {"n": 0}
+
+    def post(url: str, headers: Mapping[str, str], connect: float, read: float) -> int:
+        del url, headers, connect, read
+        calls["n"] += 1
+        return 503
+
+    outcome = dispatch_analysis_run(uuid4(), _settings(tmp_path), post=post, sleep=lambda _: None)
+    assert outcome == DispatchOutcome.failed()
+    assert outcome.error_code == INFERENCE_DISPATCH_FAILED
+    assert calls["n"] == 3
 
 
 def test_unauthorized_response_is_not_retried(tmp_path: Path) -> None:
@@ -101,21 +124,39 @@ def test_unauthorized_response_is_not_retried(tmp_path: Path) -> None:
         calls["n"] += 1
         return 401
 
-    dispatch_analysis_run(uuid4(), _settings(tmp_path), post=post, sleep=lambda _: None)
+    outcome = dispatch_analysis_run(uuid4(), _settings(tmp_path), post=post, sleep=lambda _: None)
+    assert outcome == DispatchOutcome.failed()
+    assert outcome.error_code == INFERENCE_DISPATCH_FAILED
     assert calls["n"] == 1
 
 
-def test_unconfigured_dispatch_is_a_no_op(tmp_path: Path) -> None:
+def test_redirect_response_is_a_failure(tmp_path: Path) -> None:
+    calls = {"n": 0}
+
+    def post(url: str, headers: Mapping[str, str], connect: float, read: float) -> int:
+        del url, headers, connect, read
+        calls["n"] += 1
+        return 302
+
+    outcome = dispatch_analysis_run(uuid4(), _settings(tmp_path), post=post, sleep=lambda _: None)
+    assert outcome == DispatchOutcome.failed()
+    assert outcome.error_code == INFERENCE_DISPATCH_FAILED
+    assert calls["n"] == 1
+
+
+def test_unconfigured_dispatch_is_a_failure(tmp_path: Path) -> None:
     def post(url: str, headers: Mapping[str, str], connect: float, read: float) -> int:
         del url, headers, connect, read
         raise AssertionError("unconfigured dispatch must not POST")
 
-    dispatch_analysis_run(
+    outcome = dispatch_analysis_run(
         uuid4(),
         _settings(tmp_path, inference_service_url=None, inference_internal_token=None),
         post=post,
         sleep=lambda _: None,
     )
+    assert outcome == DispatchOutcome.failed()
+    assert outcome.error_code == INFERENCE_DISPATCH_FAILED
 
 
 def _clear_inference_env(monkeypatch: pytest.MonkeyPatch) -> None:

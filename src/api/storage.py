@@ -84,7 +84,12 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _STORAGE_KINDS = frozenset({"workspace", "object"})
 _INITIAL_RUN_STATUSES = frozenset({"queued", "rejected", "not_supported"})
 _LEGAL_RUN_TRANSITIONS = frozenset(
-    {("queued", "running"), ("running", "completed"), ("running", "failed")}
+    {
+        ("queued", "running"),
+        ("queued", "failed"),
+        ("running", "completed"),
+        ("running", "failed"),
+    }
 )
 _ANALYSIS_AUDIT_ACTIONS = {
     "queued": "analysis.queued",

@@ -14,6 +14,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.bootstrap import bootstrap_administrator
+from src.api.inference_dispatch import (
+    INFERENCE_DISPATCH_FAILED,
+    INFERENCE_DISPATCH_FAILED_MESSAGE,
+    DispatchOutcome,
+)
 from src.api.main import create_app
 from src.api.migrations import PACKAGE_ADMISSION_VERSION
 from src.api.settings import ApiSettings
@@ -1452,9 +1457,10 @@ def test_published_v2_model_queues_and_schedules_dispatch(
 ) -> None:
     dispatched: list[UUID] = []
 
-    def fake_dispatch(run_id: UUID, settings: ApiSettings, **kwargs: object) -> None:
+    def fake_dispatch(run_id: UUID, settings: ApiSettings, **kwargs: object) -> DispatchOutcome:
         del settings, kwargs
         dispatched.append(run_id)
+        return DispatchOutcome.ok()
 
     monkeypatch.setattr("src.api.main.dispatch_analysis_run", fake_dispatch)
     client = api.client
@@ -1504,7 +1510,7 @@ def test_published_v2_model_queues_and_schedules_dispatch(
     }
 
 
-def test_exhausted_dispatch_preserves_queued_run(
+def test_exhausted_dispatch_marks_queued_run_failed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = {"n": 0}
@@ -1555,10 +1561,27 @@ def test_exhausted_dispatch_preserves_queued_run(
             headers=operator_headers,
         )
         assert fetched.status_code == 200
-        assert fetched.json()["status"] == "queued"
-        assert fetched.json()["error_code"] is None
-        assert fetched.json()["completed_at"] is None
+        payload = fetched.json()
+        assert payload["status"] == "failed"
+        assert payload["error_code"] == INFERENCE_DISPATCH_FAILED
+        assert payload["completed_at"] is not None
+        assert payload["validation_report"] == {"execution": INFERENCE_DISPATCH_FAILED_MESSAGE}
+        assert "dispatch-test-token" not in fetched.text
+        assert "http://inference.test" not in fetched.text
         assert calls["n"] == 2
+        audit_events = client.get(
+            f"/projects/{project_id}/audit-events",
+            headers=_login(client, "admin"),
+        )
+        assert audit_events.status_code == 200
+        failed_audits = [
+            event
+            for event in audit_events.json()
+            if event["action"] == "analysis.failed" and event["resource_id"] == payload["id"]
+        ]
+        assert len(failed_audits) == 1
+        assert failed_audits[0]["actor_user_id"] is None
+        assert failed_audits[0]["details"]["error_code"] == INFERENCE_DISPATCH_FAILED
 
 
 def _queued_v2_run(
@@ -1567,7 +1590,10 @@ def _queued_v2_run(
     *,
     log_content: bytes = VALID_HDFS_LOG,
 ) -> tuple[TestClient, dict[str, str], dict[str, Any], dict[str, Any], str]:
-    monkeypatch.setattr("src.api.main.dispatch_analysis_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "src.api.main.dispatch_analysis_run",
+        lambda *args, **kwargs: DispatchOutcome.ok(),
+    )
     client = api.client
     administrator = _login(client, "admin")
     project = _create_project(client, administrator, "incident-results")

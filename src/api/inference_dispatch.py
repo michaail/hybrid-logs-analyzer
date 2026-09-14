@@ -6,12 +6,18 @@ import http.client
 import logging
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from urllib.parse import urlparse
 from uuid import UUID
 
 from src.api.settings import ApiSettings
 
 logger = logging.getLogger(__name__)
+
+INFERENCE_DISPATCH_FAILED = "INFERENCE_DISPATCH_FAILED"
+INFERENCE_DISPATCH_FAILED_MESSAGE = (
+    "The private inference service could not be activated for this analysis run."
+)
 
 _TRANSIENT_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
 _RETRYABLE_EXCEPTIONS = (
@@ -29,27 +35,49 @@ PostFn = Callable[[str, Mapping[str, str], float, float], int]
 SleepFn = Callable[[float], None]
 
 
+@dataclass(frozen=True)
+class DispatchOutcome:
+    """Storage-free result of attempting to activate private inference."""
+
+    accepted: bool
+    error_code: str | None = None
+    public_message: str | None = None
+
+    @classmethod
+    def ok(cls) -> DispatchOutcome:
+        return cls(accepted=True)
+
+    @classmethod
+    def failed(cls) -> DispatchOutcome:
+        return cls(
+            accepted=False,
+            error_code=INFERENCE_DISPATCH_FAILED,
+            public_message=INFERENCE_DISPATCH_FAILED_MESSAGE,
+        )
+
+
 def dispatch_analysis_run(
     run_id: UUID,
     settings: ApiSettings,
     *,
     post: PostFn | None = None,
     sleep: SleepFn | None = None,
-) -> None:
-    """Activate inference for ``run_id`` without writing terminal run state.
+) -> DispatchOutcome:
+    """Activate inference for ``run_id`` without writing run state.
 
     Missing configuration, exhausted retries, and network errors are logged
-    without a token or object-store secret. The queued row is left unchanged.
+    without a token or object-store secret. The caller owns any terminal write.
     """
 
     try:
-        _dispatch(run_id, settings, post=post, sleep=sleep)
+        return _dispatch(run_id, settings, post=post, sleep=sleep)
     except Exception as error:
         logger.warning(
             "Inference dispatch failed for run %s: %s",
             run_id,
             type(error).__name__,
         )
+        return DispatchOutcome.failed()
 
 
 def post_inference_execute(
@@ -94,12 +122,15 @@ def _dispatch(
     *,
     post: PostFn | None,
     sleep: SleepFn | None,
-) -> None:
+) -> DispatchOutcome:
     service_url = settings.inference_service_url
     token = settings.inference_internal_token
     if not service_url or not token:
-        logger.debug("Inference dispatch skipped for run %s; private service is not configured.", run_id)
-        return
+        logger.debug(
+            "Inference dispatch failed for run %s; private service is not configured.",
+            run_id,
+        )
+        return DispatchOutcome.failed()
 
     poster = post or post_inference_execute
     sleeper = sleep or time.sleep
@@ -126,7 +157,7 @@ def _dispatch(
                     attempts,
                     type(error).__name__,
                 )
-                return
+                return DispatchOutcome.failed()
             _backoff(sleeper, settings.inference_retry_backoff_seconds, attempt)
             continue
         except Exception as error:
@@ -135,10 +166,10 @@ def _dispatch(
                 run_id,
                 type(error).__name__,
             )
-            return
+            return DispatchOutcome.failed()
 
-        if status_code < 400:
-            return
+        if 200 <= status_code < 300:
+            return DispatchOutcome.ok()
         if status_code not in _TRANSIENT_STATUS_CODES or attempt >= attempts:
             logger.warning(
                 "Inference dispatch received HTTP %s for run %s after %s attempt(s)",
@@ -146,8 +177,10 @@ def _dispatch(
                 run_id,
                 attempt,
             )
-            return
+            return DispatchOutcome.failed()
         _backoff(sleeper, settings.inference_retry_backoff_seconds, attempt)
+
+    return DispatchOutcome.failed()
 
 
 def _backoff(sleep: SleepFn, backoff_seconds: float, attempt: int) -> None:
