@@ -17,7 +17,7 @@ gates_failed: 3
 
 ## Stack Components
 
-The repository is a Python 3.10+ data and machine-learning pipeline. `requirements.txt` pins runtime dependencies, including Pydantic, data-processing libraries, and model dependencies. Reusable Python code is under `src/modules/`, while the current execution flow remains notebook-led in `src/notebooks/`, with supporting Python scripts documented in `README.md`.
+The repository is a Python 3.10+ HDFS web control plane with a reusable ML pipeline library. `requirements.txt` pins runtime dependencies, including Pydantic, data-processing libraries, and model dependencies. Reusable Python code is under `src/modules/`. Product execution is the FastAPI/React stack documented in `README.md`. Research notebooks live in the `research/` git submodule and must not be the only implementation of production-facing behavior.
 
 No application framework, project build configuration, lockfile, CI provider, or deployment target is present. The PRD's web application is planned work, not an existing component, so it is not scored as though it already existed. Tests under `tests/` use pytest conventions, but `pytest` is not declared in `requirements.txt` or a dedicated development-dependency file.
 

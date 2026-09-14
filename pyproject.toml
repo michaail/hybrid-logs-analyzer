@@ -12,7 +12,7 @@ markers = [
 [tool.ruff]
 target-version = "py310"
 line-length = 100
-extend-exclude = ["src/notebooks"]
+extend-exclude = ["research"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
@@ -35,7 +35,7 @@ files = [
   "scripts/e2e_serve.py",
   "scripts/e2e_package.py",
 ]
-exclude = ["src/notebooks"]
+exclude = ["research"]
 check_untyped_defs = true
 explicit_package_bases = true
 follow_imports = "skip"
