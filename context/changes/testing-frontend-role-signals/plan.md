@@ -376,9 +376,9 @@ Operator; isolated `.e2e/` DB is wiped each suite start.
 
 #### Automated
 
-- [x] 3.1 `context/foundation/test-plan.md` §6.3 no longer reads TBD for denied Register/Publish copy
-- [x] 3.2 `npm --prefix frontend test` still passes
+- [x] 3.1 `context/foundation/test-plan.md` §6.3 no longer reads TBD for denied Register/Publish copy — 056cefb
+- [x] 3.2 `npm --prefix frontend test` still passes — 056cefb
 
 #### Manual
 
-- [x] 3.3 Read §6.3–§6.7: HTTP 403 tests still cited; Select is explicit; Operator Playwright is Banner-only; Phase 3 ledger row is `complete`; Phase 4 still `complete`
+- [x] 3.3 Read §6.3–§6.7: HTTP 403 tests still cited; Select is explicit; Operator Playwright is Banner-only; Phase 3 ledger row is `complete`; Phase 4 still `complete` — 056cefb
