@@ -58,6 +58,7 @@ export async function registerPackage(
 export async function registerEligibleViaPublisherApi(
   request: APIRequestContext,
   zipPath: string,
+  bundleZipPath: string,
 ): Promise<void> {
   const accounts = readAccounts();
   const headers = { Authorization: `Bearer ${readAuthToken("publisher")}` };
@@ -75,6 +76,11 @@ export async function registerEligibleViaPublisherApi(
         name: path.basename(zipPath),
         mimeType: "application/zip",
         buffer: fs.readFileSync(zipPath),
+      },
+      preprocessing_bundle: {
+        name: path.basename(bundleZipPath),
+        mimeType: "application/zip",
+        buffer: fs.readFileSync(bundleZipPath),
       },
     },
   });

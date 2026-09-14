@@ -23,7 +23,7 @@ test.describe("operator role-deny banners", () => {
     const pkg = operatorRegisterPackage();
     await openPublisherWorkspace(page);
 
-    const response = await registerPackage(page, pkg.zipPath);
+    const response = await registerPackage(page, pkg.zipPath, pkg.bundleZipPath);
     expect(response.status()).toBe(403);
 
     const dialog = page.getByRole("dialog", { name: "Register trained model" });
@@ -36,7 +36,7 @@ test.describe("operator role-deny banners", () => {
 
   test("operator publish 403 shows page alert and no success status", async ({ page, request }) => {
     const pkg = operatorPublishSeedPackage();
-    await registerEligibleViaPublisherApi(request, pkg.zipPath);
+    await registerEligibleViaPublisherApi(request, pkg.zipPath, pkg.bundleZipPath);
     await openPublisherWorkspace(page);
 
     const article = modelArticle(page, pkg.identifier, pkg.version);
