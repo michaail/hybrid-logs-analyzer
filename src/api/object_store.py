@@ -264,7 +264,15 @@ class BucketObjectStore:
         ]
         for index in range(0, len(keys), _DELETE_BATCH_SIZE):
             batch = [{"Key": key} for key in keys[index : index + _DELETE_BATCH_SIZE]]
-            self._client.delete_objects(Bucket=self._bucket, Delete={"Objects": batch})
+            result = self._client.delete_objects(
+                Bucket=self._bucket, Delete={"Objects": batch}
+            )
+            errors = result.get("Errors") if isinstance(result, Mapping) else None
+            if errors:
+                raise RuntimeError(
+                    f"Object-store delete_objects reported errors for prefix {relative!r}: "
+                    f"{errors}"
+                )
 
 
 def _list_keys(client: S3Client, bucket: str, prefix: str) -> list[str]:

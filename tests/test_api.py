@@ -1245,6 +1245,18 @@ def test_registration_rejects_ineligible_zip_without_inserting(api: ApiFixture) 
     assert object_files == []
 
 
+def test_registration_deletes_prefix_when_insert_fails(
+    api: ApiFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, headers, project_id = _publisher_client(api)
+    monkeypatch.setattr(ApiDatabase, "_insert_audit_event", _fail_audit_event)
+    with TestClient(client.app, raise_server_exceptions=False) as failing:
+        failed = _register(failing, headers, project_id, _zip_staged(api.workspace))
+    assert failed.status_code == 500
+    assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+    assert _object_files(api) == set()
+
+
 def test_registration_collects_checksum_and_evidence_issues(api: ApiFixture) -> None:
     client, headers, project_id = _publisher_client(api)
     reference = _stage_package(api.workspace, name="broken", evidence={})
