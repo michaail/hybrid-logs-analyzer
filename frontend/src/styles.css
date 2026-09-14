@@ -70,11 +70,15 @@ code {
   display: grid;
   grid-template-columns: 258px minmax(0, 1fr);
   min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
 }
 
 .sidebar {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   padding: 27px 18px 20px;
   background: #111b2c;
   color: #d5dceb;
@@ -134,8 +138,12 @@ code {
 
 .navigation {
   display: grid;
+  flex: 1 1 auto;
+  align-content: start;
   gap: 0.38rem;
+  min-height: 0;
   margin-top: 1.8rem;
+  overflow-y: auto;
 }
 
 .navigation-button {
@@ -175,6 +183,7 @@ code {
 
 .sidebar-footer {
   display: grid;
+  flex-shrink: 0;
   gap: 0.8rem;
   margin-top: auto;
   padding: 1rem 0.7rem 0;
@@ -216,6 +225,8 @@ code {
 
 .main-content {
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
   padding: 42px clamp(25px, 5vw, 74px) 64px;
 }
 
@@ -266,6 +277,62 @@ code {
 
 .content-section {
   max-width: 1170px;
+}
+
+.workspace-stack {
+  display: grid;
+  gap: 1.75rem;
+}
+
+.workspace-panel {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  min-width: 0;
+  border: 1px solid #dde3e9;
+  border-radius: 12px;
+  background: #fff;
+  padding: 1.3rem 1.35rem 1.4rem;
+}
+
+.workspace-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.workspace-panel-copy {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.workspace-panel h3 {
+  color: #28354a;
+  font-size: 1.12rem;
+}
+
+.workspace-panel-heading .primary-button {
+  flex-shrink: 0;
+}
+
+.workspace-panel .selection-summary {
+  margin: 0;
+}
+
+.workspace-panel .run-card,
+.workspace-panel .dataset-card,
+.workspace-panel .selection-summary {
+  background: #f7f9fb;
+}
+
+.workspace-panel .empty-state {
+  margin: 1.1rem auto 0.35rem;
+}
+
+.workspace-panel .auto-refresh-note {
+  margin-top: 0.15rem;
 }
 
 .muted {
@@ -513,6 +580,14 @@ code {
   margin-top: 0.6rem;
 }
 
+.card-action-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 .selected-button {
   border-color: #77b8aa;
   background: #f0fbf7;
@@ -564,20 +639,16 @@ code {
 
 .dataset-panel {
   min-width: 0;
-  margin: 0 0 1.35rem;
 }
 
 .dataset-heading {
-  margin: 0 0 0.35rem;
-  color: #273348;
-  font-size: 1rem;
+  margin: 0;
 }
 
 .dataset-upload {
   display: grid;
   gap: 0.75rem;
   min-width: 0;
-  margin-top: 0.85rem;
 }
 
 .dataset-list {
@@ -587,8 +658,14 @@ code {
 }
 
 .dataset-card {
+  display: flex;
   min-width: 0;
+  flex-direction: column;
   padding: 1rem 1.1rem;
+}
+
+.dataset-card .card-actions {
+  justify-content: flex-end;
 }
 
 .dataset-card > div {
@@ -1418,10 +1495,12 @@ textarea::placeholder {
 @media (max-width: 800px) {
   .app-shell {
     display: block;
+    height: auto;
   }
 
   .sidebar {
     min-height: auto;
+    overflow: visible;
     padding: 1rem;
   }
 
@@ -1432,9 +1511,12 @@ textarea::placeholder {
 
   .navigation {
     display: flex;
+    flex: none;
     gap: 0.35rem;
+    min-height: 0;
     margin-top: 1rem;
     overflow-x: auto;
+    overflow-y: visible;
   }
 
   .navigation-button {
@@ -1449,6 +1531,7 @@ textarea::placeholder {
   }
 
   .main-content {
+    overflow: visible;
     padding: 2rem 1.25rem 3.5rem;
   }
 
@@ -1495,8 +1578,14 @@ textarea::placeholder {
   }
 
   .topbar .secondary-button,
-  .section-heading .primary-button {
+  .section-heading .primary-button,
+  .workspace-panel-heading .primary-button {
     width: 100%;
+  }
+
+  .workspace-panel-heading {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .run-outcome {

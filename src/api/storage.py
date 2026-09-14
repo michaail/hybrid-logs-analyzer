@@ -76,6 +76,21 @@ class ProvisionalResultPage:
     next_cursor: str | None
 
 
+@dataclass(frozen=True)
+class DeletedModelVersion:
+    """Object prefixes to remove after a successful unused-model delete."""
+
+    package_reference: str | None
+    bundle_prefix: str | None
+
+
+@dataclass(frozen=True)
+class DeletedDataset:
+    """Storage kind for prefix cleanup after a successful unused-dataset delete."""
+
+    storage_kind: str
+
+
 PROVISIONAL_REASON_NOT_IN_CATALOG = "not_in_reference_catalog"
 _PROVISIONAL_CURSOR_KIND = "provisional"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -657,10 +672,40 @@ class ApiDatabase:
             return 0
         return int(row["run_count"])
 
-    def delete_model_version(self, model_id: UUID) -> None:
-        """Delete a model row. Fail closed when analysis runs still reference it."""
+    def count_analysis_runs_for_dataset(self, dataset_id: UUID) -> int:
+        """Return how many analysis runs reference this dataset."""
+
+        row = self._one(
+            """
+            SELECT COUNT(*) AS run_count
+            FROM analysis_runs
+            WHERE dataset_id = ?
+            """,
+            (str(dataset_id),),
+        )
+        if row is None:
+            return 0
+        return int(row["run_count"])
+
+    def delete_model_version(
+        self,
+        model_id: UUID,
+        *,
+        project_id: UUID | None = None,
+        actor_user_id: UUID | None = None,
+    ) -> DeletedModelVersion | None:
+        """Delete an unused model row and an unshared bundle. Fail closed when runs exist."""
 
         with self.session() as connection:
+            existing = connection.execute(
+                f"{_MODEL_VERSION_WITH_BUNDLE} WHERE model_versions.id = ?",
+                (str(model_id),),
+            ).fetchone()
+            if existing is None:
+                return None
+            model = dict(existing)
+            if project_id is not None and str(model["project_id"]) != str(project_id):
+                return None
             count_row = connection.execute(
                 """
                 SELECT COUNT(*) AS run_count
@@ -674,10 +719,103 @@ class ApiDatabase:
                 raise DatabaseIntegrityError(
                     "Model version is referenced by analysis runs."
                 )
+            bundle_id = model.get("preprocessing_bundle_id")
+            bundle_prefix: str | None = None
+            if bundle_id:
+                shared = connection.execute(
+                    """
+                    SELECT COUNT(*) AS model_count
+                    FROM model_versions
+                    WHERE preprocessing_bundle_id = ? AND id <> ?
+                    """,
+                    (str(bundle_id), str(model_id)),
+                ).fetchone()
+                shared_count = int(dict(shared)["model_count"]) if shared is not None else 0
+                if shared_count == 0:
+                    prefix = model.get("preprocessing_bundle_prefix")
+                    bundle_prefix = str(prefix).strip() if prefix else None
+            if actor_user_id is not None:
+                self._insert_audit_event(
+                    connection,
+                    actor_user_id=actor_user_id,
+                    project_id=UUID(str(model["project_id"])),
+                    action="model.deleted",
+                    resource_type="model_version",
+                    resource_id=model_id,
+                    details_json=json.dumps(
+                        {
+                            "model_identifier": str(model["model_identifier"]),
+                            "status": str(model["status"]),
+                            "version": str(model["version"]),
+                        },
+                        sort_keys=True,
+                    ),
+                )
             connection.execute(
                 "DELETE FROM model_versions WHERE id = ?",
                 (str(model_id),),
             )
+            if bundle_id and bundle_prefix is not None:
+                connection.execute(
+                    "DELETE FROM preprocessing_bundles WHERE id = ?",
+                    (str(bundle_id),),
+                )
+            package_reference = str(model["package_reference"]).strip() or None
+            if str(model.get("storage_kind") or "") != "object":
+                package_reference = None
+            return DeletedModelVersion(
+                package_reference=package_reference,
+                bundle_prefix=bundle_prefix,
+            )
+
+    def delete_dataset(
+        self,
+        dataset_id: UUID,
+        *,
+        project_id: UUID | None = None,
+        actor_user_id: UUID | None = None,
+    ) -> DeletedDataset | None:
+        """Delete an unused dataset row. Fail closed when analysis runs still reference it."""
+
+        with self.session() as connection:
+            existing = connection.execute(
+                "SELECT * FROM datasets WHERE id = ?",
+                (str(dataset_id),),
+            ).fetchone()
+            if existing is None:
+                return None
+            dataset = dict(existing)
+            if project_id is not None and str(dataset["project_id"]) != str(project_id):
+                return None
+            count_row = connection.execute(
+                """
+                SELECT COUNT(*) AS run_count
+                FROM analysis_runs
+                WHERE dataset_id = ?
+                """,
+                (str(dataset_id),),
+            ).fetchone()
+            run_count = int(dict(count_row)["run_count"]) if count_row is not None else 0
+            if run_count > 0:
+                raise DatabaseIntegrityError("Dataset is referenced by analysis runs.")
+            if actor_user_id is not None:
+                self._insert_audit_event(
+                    connection,
+                    actor_user_id=actor_user_id,
+                    project_id=UUID(str(dataset["project_id"])),
+                    action="dataset.deleted",
+                    resource_type="dataset",
+                    resource_id=dataset_id,
+                    details_json=json.dumps(
+                        {
+                            "object_reference": str(dataset["object_reference"]),
+                            "storage_kind": str(dataset["storage_kind"]),
+                        },
+                        sort_keys=True,
+                    ),
+                )
+            connection.execute("DELETE FROM datasets WHERE id = ?", (str(dataset_id),))
+            return DeletedDataset(storage_kind=str(dataset["storage_kind"]))
 
     def get_preprocessing_bundle(self, project_id: UUID, bundle_id: UUID) -> DatabaseRow | None:
         return self._one(

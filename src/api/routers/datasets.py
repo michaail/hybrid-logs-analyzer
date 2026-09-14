@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from starlette.responses import Response
 
 from src.api.deps import (
     CurrentUser,
@@ -20,7 +22,11 @@ from src.api.schemas import DatasetResponse, ProjectRole
 from src.api.storage import ApiDatabase, DatabaseIntegrityError
 from src.api.validation import MAX_HDFS_UPLOAD_BYTES, admit_uploaded_hdfs_log
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["datasets"])
+
+_DATASET_REFERENCED_DETAIL = "This dataset is referenced by analysis runs."
 
 
 @router.get(
@@ -97,3 +103,44 @@ def get_dataset(
     if dataset is None or dataset["project_id"] != str(project_id):
         raise not_found("Dataset")
     return dataset_response(dataset)
+
+
+@router.delete(
+    "/projects/{project_id}/datasets/{dataset_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def delete_dataset(
+    project_id: UUID,
+    dataset_id: UUID,
+    user: CurrentUser = Depends(get_current_user),
+    database: ApiDatabase = Depends(get_database),
+    object_store: ObjectStore = Depends(get_object_store),
+) -> Response:
+    """Remove an unused uploaded HDFS dataset from its authorized project."""
+    require_project_role(database, project_id, user, {ProjectRole.OPERATOR})
+    dataset = database.get_dataset(dataset_id)
+    if dataset is None or dataset["project_id"] != str(project_id):
+        raise not_found("Dataset")
+    try:
+        deleted = database.delete_dataset(
+            dataset_id,
+            project_id=project_id,
+            actor_user_id=user.id,
+        )
+    except DatabaseIntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_DATASET_REFERENCED_DETAIL,
+        ) from None
+    if deleted is None:
+        raise not_found("Dataset")
+    if deleted.storage_kind == "object":
+        try:
+            object_store.delete_prefix(dataset_object_prefix(project_id, dataset_id))
+        except Exception:
+            logger.exception(
+                "Could not delete object prefix after removing dataset %s",
+                dataset_id,
+            )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

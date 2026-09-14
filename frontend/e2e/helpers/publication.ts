@@ -15,10 +15,6 @@ export function ineligiblePackage(): ReturnType<typeof writePackageZip> {
   return writePackageZip("ineligible", uniquePackageIdentity("e2e.reject"));
 }
 
-export function operatorRegisterPackage(): ReturnType<typeof writePackageZip> {
-  return writePackageZip("eligible", uniquePackageIdentity("e2e.op.reg"));
-}
-
 export function operatorPublishSeedPackage(): ReturnType<typeof writePackageZip> {
   return writePackageZip("eligible", uniquePackageIdentity("e2e.op.pub"));
 }
@@ -27,11 +23,15 @@ export function modelArticle(page: Page, identifier: string, version: string) {
   return page.getByRole("article", { name: `${identifier} version ${version}` });
 }
 
-export async function openPublisherWorkspace(page: Page, projectName = "e2e-project-a"): Promise<void> {
+export async function openWorkspace(page: Page, projectName = "e2e-project-a"): Promise<void> {
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
   await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
   await page.getByRole("button", { name: /^Models/ }).click();
+}
+
+export async function openPublisherWorkspace(page: Page, projectName = "e2e-project-a"): Promise<void> {
+  await openWorkspace(page, projectName);
   await expect(page.getByRole("button", { name: "Register trained model" })).toBeVisible();
 }
 

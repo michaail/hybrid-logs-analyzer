@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from starlette.responses import Response
 
 from src.api.deps import (
     CurrentUser,
@@ -29,7 +31,11 @@ from src.api.validation import (
 )
 from src.modules.model_package import MAX_ZIP_COMPRESSED_BYTES
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["models"])
+
+_MODEL_REFERENCED_DETAIL = "This model version is referenced by analysis runs."
 
 
 @router.get(
@@ -200,3 +206,46 @@ def publish_model_version(
             detail="Only eligible model versions can be published.",
         ) from None
     return model_response(published_model)
+
+
+@router.delete(
+    "/projects/{project_id}/models/{model_version_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def delete_model_version(
+    project_id: UUID,
+    model_version_id: UUID,
+    user: CurrentUser = Depends(get_current_user),
+    database: ApiDatabase = Depends(get_database),
+    object_store: ObjectStore = Depends(get_object_store),
+) -> Response:
+    """Remove an unused eligible or published model from its authorized project."""
+    require_project_role(database, project_id, user, {ProjectRole.PUBLISHER})
+    model = database.get_model_version(model_version_id)
+    if model is None or model["project_id"] != str(project_id):
+        raise not_found("Model version")
+    try:
+        deleted = database.delete_model_version(
+            model_version_id,
+            project_id=project_id,
+            actor_user_id=user.id,
+        )
+    except DatabaseIntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MODEL_REFERENCED_DETAIL,
+        ) from None
+    if deleted is None:
+        raise not_found("Model version")
+    try:
+        if deleted.package_reference:
+            object_store.delete_prefix(deleted.package_reference)
+        if deleted.bundle_prefix:
+            object_store.delete_prefix(deleted.bundle_prefix)
+    except Exception:
+        logger.exception(
+            "Could not delete object prefixes after removing model %s",
+            model_version_id,
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

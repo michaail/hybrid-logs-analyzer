@@ -19,7 +19,11 @@ import { AdministrationView } from "./features/admin/AdministrationView";
 import { LoginScreen } from "./features/auth/LoginScreen";
 import { ModelRegistrationDialog } from "./features/models/ModelRegistrationDialog";
 import { ModelsView } from "./features/models/ModelsView";
-import { publishModelWithStatus, registeredStatusMessage } from "./features/models/status";
+import {
+  deletedStatusMessage,
+  publishModelWithStatus,
+  registeredStatusMessage,
+} from "./features/models/status";
 import { ResultsDialog } from "./features/results/ResultsDialog";
 import { AnalysisDialog } from "./features/runs/AnalysisDialog";
 import { RunsView } from "./features/runs/RunsView";
@@ -265,6 +269,38 @@ export default function App() {
     setNotice(`HDFS dataset ${shortId(created.id)} was accepted.`);
   }
 
+  async function removeModel(model: ModelVersion): Promise<void> {
+    if (!selectedProject) {
+      return;
+    }
+    const wasSelected = selectedModelId === model.id;
+    setPageError(null);
+    try {
+      await api.deleteModel(selectedProject.id, model.id);
+      await refreshProjectData(selectedProject.id);
+      if (wasSelected) {
+        setSelectedModelId(null);
+      }
+      setNotice(deletedStatusMessage(model));
+    } catch (error) {
+      handleRequestError(error);
+    }
+  }
+
+  async function removeDataset(dataset: Dataset): Promise<void> {
+    if (!selectedProject) {
+      return;
+    }
+    setPageError(null);
+    try {
+      await api.deleteDataset(selectedProject.id, dataset.id);
+      setDatasets(await api.listDatasets(selectedProject.id));
+      setNotice(`HDFS dataset ${shortId(dataset.id)} was removed.`);
+    } catch (error) {
+      handleRequestError(error);
+    }
+  }
+
   async function startAnalysis(datasetId: string): Promise<void> {
     if (!selectedProject || !selectedModel) {
       return;
@@ -353,7 +389,15 @@ export default function App() {
             <span className="identity-avatar">{user.username.slice(0, 1).toUpperCase()}</span>
             <span>
               <strong>{user.username}</strong>
-              <small>{user.is_administrator ? "Administrator" : "Project user"}</small>
+              <small>
+                {user.is_administrator
+                  ? "Administrator"
+                  : selectedProject?.role === "publisher"
+                    ? "Publisher"
+                    : selectedProject?.role === "operator"
+                      ? "Operator"
+                      : "Project user"}
+              </small>
             </span>
           </div>
           <button className="text-button" type="button" onClick={() => endSession()}>
@@ -391,9 +435,13 @@ export default function App() {
               <ModelsView
                 models={models}
                 selectedModelId={selectedModelId}
+                canManageModels={
+                  user.is_administrator || selectedProject.role === "publisher"
+                }
                 onSelectModel={setSelectedModelId}
                 onPublish={publishModel}
                 onRegister={() => setShowRegistrationDialog(true)}
+                onRemove={removeModel}
               />
             )}
             {view === "runs" && (
@@ -405,6 +453,7 @@ export default function App() {
                 onOpenAnalysis={() => setShowAnalysisDialog(true)}
                 onShowResults={showResults}
                 onUploadDataset={uploadDataset}
+                onRemoveDataset={removeDataset}
                 onUnauthorized={handleRequestError}
               />
             )}
@@ -426,7 +475,9 @@ export default function App() {
         )}
       </main>
 
-      {showRegistrationDialog && selectedProject && (
+      {showRegistrationDialog &&
+        selectedProject &&
+        (user.is_administrator || selectedProject.role === "publisher") && (
         <ModelRegistrationDialog
           projectName={selectedProject.name}
           onClose={() => setShowRegistrationDialog(false)}

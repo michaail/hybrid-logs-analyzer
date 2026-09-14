@@ -514,6 +514,13 @@ def test_authentication_roles_and_project_isolation(api: ApiFixture) -> None:
     operator_headers = _login(client, "operator")
     publisher_headers = _login(client, "publisher")
     other_operator_headers = _login(client, "other-operator")
+    operator_projects = client.get("/projects", headers=operator_headers).json()
+    assert operator_projects[0]["id"] == first_project["id"]
+    assert operator_projects[0]["role"] == "operator"
+    publisher_projects = client.get("/projects", headers=publisher_headers).json()
+    assert publisher_projects[0]["id"] == first_project["id"]
+    assert publisher_projects[0]["role"] == "publisher"
+    assert all(item["role"] is None for item in client.get("/projects", headers=administrator).json())
     assert client.get(f"/projects/{first_project['id']}/models", headers=operator_headers).status_code == 200
     assert (
         client.get(f"/projects/{first_project['id']}/models", headers=other_operator_headers).status_code
@@ -1150,7 +1157,11 @@ def test_openapi_exposes_administration_lifecycle_without_legacy_user_create(
     assert "dataset_id" in create_schema["properties"]
     assert "log_reference" not in create_schema["properties"]
     assert "get" in paths[dataset_item]
+    assert "delete" in paths[dataset_item]
     assert "patch" not in paths.get(dataset_item, {})
+    model_item = "/projects/{project_id}/models/{model_version_id}"
+    assert "get" in paths[model_item]
+    assert "delete" in paths[model_item]
     results_path = "/projects/{project_id}/analysis-runs/{analysis_run_id}/results"
     assert "get" in paths[results_path]
     assert "post" not in paths[results_path]
@@ -1274,7 +1285,7 @@ _OPENAPI_TAG_MAP: dict[str, dict[str, list[str]]] = {
         "delete": ["projects"],
     },
     "/projects/{project_id}/models": {"get": ["models"], "post": ["models"]},
-    "/projects/{project_id}/models/{model_version_id}": {"get": ["models"]},
+    "/projects/{project_id}/models/{model_version_id}": {"get": ["models"], "delete": ["models"]},
     "/projects/{project_id}/models/{model_version_id}/publish": {"post": ["models"]},
     "/projects/{project_id}/analysis-runs": {"get": ["analysis"], "post": ["analysis"]},
     "/projects/{project_id}/analysis-runs/{analysis_run_id}": {"get": ["analysis"]},
@@ -1283,7 +1294,7 @@ _OPENAPI_TAG_MAP: dict[str, dict[str, list[str]]] = {
         "get": ["analysis"]
     },
     "/projects/{project_id}/datasets": {"get": ["datasets"], "post": ["datasets"]},
-    "/projects/{project_id}/datasets/{dataset_id}": {"get": ["datasets"]},
+    "/projects/{project_id}/datasets/{dataset_id}": {"get": ["datasets"], "delete": ["datasets"]},
 }
 
 
@@ -2397,4 +2408,257 @@ def test_typed_schemas_reject_provisional_scores_and_negative_counts() -> None:
     )
     assert not hasattr(accepted, "anomaly_score")
     assert "anomaly_score" not in accepted.model_dump()
+
+
+def _prefix_files(api: ApiFixture, prefix: str) -> set[str]:
+    return {path for path in _object_files(api) if path == prefix or path.startswith(f"{prefix}/")}
+
+
+def test_unauthenticated_delete_routes_return_401(api: ApiFixture) -> None:
+    missing = str(UUID("44444444-4444-4444-8444-444444444444"))
+    assert api.client.delete(f"/projects/{missing}/models/{missing}").status_code == 401
+    assert api.client.delete(f"/projects/{missing}/datasets/{missing}").status_code == 401
+
+
+def test_operator_cannot_delete_model_and_objects_remain(api: ApiFixture) -> None:
+    client, publisher_headers, project_id = _publisher_client(api)
+    _provision_project_account(client, _login(client, "admin"), "operator", project_id, "operator")
+    operator_headers = _login(client, "operator")
+    package_zip, bundle_zip = _v2_zips(api.workspace)
+    created = _register(client, publisher_headers, project_id, package_zip, bundle_zip)
+    assert created.status_code == 201, created.text
+    model_id = created.json()["id"]
+    objects_before = _object_files(api)
+
+    denied = client.delete(f"/projects/{project_id}/models/{model_id}", headers=operator_headers)
+    assert denied.status_code == 403
+    listed = client.get(f"/projects/{project_id}/models", headers=publisher_headers)
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()] == [model_id]
+    assert _object_files(api) == objects_before
+
+
+def test_publisher_deletes_unused_eligible_and_published_models(api: ApiFixture) -> None:
+    client, headers, project_id = _publisher_client(api)
+    administrator = _login(client, "admin")
+    eligible_zip, eligible_bundle = _v2_zips(api.workspace, name="eligible")
+    eligible = _register(client, headers, project_id, eligible_zip, eligible_bundle)
+    assert eligible.status_code == 201, eligible.text
+    eligible_model = eligible.json()
+
+    removed_eligible = client.delete(
+        f"/projects/{project_id}/models/{eligible_model['id']}",
+        headers=headers,
+    )
+    assert removed_eligible.status_code == 204, removed_eligible.text
+    assert (
+        client.get(
+            f"/projects/{project_id}/models/{eligible_model['id']}",
+            headers=headers,
+        ).status_code
+        == 404
+    )
+    assert _prefix_files(api, eligible_model["package_reference"]) == set()
+    assert _object_files(api) == set()
+
+    published_zip, published_bundle = _v2_zips(api.workspace, name="published")
+    published = _register(client, headers, project_id, published_zip, published_bundle)
+    assert published.status_code == 201, published.text
+    publication = client.post(
+        f"/projects/{project_id}/models/{published.json()['id']}/publish",
+        headers=headers,
+    )
+    assert publication.status_code == 200, publication.text
+    published_model = publication.json()
+
+    removed_published = client.delete(
+        f"/projects/{project_id}/models/{published_model['id']}",
+        headers=headers,
+    )
+    assert removed_published.status_code == 204, removed_published.text
+    listed = client.get(f"/projects/{project_id}/models", headers=headers)
+    assert listed.status_code == 200
+    assert listed.json() == []
+    assert _object_files(api) == set()
+    audit = client.get(f"/projects/{project_id}/audit-events", headers=administrator)
+    assert audit.status_code == 200
+    assert {event["action"] for event in audit.json()} >= {"model.deleted"}
+
+
+def test_deleting_model_keeps_shared_bundle_prefix(api: ApiFixture) -> None:
+    client, headers, project_id = _publisher_client(api)
+    package_zip, bundle_zip = _v2_zips(api.workspace)
+    created = _register(client, headers, project_id, package_zip, bundle_zip)
+    assert created.status_code == 201, created.text
+    first = created.json()
+    database = ApiDatabase(api.settings.database_url)
+    stored = database.get_model_version(UUID(first["id"]))
+    assert stored is not None
+    bundle_id = UUID(str(stored["preprocessing_bundle_id"]))
+    bundle_prefix = str(stored["preprocessing_bundle_prefix"])
+    database.create_model_version(
+        project_id=UUID(project_id),
+        model_identifier="shared-sibling",
+        version="1",
+        pipeline_run_id="shared",
+        artifact_reference="packages/shared-sibling/model.pt",
+        package_reference="packages/shared-sibling",
+        artifact_sha256="a" * 64,
+        metrics_json="{}",
+        metadata_json="{}",
+        external_evaluation_evidence="evidence",
+        storage_kind="workspace",
+        preprocessing_bundle_id=bundle_id,
+    )
+
+    removed = client.delete(f"/projects/{project_id}/models/{first['id']}", headers=headers)
+    assert removed.status_code == 204, removed.text
+    assert _prefix_files(api, first["package_reference"]) == set()
+    assert any(path.startswith(f"{bundle_prefix}/") for path in _object_files(api))
+    sibling = next(
+        item
+        for item in client.get(f"/projects/{project_id}/models", headers=headers).json()
+        if item["model_identifier"] == "shared-sibling"
+    )
+    removed_sibling = client.delete(
+        f"/projects/{project_id}/models/{sibling['id']}",
+        headers=headers,
+    )
+    assert removed_sibling.status_code == 204, removed_sibling.text
+    assert _object_files(api) == set()
+
+
+def test_delete_model_and_dataset_are_isolated_and_fail_closed_when_referenced(
+    api: ApiFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, operator_headers, project, registration, _operator_id = _queued_v2_run(api, monkeypatch)
+    project_id = str(project["id"])
+    publisher_headers = _login(client, "publisher-results")
+    model_id = registration["id"]
+    run = client.get(f"/projects/{project_id}/analysis-runs", headers=operator_headers).json()[0]
+    dataset_id = run["dataset_id"]
+    objects_before = _object_files(api)
+
+    administrator = _login(client, "admin")
+    other_project = _create_project(client, administrator, "incident-other-delete")
+    _provision_project_account(
+        client, administrator, "other-delete-publisher", str(other_project["id"]), "publisher"
+    )
+    _provision_project_account(
+        client, administrator, "other-delete-operator", str(other_project["id"]), "operator"
+    )
+    other_publisher = _login(client, "other-delete-publisher")
+    other_operator = _login(client, "other-delete-operator")
+
+    assert (
+        client.delete(f"/projects/{project_id}/models/{model_id}", headers=other_publisher).status_code
+        == 404
+    )
+    assert (
+        client.delete(
+            f"/projects/{other_project['id']}/models/{model_id}",
+            headers=other_publisher,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.delete(
+            f"/projects/{project_id}/datasets/{dataset_id}",
+            headers=other_operator,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.delete(
+            f"/projects/{other_project['id']}/datasets/{dataset_id}",
+            headers=other_operator,
+        ).status_code
+        == 404
+    )
+    own_models = client.get(f"/projects/{other_project['id']}/models", headers=other_publisher)
+    assert own_models.status_code == 200
+    assert own_models.json() == []
+    own_datasets = client.get(f"/projects/{other_project['id']}/datasets", headers=other_operator)
+    assert own_datasets.status_code == 200
+    assert own_datasets.json() == []
+
+    referenced_model = client.delete(
+        f"/projects/{project_id}/models/{model_id}",
+        headers=publisher_headers,
+    )
+    assert referenced_model.status_code == 409
+    assert referenced_model.json()["detail"] == "This model version is referenced by analysis runs."
+    referenced_dataset = client.delete(
+        f"/projects/{project_id}/datasets/{dataset_id}",
+        headers=operator_headers,
+    )
+    assert referenced_dataset.status_code == 409
+    assert referenced_dataset.json()["detail"] == "This dataset is referenced by analysis runs."
+    assert client.get(f"/projects/{project_id}/models/{model_id}", headers=publisher_headers).status_code == 200
+    assert (
+        client.get(f"/projects/{project_id}/datasets/{dataset_id}", headers=operator_headers).status_code
+        == 200
+    )
+    assert _object_files(api) == objects_before
+
+
+def test_completed_run_blocks_model_delete(
+    api: ApiFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, operator_headers, project, registration, operator_id = _queued_v2_run(api, monkeypatch)
+    project_id = str(project["id"])
+    run_id = client.get(f"/projects/{project_id}/analysis-runs", headers=operator_headers).json()[0]["id"]
+    _complete_run_results(
+        api,
+        run_id,
+        operator_id,
+        [
+            {
+                "record_reference": "blk_a",
+                "anomaly_score": 0.91,
+                "anomaly_level": "anomaly",
+                "decision_threshold": 0.5,
+                "context": {},
+            }
+        ],
+    )
+    publisher_headers = _login(client, "publisher-results")
+    blocked = client.delete(
+        f"/projects/{project_id}/models/{registration['id']}",
+        headers=publisher_headers,
+    )
+    assert blocked.status_code == 409
+
+
+def test_operator_deletes_unused_dataset_and_prefix(api: ApiFixture) -> None:
+    client = api.client
+    administrator = _login(client, "admin")
+    project = _create_project(client, administrator, "incident-dataset-delete")
+    _provision_project_account(
+        client, administrator, "dataset-operator", str(project["id"]), "operator"
+    )
+    operator_headers = _login(client, "dataset-operator")
+    uploaded = _upload_log(client, operator_headers, project["id"])
+    assert uploaded.status_code == 201, uploaded.text
+    dataset = uploaded.json()
+    assert _prefix_files(api, f"projects/{project['id']}/datasets/{dataset['id']}")
+
+    removed = client.delete(
+        f"/projects/{project['id']}/datasets/{dataset['id']}",
+        headers=operator_headers,
+    )
+    assert removed.status_code == 204, removed.text
+    assert client.get(f"/projects/{project['id']}/datasets", headers=operator_headers).json() == []
+    assert (
+        client.get(
+            f"/projects/{project['id']}/datasets/{dataset['id']}",
+            headers=operator_headers,
+        ).status_code
+        == 404
+    )
+    assert _object_files(api) == set()
+    audit = client.get(f"/projects/{project['id']}/audit-events", headers=administrator)
+    assert {event["action"] for event in audit.json()} >= {"dataset.deleted"}
 
