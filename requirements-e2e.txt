@@ -1,0 +1,5 @@
+# Playwright E2E Python helpers (e2e_package.py, e2e_serve.py, files_only_validator).
+# Numpy is required to write and probe embeddings.npz. Keep the public API image
+# on requirements-api.txt only (Torch-free, no numpy).
+-r requirements-api.txt
+numpy==1.26.4

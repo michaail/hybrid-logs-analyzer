@@ -1301,10 +1301,11 @@ def test_registration_deletes_prefix_when_insert_fails(
     api: ApiFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client, headers, project_id = _publisher_client(api)
+    package_zip, bundle_zip = _v2_zips(api.workspace)
     monkeypatch.setattr(ApiDatabase, "_insert_audit_event", _fail_audit_event)
     with TestClient(client.app, raise_server_exceptions=False) as failing:
-        failed = _register(failing, headers, project_id, _zip_staged(api.workspace))
-    assert failed.status_code == 500
+        failed = _register(failing, headers, project_id, package_zip, bundle_zip)
+    assert failed.status_code == 500, failed.text
     assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
     assert _object_files(api) == set()
 

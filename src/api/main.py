@@ -515,7 +515,9 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 detail="This model identifier and version already exists in the project.",
             ) from None
         except Exception:
-            _delete_admitted_prefixes()
+            object_store.delete_prefix(admitted.package_reference)
+            if admitted.preprocessing_bundle is not None:
+                object_store.delete_prefix(admitted.preprocessing_bundle.object_prefix)
             raise
         return _model_response(model)
 

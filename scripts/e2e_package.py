@@ -1,6 +1,8 @@
 """Build harmless HDFS model-package and preprocessing-bundle ZIPs for Playwright E2E.
 
 Rewrites only identity fields. Never loads or executes ``model.pt``.
+Requires numpy (see ``requirements-e2e.txt``) because the shared bundle fixture
+writes ``embeddings.npz``.
 """
 
 from __future__ import annotations

@@ -749,6 +749,7 @@ Use Node 22 (`nvm use 22`) so Playwright and the frontend toolchain match CI.
 
 ```bash
 source .venv/bin/activate
+# CI installs requirements-e2e.txt (API deps + numpy). A full ML venv already has numpy.
 nvm use 22
 npm --prefix frontend install
 npx --prefix frontend playwright install chromium
