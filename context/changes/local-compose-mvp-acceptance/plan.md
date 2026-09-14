@@ -283,23 +283,23 @@ No schema migration. Existing `tests/postgres/compose.yaml` stays; operators mus
 
 #### Automated
 
-- [x] 2.1 `rg -n "unexecuted" context/deployment/deploy-plan.md README.md` matches
-- [x] 2.2 `rg -n "local Compose" README.md context/deployment/deploy-plan.md context/foundation/infrastructure.md context/foundation/tech-stack.md` matches
-- [x] 2.3 `rg -n "compose.env.example" README.md .env.example` matches
+- [x] 2.1 `rg -n "unexecuted" context/deployment/deploy-plan.md README.md` matches — 209b1ce
+- [x] 2.2 `rg -n "local Compose" README.md context/deployment/deploy-plan.md context/foundation/infrastructure.md context/foundation/tech-stack.md` matches — 209b1ce
+- [x] 2.3 `rg -n "compose.env.example" README.md .env.example` matches — 209b1ce
 
 #### Manual
 
-- [x] 2.4 Owner confirms README and deploy-plan lead with Compose as MVP proof and Railway as unexecuted future design, and that infrastructure.md no longer reads as “deploy the MVP on Railway” without that qualifier
+- [x] 2.4 Owner confirms README and deploy-plan lead with Compose as MVP proof and Railway as unexecuted future design, and that infrastructure.md no longer reads as “deploy the MVP on Railway” without that qualifier — 209b1ce
 
 ### Phase 3: Evidence run and acceptance record
 
 #### Automated
 
-- [ ] 3.1 `test -f context/changes/local-compose-mvp-acceptance/acceptance-record.md` succeeds
-- [ ] 3.2 `rg -n "compose-acceptance" context/foundation/mvp-alignment-plan.md` shows `done`
-- [ ] 3.3 `rg -n "verify-evidence" context/foundation/mvp-alignment-plan.md` shows `done`
+- [x] 3.1 `test -f context/changes/local-compose-mvp-acceptance/acceptance-record.md` succeeds
+- [x] 3.2 `rg -n "compose-acceptance" context/foundation/mvp-alignment-plan.md` shows `done`
+- [x] 3.3 `rg -n "verify-evidence" context/foundation/mvp-alignment-plan.md` shows `done`
 
 #### Manual
 
-- [ ] 3.4 Owner confirms `verify_hdfs_parity.py` passed in a normal local ML venv and that `parity-report.json` is not staged
-- [ ] 3.5 Owner confirms Compose happy path (v3 publish + golden fixture log) plus validator 503 and catalog mismatch, and that `git status` shows no binaries under `releases/`, `artifacts/`, or `data/`
+- [x] 3.4 Owner confirms `verify_hdfs_parity.py` passed in a normal local ML venv and that `parity-report.json` is not staged
+- [x] 3.5 Owner confirms Compose happy path (v3 publish + golden fixture log) plus validator 503 and catalog mismatch, and that `git status` shows no binaries under `releases/`, `artifacts/`, or `data/`

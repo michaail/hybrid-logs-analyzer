@@ -132,8 +132,9 @@ def _assert_shared_state_schema(database: ApiDatabase) -> None:
         "idx_anomaly_results_run_block_id",
     } <= _index_names(database, "anomaly_results")
     score_index = _index_definition(database, "idx_anomaly_results_run_score_desc").upper()
-    assert "CASE WHEN ANOMALY_SCORE IS NULL THEN 1 ELSE 0 END" in score_index
-    assert "ANOMALY_SCORE DESC" in score_index
+    compact_score_index = " ".join(score_index.replace("(", " ").replace(")", " ").split())
+    assert "CASE WHEN ANOMALY_SCORE IS NULL THEN 1 ELSE 0 END" in compact_score_index
+    assert "ANOMALY_SCORE DESC" in compact_score_index
     assert {
         "id",
         "project_id",
