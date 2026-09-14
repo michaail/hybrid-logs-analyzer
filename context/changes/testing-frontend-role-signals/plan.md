@@ -366,19 +366,19 @@ Operator; isolated `.e2e/` DB is wiped each suite start.
 
 #### Automated
 
-- [x] 2.1 `npm --prefix frontend run test:e2e` passes, including the new Operator deny spec and existing Publisher specs
+- [x] 2.1 `npm --prefix frontend run test:e2e` passes, including the new Operator deny spec and existing Publisher specs — 6b3b4d4
 
 #### Manual
 
-- [x] 2.2 Confirm the spec uses a same-project Operator token, asserts Banner copy only, and does not use `project-b-user` or screenshots as the oracle
+- [x] 2.2 Confirm the spec uses a same-project Operator token, asserts Banner copy only, and does not use `project-b-user` or screenshots as the oracle — 6b3b4d4
 
 ### Phase 3: CI and cookbook
 
 #### Automated
 
-- [ ] 3.1 `context/foundation/test-plan.md` §6.3 no longer reads TBD for denied Register/Publish copy
-- [ ] 3.2 `npm --prefix frontend test` still passes
+- [x] 3.1 `context/foundation/test-plan.md` §6.3 no longer reads TBD for denied Register/Publish copy
+- [x] 3.2 `npm --prefix frontend test` still passes
 
 #### Manual
 
-- [ ] 3.3 Read §6.3–§6.7: HTTP 403 tests still cited; Select is explicit; Operator Playwright is Banner-only; Phase 3 ledger row is `complete`; Phase 4 still `complete`
+- [x] 3.3 Read §6.3–§6.7: HTTP 403 tests still cited; Select is explicit; Operator Playwright is Banner-only; Phase 3 ledger row is `complete`; Phase 4 still `complete`

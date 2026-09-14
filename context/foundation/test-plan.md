@@ -51,7 +51,7 @@ research's job, see §1 principle #3).
 | 3 | An ineligible package becomes eligible, or a registered-but-unpublished version is used for analysis | High | Medium | interview Q3; PRD FR-002–FR-004; archive S-02; S-02 impl-review leftover F5/F6 |
 | 4 | An uploaded `.pt` is deserialized in the control plane or in a process that holds app secrets | High | Medium | AGENTS.md untrusted-model rule; tech-stack “API never deserializes”; F-02 archive risk |
 | 5 | A failed register leaves object-store leftovers another caller could hit if isolation slips | Medium | Medium | interview Q3; S-02 impl-review F7/F8; hot-spot dir `src/api` |
-| 6 | The UI shows Register/Publish/Select as available or successful when the API would deny the action | Medium | High | interview Q4; hot-spot dir `frontend/src` (19 file-touches/30d); sparse suite (no frontend tests) |
+| 6 | The UI shows Register/Publish as available or successful when the API would deny the action | Medium | High | interview Q4; hot-spot dir `frontend/src` (Register/Publish UI; later churn also includes analysis results); sparse suite (no frontend tests) |
 | 7 | An Operator can treat an analysis as successful or heuristically final when the run is still queued or has failed, when admitted inputs were not the ones used, or when provisional block histories are scored or counted as anomalies | High | Medium | refresh interview Q3/Q4; PRD FR-006 / FR-007 / FR-012; roadmap S-04–S-06; hot-spot dirs `src/api` (87 file-touches/30d), `src/inference_service` (18 file-touches/30d) |
 
 ### Risk Response Guidance
@@ -63,7 +63,7 @@ research's job, see §1 principle #3).
 | #3 | Ineligible ZIP → structured reject + no row; unpublished version cannot start analysis | HTTP 201 on upload means the version is usable | Eligibility vs publish vs analysis gate | integration (ZIP + status) | Snapshot of validator internals; expected `issues[]` copied from current code |
 | #4 | Control plane admits/rejects without loading the `.pt`; validator environment has no app secrets | “Validator ran” means Torch in the API process is acceptable | Where the artifact is probed vs stored; env-scrub contract | integration / contract | Importing Torch in API tests “to be realistic” |
 | #5 | Duplicate or failed insert leaves only the first declared prefix, or nothing | HTTP 409/5xx implies storage was cleaned | put vs insert vs delete-prefix; Bucket error list | integration against the store adapter | Mocking the store so cleanup never runs |
-| #6 | Denied actions stay denied in the UI and the API error is shown; success copy only after an allowed 2xx | A disabled button means the client will not send the request | Which calls the UI makes per role; how 403/404 are shown | component tests with a fake API | Browser e2e because it “feels safer”; screenshot snapshots |
+| #6 | Success copy only after an allowed 2xx; 403 shows the API error (Register/Publish stay visible and still send). Select is local published-only state, not a role 403 | A disabled Select means the Operator was denied | Current-user identity has no project role; which calls fire for register/publish; how 403 is shown | component tests with a fake API (bootstrap runner if needed) | Browser e2e; treating disabled Select as the role oracle; hiding buttons as the security control |
 | #7 | Queued or failed runs are readable without fake anomaly pages; exhausted dispatch stays queued; provisional pages omit score/threshold and do not change heuristically-final counts | HTTP 200 on a result page means the run succeeded; catalog membership means every block is scored | Run status vs result vs provisional collections; immutable admitted inputs vs live settings; heuristic catalog vs lifecycle proof | existing HTTP/integration tests (name in §6; do not add new ones in this refresh) | Parity checksums as oracles; browser e2e; copying current scorer output as the expected value |
 
 ## 3. Phased Rollout
@@ -76,7 +76,7 @@ orchestrator updates Status as artifacts appear on disk.
 |---|------------------------------|--------------------------------------------------|----------------|-------------------------------|-------------|---|
 | 1 | Critical-path API isolation | Prove cross-project deny, Operator 403, and ineligible/unpublished gates at the HTTP boundary | #1, #2, #3 | unit + integration | complete | testing-critical-path-api-isolation |
 | 2 | Package admission safety | Prove a failed admit leaves no usable orphan prefix | #4, #5 | integration + contract | complete | testing-package-admission-safety |
-| 3 | Frontend role signals | Prove the UI cannot look like a successful unauthorized publish or select | #6 | component (bootstrap runner if needed) | not started | — |
+| 3 | Frontend role signals | Prove the UI cannot look like a successful unauthorized publish or select | #6 | component (bootstrap runner if needed) | complete | testing-frontend-role-signals |
 | 4 | Quality-gates wiring | Lock existing Phase 1–3 tests into CI; document Torch-free python vs Ubuntu inference `@ml` jobs | cross-cutting | gates | complete | — |
 
 ## 4. Stack
@@ -94,7 +94,7 @@ of assuming access.
 | lint + types | ruff, mypy | 0.16.5 / 2.3.1 | already required in `.github/workflows/verify.yml` |
 | API runtime under test | FastAPI | 0.115.12 | control plane; do not load Torch in this process |
 | inference CI | pytest `@ml` | 9.1.1 | separate Verify `inference` job; not the Torch-free API job |
-| frontend unit | none yet — see Phase 3 | — | React 18 + Vite; no component runner in `frontend/package.json` |
+| frontend unit | Vitest + Testing Library | 3.2.4 / 16.3.0 | React 18 + Vite 6; user-event 14.6.1; jsdom 26.1.0; Verify `frontend` runs `npm test` |
 | e2e | Playwright | 1.63.0 | HDFS publication UI; `npm --prefix frontend run test:e2e`; Node 22; not a per-edit hook |
 | (optional) AI-native | cursor-ide-browser — checked: 2026-09-13 | n/a | manual smoke only; do not replace HTTP isolation tests |
 
@@ -104,7 +104,7 @@ of assuming access.
 - Runtime/browser: cursor-ide-browser — possible UI smoke, not a substitute for API isolation tests; checked: 2026-09-13
 - Provider/platform: none — no GitHub/Railway MCP; CI already lives in `verify.yml`; checked: 2026-09-13
 
-Test-base profile: **sparse** — pytest configured, 15 `tests/test_*.py` files; frontend component suite absent; Verify `python` job uses `-m "not ml"`; Verify `inference` job runs `tests/test_inference_service.py` and `tests/test_hdfs_inference_parity.py` with `-m ml`.
+Test-base profile: **sparse** — pytest configured, 15 `tests/test_*.py` files; frontend deny-copy tests in Vitest; Verify `python` job uses `-m "not ml"`; Verify `inference` job runs `tests/test_inference_service.py` and `tests/test_hdfs_inference_parity.py` with `-m ml`.
 
 ## 5. Quality Gates
 
@@ -212,11 +212,44 @@ Do not add browser e2e or parity/checksum jobs for these oracles.
 
 ### 6.3 Adding a frontend component test
 
-TBD — see §3 Phase 3 for denied Register/Publish/Select remaining denied, with API errors shown and no success copy on 403.
+Deny-copy tests live next to the UI they drive, as `frontend/src/*.test.tsx`.
+Run them with `npm --prefix frontend test` (Vitest + Testing Library + jsdom).
+The Verify `frontend` job runs `npm test` before `npm run build`.
+
+To add a Register/Publish (or similar) deny test:
+
+1. Stub the client method (`registerModel` / `publishModel`, or equivalent — not
+   `fetch`) so it rejects with `ApiError(403, "Insufficient project role.")`
+   from `frontend/src/api.ts`.
+2. Drive the exported deny surface (`ModelRegistrationDialog` or
+   `PublishModelHarness`). Do not mount the whole shell.
+3. Assert `role="alert"` contains that detail, `role="status"` success copy is
+   absent (`was registered as eligible` / `is now published`), and the stub was
+   called.
+4. Leave Register/Publish visible. Do not hide buttons by role. Hiding is not
+   the security control.
+
+Reference: `frontend/src/App.role-deny.test.tsx` —
+`shows a Register 403 alert and does not render success status` (dialog alert)
+and `shows a Publish 403 alert and does not render success status` (page alert).
+
+Select is published-only local state. Do not assert `disabled` as Operator deny.
+
+HTTP 403 / no-row oracles stay in pytest — cite, do not rewrite:
+
+- `test_authentication_roles_and_project_isolation` — Operator ZIP register
+  **403** then empty model list.
+- `test_model_publication_and_safe_analysis_run_lifecycle` — Operator publish
+  **403** then still `eligible`.
 
 `frontend/e2e/publish-eligible-hdfs-model.spec.ts` and
-`frontend/e2e/reject-ineligible-hdfs-model.spec.ts` are Publisher
-publication paths. They are not this unauthorized-role UI oracle.
+`frontend/e2e/reject-ineligible-hdfs-model.spec.ts` are Publisher publication
+paths. They are not this unauthorized-role UI oracle and not the HTTP isolation
+oracle.
+
+The shell check for Operator deny copy is
+`frontend/e2e/operator-denied-register-publish.spec.ts` (Banner-only; pytest
+remains the no-row / still-eligible oracle).
 
 ### 6.4 Adding a test for a new API endpoint
 
@@ -287,6 +320,12 @@ is shipped for model register
 stays on the cited Torch / env-scrub / ineligible tests. Dataset upload
 remains 409-only.
 
+**Frontend role signals (2026-09-14):** Component 403 tests
+(`frontend/src/App.role-deny.test.tsx`) and a same-project Operator
+Banner-only spec (`frontend/e2e/operator-denied-register-publish.spec.ts`)
+shipped in `testing-frontend-role-signals`. HTTP 403 tests in §6.2 remain
+the no-row / still-eligible oracle. Buttons stay visible.
+
 ### 6.7 Adding a Playwright E2E test
 
 E2E belongs only on risks that cross UI, auth, routing, API, and persistence.
@@ -305,6 +344,9 @@ Current specs:
 - `frontend/e2e/seed.spec.ts` — eligible ZIP appears as eligible under a unique identity.
 - `frontend/e2e/publish-eligible-hdfs-model.spec.ts` — explicit publish is confirmed in the UI.
 - `frontend/e2e/reject-ineligible-hdfs-model.spec.ts` — ineligible ZIP is rejected and cannot be published.
+- `frontend/e2e/operator-denied-register-publish.spec.ts` — same-project Operator
+  Register/Publish **403** Banner copy only (`role="alert"`, no success
+  `role="status"`). Not a persistence oracle and not Test C.
 
 Cross-project availability (Test C) is **not** an E2E spec. HTTP coverage in
 `tests/test_api.py` already proves foreign path **404**, IDOR **404**, and that
@@ -323,7 +365,7 @@ contributors should respect these unless the underlying assumption changes.
 - **New `@ml` jobs on the Torch-free API CI job** — a dedicated Verify `inference` job already runs `@ml`. Do not add further ML jobs to the `python` job. Re-evaluate if that split is removed. (Source: refresh interview Q5.)
 - **Notebook-parity and checksum-suite expansion** — S-04 shipped a release gate; do not spend rollout budget expanding the one-percentage-point parity or checksum suite into the Torch-free API job. Re-evaluate if the team wants parity in that job. (Source: refresh interview Q5.)
 - **New HDFS intake test programs** — S-03 shipped; invalid whole-dataset reject already has HTTP coverage. Do not invent a second intake suite in this rollout. Re-evaluate if intake rules change.
-- **Browser e2e outside the publication workflow** — analysis, intake, and screenshot snapshots stay out of Playwright. Publication E2E is limited to eligible publish and ineligible reject. Cross-project isolation stays at the HTTP layer (§6.7).
+- **Browser e2e outside the publication workflow** — analysis, intake, and screenshot snapshots stay out of Playwright. Publication E2E covers eligible publish, ineligible reject, and the Operator Banner-only deny spec. Cross-project isolation stays at the HTTP layer (§6.7).
 
 ## 8. Freshness Ledger
 
