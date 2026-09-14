@@ -272,46 +272,46 @@ No data migration. Rollback is revert of the git commits per phase. Deploy entry
 
 #### Automated
 
-- [x] 1.1 python -m pytest tests/test_api.py passes
-- [x] 1.2 ruff check src/api tests/test_api.py
-- [x] 1.3 mypy on touched API modules
+- [x] 1.1 python -m pytest tests/test_api.py passes — 3aa8cdb
+- [x] 1.2 ruff check src/api tests/test_api.py — 3aa8cdb
+- [x] 1.3 mypy on touched API modules — 3aa8cdb
 
 #### Manual
 
-- [x] 1.4 GET /health and GET /openapi.json still work via create_app
+- [x] 1.4 GET /health and GET /openapi.json still work via create_app — 3aa8cdb
 
 ### Phase 2: API domain routers
 
 #### Automated
 
-- [x] 2.1 python -m pytest tests/test_api.py
-- [x] 2.2 OpenAPI JSON: same paths/methods/tags as the map above; still no /register /signup /auth/register
-- [x] 2.3 ruff check + mypy on src/api and tests/test_api.py
+- [x] 2.1 python -m pytest tests/test_api.py — 3aa8cdb
+- [x] 2.2 OpenAPI JSON: same paths/methods/tags as the map above; still no /register /signup /auth/register — 3aa8cdb
+- [x] 2.3 ruff check + mypy on src/api and tests/test_api.py — 3aa8cdb
 
 #### Manual
 
-- [x] 2.4 Interactive /docs lists the same eight tags
-- [x] 2.5 SPA fallback still serves frontend/dist when present and does not swallow /projects/... 404s
+- [x] 2.4 Interactive /docs lists the same eight tags — 3aa8cdb
+- [x] 2.5 SPA fallback still serves frontend/dist when present and does not swallow /projects/... 404s — 3aa8cdb
 
 ### Phase 3: Frontend shared UI
 
 #### Automated
 
-- [x] 3.1 npm --prefix frontend run typecheck
-- [x] 3.2 npm --prefix frontend run lint
-- [x] 3.3 npm --prefix frontend run test
+- [x] 3.1 npm --prefix frontend run typecheck — 3aa8cdb
+- [x] 3.2 npm --prefix frontend run lint — 3aa8cdb
+- [x] 3.3 npm --prefix frontend run test — 3aa8cdb
 
 #### Manual
 
-- [x] 3.4 Dev UI still looks and behaves the same (classes unchanged)
+- [x] 3.4 Dev UI still looks and behaves the same (classes unchanged) — 3aa8cdb
 
 ### Phase 4: Frontend feature screens
 
 #### Automated
 
-- [x] 4.1 npm --prefix frontend run typecheck && npm --prefix frontend run lint && npm --prefix frontend run test
-- [x] 4.2 npm --prefix frontend run test:e2e (existing HDFS publish + ineligible + operator-denied specs)
+- [x] 4.1 npm --prefix frontend run typecheck && npm --prefix frontend run lint && npm --prefix frontend run test — 3aa8cdb
+- [x] 4.2 npm --prefix frontend run test:e2e (existing HDFS publish + ineligible + operator-denied specs) — 3aa8cdb
 
 #### Manual
 
-- [x] 4.3 Walk login → project → register/publish → dataset → run → results/provisional → administration; notices and 403 banners still match today
+- [x] 4.3 Walk login → project → register/publish → dataset → run → results/provisional → administration; notices and 403 banners still match today — 3aa8cdb
