@@ -22,6 +22,26 @@ import {
 
 type View = "models" | "runs" | "administration";
 
+export function publishedStatusMessage(
+  model: Pick<ModelVersion, "model_identifier" | "version">,
+): string {
+  return `${model.model_identifier} ${model.version} is now published.`;
+}
+
+export function registeredStatusMessage(
+  model: Pick<ModelVersion, "model_identifier" | "version">,
+): string {
+  return `${model.model_identifier} ${model.version} was registered as eligible.`;
+}
+
+export async function publishModelWithStatus(
+  publish: () => Promise<unknown>,
+  model: Pick<ModelVersion, "model_identifier" | "version">,
+): Promise<string> {
+  await publish();
+  return publishedStatusMessage(model);
+}
+
 const tokenStorageKey = "logscope.access-token";
 const RESULTS_PAGE_SIZE = 20;
 const api = new ApiClient();
@@ -230,9 +250,12 @@ export default function App() {
     }
     setPageError(null);
     try {
-      await api.publishModel(selectedProject.id, model.id);
+      const notice = await publishModelWithStatus(
+        () => api.publishModel(selectedProject.id, model.id),
+        model,
+      );
       await refreshProjectData(selectedProject.id);
-      setNotice(`${model.model_identifier} ${model.version} is now published.`);
+      setNotice(notice);
     } catch (error) {
       handleRequestError(error);
     }
@@ -247,7 +270,7 @@ export default function App() {
     }
     const created = await api.registerModel(selectedProject.id, packageFile, preprocessingBundleFile);
     await refreshProjectData(selectedProject.id);
-    setNotice(`${created.model_identifier} ${created.version} was registered as eligible.`);
+    setNotice(registeredStatusMessage(created));
   }
 
   async function uploadDataset(logFile: File): Promise<void> {
@@ -1245,7 +1268,7 @@ function NoProjectState({
   );
 }
 
-function ModelRegistrationDialog({
+export function ModelRegistrationDialog({
   projectName,
   onClose,
   onRegister,
@@ -2128,7 +2151,7 @@ function Dialog({
   );
 }
 
-function Banner({
+export function Banner({
   message,
   onDismiss,
   tone,
@@ -2237,6 +2260,43 @@ function ProvisionalHistoryCard({ item }: { item: HdfsProvisionalResult }): JSX.
 
 function messageFor(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
+}
+
+export function PublishModelHarness({
+  model,
+  publishModel,
+}: {
+  model: ModelVersion;
+  publishModel: (model: ModelVersion) => Promise<void>;
+}): JSX.Element {
+  const [notice, setNotice] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
+
+  async function onPublish(target: ModelVersion): Promise<void> {
+    setPageError(null);
+    try {
+      const status = await publishModelWithStatus(() => publishModel(target), target);
+      setNotice(status);
+    } catch (error) {
+      setPageError(messageFor(error));
+    }
+  }
+
+  return (
+    <div>
+      {notice ? <Banner tone="success" message={notice} onDismiss={() => setNotice(null)} /> : null}
+      {pageError ? (
+        <Banner tone="error" message={pageError} onDismiss={() => setPageError(null)} />
+      ) : null}
+      <ModelsView
+        models={[model]}
+        selectedModelId={null}
+        onPublish={onPublish}
+        onRegister={() => undefined}
+        onSelectModel={() => undefined}
+      />
+    </div>
+  );
 }
 
 function parseFiniteScore(

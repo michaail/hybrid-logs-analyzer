@@ -26,6 +26,15 @@ setup("provision isolated projects and store role auth tokens", async ({ page, r
     request,
     accounts.apiOrigin,
     adminHeaders,
+    accounts.operatorA.username,
+    accounts.operatorA.password,
+    projectA.id,
+    "operator",
+  );
+  await ensureProjectAccount(
+    request,
+    accounts.apiOrigin,
+    adminHeaders,
     accounts.projectBUser.username,
     accounts.projectBUser.password,
     projectB.id,
@@ -39,6 +48,17 @@ setup("provision isolated projects and store role auth tokens", async ({ page, r
     accounts.projectAName,
   );
   writeAuthToken("publisher", publisherToken);
+
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
+
+  const operatorToken = await signInAndReadToken(
+    page,
+    accounts.operatorA.username,
+    accounts.operatorA.password,
+    accounts.projectAName,
+  );
+  writeAuthToken("operator", operatorToken);
 
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();

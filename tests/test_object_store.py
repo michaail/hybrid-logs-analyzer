@@ -66,6 +66,23 @@ class FakeS3Client:
         return {"Body": BytesIO(payload)}
 
 
+class FakeS3ClientWithDeleteErrors(FakeS3Client):
+    """Report per-key Errors and leave objects in place (HTTP 200 + Errors)."""
+
+    def delete_objects(self, *, Bucket: str, Delete: Mapping[str, Any]) -> object:
+        del Bucket
+        return {
+            "Errors": [
+                {
+                    "Key": item["Key"],
+                    "Code": "AccessDenied",
+                    "Message": "Access Denied",
+                }
+                for item in Delete.get("Objects", [])
+            ]
+        }
+
+
 def test_object_store_source_does_not_import_torch() -> None:
     source = Path("src/api/object_store.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -335,6 +352,26 @@ def test_bucket_put_and_delete_prefix() -> None:
     assert f"{prefix}/manifest.json" not in remaining
     assert sibling in remaining
     assert overlapping in remaining
+    assert fake.objects[("models-test", sibling)] == b'{"keep":true}'
+
+
+def test_bucket_delete_prefix_raises_on_errors_and_keeps_keys() -> None:
+    fake = FakeS3ClientWithDeleteErrors()
+    store = BucketObjectStore(fake, "models-test")
+    project_id = "proj-a"
+    model_id = "model-a"
+    prefix = model_package_object_prefix(project_id, model_id, "v1")
+    keep = model_package_object_key(project_id, model_id, "v1", "manifest.json")
+    sibling = model_package_object_key(project_id, "model-b", "v1", "manifest.json")
+    store.put(keep, b"{}")
+    store.put(sibling, b'{"keep":true}')
+
+    with pytest.raises(RuntimeError, match="delete_objects reported errors"):
+        store.delete_prefix(prefix)
+
+    remaining = {key for _bucket, key in fake.objects}
+    assert keep in remaining
+    assert sibling in remaining
     assert fake.objects[("models-test", sibling)] == b'{"keep":true}'
 
 
