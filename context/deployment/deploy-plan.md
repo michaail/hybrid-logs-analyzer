@@ -1,15 +1,90 @@
 ---
 project: "Log Anomaly Detection System"
-platform: Railway
-environment: staging
-status: ready-for-manual-provisioning
-scope: HDFS-only control plane plus private on-demand inference
-updated_at: 2026-09-11
+platform: local Compose
+environment: local-mvp
+status: compose-is-mvp-proof
+scope: HDFS-only control plane plus private inference and validator
+updated_at: 2026-09-14
+railway_status: unexecuted-future-hosting
 ---
 
-# First Railway Staging Deployment
+# Local Compose MVP Deployment
 
 ## Objective
+
+The verified MVP deployment proof is **local Compose**: root `compose.yaml` plus
+`compose.env` copied from `compose.env.example`. An operator with Docker and the
+pinned workspace artefacts can migrate, bootstrap, register and publish the trusted
+v3 pair, and complete an analysis against PostgreSQL. Railway remains an
+**unexecuted** future hosting design. Do not treat `.railway/railway.ts`, Bucket,
+private DNS, or cold start as validated.
+
+## Compose stack
+
+Services: `postgres`, one-shot `migrate`, public `web`, private `inference`, private
+`model-validator`. Images: `postgres:16`; `Dockerfile` / `Dockerfile.inference` /
+`Dockerfile.validator`.
+
+Published host ports: `8000:8080` (web) and `5433:5432` (postgres). Publishing
+Postgres is an explicit exception so host `pytest -m postgres` can use
+`TEST_DATABASE_URL=postgresql://analyzer:<POSTGRES_PASSWORD>@127.0.0.1:5433/analyzer`.
+Inference and the validator stay private (container `8080` only). Do not start
+`tests/postgres/compose.yaml` while this stack is up — both bind host `5433`.
+
+Named volume `objects` mounts on **web and inference only** at
+`API_OBJECT_STORE_ROOT=/var/lib/analyzer/objects`. The validator has no object
+volume, no `DATABASE_URL`, no `API_JWT_SECRET`, and no Bucket keys. Catalog: read-only
+bind of host `HDFS_COMPLETENESS_CATALOG_DIR` into inference;
+`INFERENCE_HDFS_COMPLETENESS_MANIFEST` is the in-container `manifest.json`. Missing or
+mismatched SHA → inference `/health` 503 and/or run `COMPLETENESS_CATALOG_UNAVAILABLE`,
+not all-provisional. `compose.yaml` always sets
+`INFERENCE_SERVICE_URL=http://inference:8080` and
+`MODEL_VALIDATOR_SERVICE_URL=http://model-validator:8080` plus matching tokens.
+
+Always invoke Compose with `--env-file compose.env`. Container `DATABASE_URL` is
+hardcoded to the Postgres service so host `.env` SQLite cannot poison the stack.
+Bootstrap stays interactive; do not add a startup password variable.
+
+```bash
+cp compose.env.example compose.env
+# Fill JWT, Postgres password, inference/validator tokens, catalog dir, SHA-256.
+docker compose --env-file compose.env up --build
+docker compose --env-file compose.env exec web python -m src.api.bootstrap --username admin
+```
+
+API origin: `http://127.0.0.1:8000`. There is no smoke-container service; acceptance
+runs from the host against that origin.
+
+## Compose acceptance procedure
+
+Fail closed if `releases/hdfs/attribute-gae-v3.zip`, the matching preprocessing ZIP,
+or the F-03 catalog tree is missing. Do not record fixture v2 as the trusted publish.
+
+1. Wait for `migrate` (`python -m src.api.migrations`) to complete.
+2. Interactive bootstrap (command above).
+3. Provision project, publisher, and operator.
+4. Publisher register + publish **v3**.
+5. Operator upload `tests/fixtures/hdfs_inference_release/hdfs.log`.
+6. Start analysis; poll to `completed` or record a real terminal failure.
+7. GET results and provisional-results; confirm audit events exist.
+8. Negatives on the same stack: validator stopped → register 503 and empty model list;
+   catalog SHA or file mismatch → inference `/health` 503 and/or
+   `COMPLETENESS_CATALOG_UNAVAILABLE`, not all-provisional.
+
+That Operator log is the committed golden fixture, not FR-011. FR-011 is
+`scripts/verify_hdfs_parity.py`. Capture `docker compose images` digests as run
+evidence only (not a lockfile). Write the markdown record to
+`context/changes/local-compose-mvp-acceptance/acceptance-record.md`.
+
+`scripts/e2e_serve.py` and Playwright are UI smoke, not Compose proof.
+
+## Unexecuted future Railway hosting
+
+The sections below are the unexecuted Railway staging procedure. They remain as a
+topology template. They are **not** MVP proof and must not be read as “first Railway
+staging is the MVP deploy.”
+
+### Railway staging objective
 
 Deploy a manually approved, single-region Railway staging environment for the HDFS-only
 control plane and a private on-demand inference service. The public FastAPI service serves
@@ -32,6 +107,10 @@ Boundaries that remain in this release:
   Python 3.10 image with `requirements-api.txt`.
 - `Dockerfile.inference` builds the private Linux ML service from `requirements-inference.txt`.
   It runs as a non-root user and does not receive `API_JWT_SECRET`.
+- `Dockerfile.validator` builds a private Torch HTTP validator from
+  `requirements-model-validator.txt`. That service is declared in `.railway/railway.ts` as
+  unexecuted future Railway design (see below). It must not receive `API_JWT_SECRET`,
+  `DATABASE_URL`, or Bucket credentials.
 - `.railway/railway.ts` is the current Railway Infrastructure as Code definition. It creates the
   PostgreSQL service, a private `models` Bucket, public `web`, and private `inference`, passes
   the database and Bucket credentials by reference, runs migrations before the web deployment,
@@ -79,6 +158,20 @@ Bucket. Inference loads `hdfs/reference-catalog/manifest.json` and its sibling
 `selected-block-ids.txt` from that Bucket; it does not expect a host-path catalog inside
 the image.
 
+## Unexecuted private model-validator
+
+`.railway/railway.ts` also names a private `model-validator` service built from
+`Dockerfile.validator`. It has no public domain, no PostgreSQL, no Bucket / `sharedStore`,
+and no `API_JWT_SECRET`. It receives only `MODEL_VALIDATOR_INTERNAL_TOKEN`. `web` receives
+`MODEL_VALIDATOR_SERVICE_URL` (`http://model-validator.railway.internal:8080`) and the
+same token. Sleep-when-idle is allowed.
+
+This wiring is an unexecuted future Railway design. It is not proof that Railway staging
+was provisioned, and it does not validate private DNS, cold start, or Bucket behavior.
+The MVP's reproducible deployment proof is **local Compose** (see above), not this Railway
+file. Do not treat a future `railway up --service model-validator` as MVP acceptance
+evidence.
+
 ## Service variable contract
 
 Before applying this IaC, create two sealed Railway **shared environment variables**:
@@ -87,6 +180,9 @@ Before applying this IaC, create two sealed Railway **shared environment variabl
 - `INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256`: the lowercase SHA-256 of the retained
   F-03 `manifest.json` that will be uploaded to the Bucket. Calculate it at provision
   time; do not commit the digest.
+- `MODEL_VALIDATOR_INTERNAL_TOKEN`: a high-entropy validator invocation secret, distinct
+  from the JWT signing key. This shared variable is part of the unexecuted validator
+  wiring above; it is not evidence of a provisioned staging service.
 
 The IaC references both as `ctx.shared.*` for `inference` (the token is also on `web`).
 Do not create separate service-scoped copies. Do not put either value on the frontend
@@ -244,5 +340,5 @@ a later release gate and is not an Operator upload.
   bootstrap-only credentials.
 
 Before production data is enabled, add and test PostgreSQL backup/restore, bounded
-structured-log review, and HDFS notebook-parity checks within one percentage point of the
-agreed baseline.
+structured-log review, and the labelled FR-011 gate (exact `best_threshold` and test F1,
+PR-AUC, and ROC-AUC within `0.01` of `context/foundation/hdfs-parity-baseline.md`).

@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+compose.env
 .venv/
 .api/
 node_modules/

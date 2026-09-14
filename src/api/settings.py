@@ -20,6 +20,10 @@ class ApiSettings:
     jwt_ttl_minutes: int = 30
     code_root: Path = Path(".")
     model_validator_command: tuple[str, ...] | None = None
+    model_validator_service_url: str | None = None
+    model_validator_internal_token: str | None = None
+    model_validator_connect_timeout_seconds: float = 2.0
+    model_validator_read_timeout_seconds: float = 120.0
     object_store_root: Path = Path(".api/objects")
     object_store_endpoint: str | None = None
     object_store_bucket: str | None = None
@@ -79,6 +83,7 @@ class ApiSettings:
         endpoint, bucket, access_key, secret_key = _bucket_credentials_from_environment()
         region = _optional_env("API_OBJECT_STORE_REGION") or "auto"
         inference_url, inference_token = _inference_credentials_from_environment()
+        validator_url, validator_token = _validator_credentials_from_environment()
 
         return cls(
             database_url=database_url,
@@ -103,6 +108,14 @@ class ApiSettings:
             inference_retry_attempts=_positive_int_env("INFERENCE_RETRY_ATTEMPTS", 5),
             inference_retry_backoff_seconds=_non_negative_float_env(
                 "INFERENCE_RETRY_BACKOFF_SECONDS", 2.0
+            ),
+            model_validator_service_url=validator_url,
+            model_validator_internal_token=validator_token,
+            model_validator_connect_timeout_seconds=_positive_float_env(
+                "MODEL_VALIDATOR_CONNECT_TIMEOUT_SECONDS", 2.0
+            ),
+            model_validator_read_timeout_seconds=_positive_float_env(
+                "MODEL_VALIDATOR_READ_TIMEOUT_SECONDS", 120.0
             ),
         )
 
@@ -159,6 +172,29 @@ def _inference_credentials_from_environment() -> tuple[str | None, str | None]:
         raise RuntimeError(
             "Inference dispatch settings must be set together: "
             "INFERENCE_SERVICE_URL and INFERENCE_INTERNAL_TOKEN."
+        )
+    return url, token
+
+
+def _validator_credentials_from_environment() -> tuple[str | None, str | None]:
+    """Require the private validator URL and token together, or neither."""
+
+    url = _optional_env("MODEL_VALIDATOR_SERVICE_URL")
+    token = _optional_env("MODEL_VALIDATOR_INTERNAL_TOKEN")
+    present = [
+        name
+        for name, value in (
+            ("MODEL_VALIDATOR_SERVICE_URL", url),
+            ("MODEL_VALIDATOR_INTERNAL_TOKEN", token),
+        )
+        if value is not None
+    ]
+    if not present:
+        return None, None
+    if len(present) != 2:
+        raise RuntimeError(
+            "Model validator settings must be set together: "
+            "MODEL_VALIDATOR_SERVICE_URL and MODEL_VALIDATOR_INTERNAL_TOKEN."
         )
     return url, token
 

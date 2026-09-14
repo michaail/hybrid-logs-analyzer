@@ -433,7 +433,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         package: UploadFile = File(..., description="Complete HDFS model package ZIP"),
         preprocessing_bundle: UploadFile | None = File(
             default=None,
-            description="Companion preprocessing-bundle ZIP required for v2 packages",
+            description="Companion preprocessing-bundle ZIP required for registration",
         ),
     ) -> ModelVersionResponse:
         """Admit a Publisher ZIP upload. Never loads the artifact in this process."""
@@ -515,7 +515,9 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 detail="This model identifier and version already exists in the project.",
             ) from None
         except Exception:
-            _delete_admitted_prefixes()
+            object_store.delete_prefix(admitted.package_reference)
+            if admitted.preprocessing_bundle is not None:
+                object_store.delete_prefix(admitted.preprocessing_bundle.object_prefix)
             raise
         return _model_response(model)
 

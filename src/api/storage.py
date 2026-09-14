@@ -632,6 +632,53 @@ class ApiDatabase:
             (str(project_id),),
         )
 
+    def list_all_model_versions(self) -> list[DatabaseRow]:
+        """Return every model version with joined bundle prefix fields."""
+
+        return self._all(
+            f"""
+            {_MODEL_VERSION_WITH_BUNDLE}
+            ORDER BY model_versions.created_at, model_versions.id
+            """
+        )
+
+    def count_analysis_runs_for_model(self, model_id: UUID) -> int:
+        """Return how many analysis runs reference this model version."""
+
+        row = self._one(
+            """
+            SELECT COUNT(*) AS run_count
+            FROM analysis_runs
+            WHERE model_version_id = ?
+            """,
+            (str(model_id),),
+        )
+        if row is None:
+            return 0
+        return int(row["run_count"])
+
+    def delete_model_version(self, model_id: UUID) -> None:
+        """Delete a model row. Fail closed when analysis runs still reference it."""
+
+        with self.session() as connection:
+            count_row = connection.execute(
+                """
+                SELECT COUNT(*) AS run_count
+                FROM analysis_runs
+                WHERE model_version_id = ?
+                """,
+                (str(model_id),),
+            ).fetchone()
+            run_count = int(dict(count_row)["run_count"]) if count_row is not None else 0
+            if run_count > 0:
+                raise DatabaseIntegrityError(
+                    "Model version is referenced by analysis runs."
+                )
+            connection.execute(
+                "DELETE FROM model_versions WHERE id = ?",
+                (str(model_id),),
+            )
+
     def get_preprocessing_bundle(self, project_id: UUID, bundle_id: UUID) -> DatabaseRow | None:
         return self._one(
             """

@@ -3,6 +3,7 @@ import { bucket, defineRailway, postgres, project, ref, service } from "railway/
 // Immutable Bucket region. Must match the staging project used by web and PostgreSQL.
 const STAGING_BUCKET_REGION = "ams" as const;
 const INFERENCE_PRIVATE_URL = "http://inference.railway.internal:8080";
+const VALIDATOR_PRIVATE_URL = "http://model-validator.railway.internal:8080";
 
 export default defineRailway((ctx) => {
   if (!ctx.isEnvironment("staging")) {
@@ -34,6 +35,8 @@ export default defineRailway((ctx) => {
       API_TRUSTED_WORKSPACE_ROOT: "workspace",
       INFERENCE_SERVICE_URL: INFERENCE_PRIVATE_URL,
       INFERENCE_INTERNAL_TOKEN: ctx.shared.INFERENCE_INTERNAL_TOKEN,
+      MODEL_VALIDATOR_SERVICE_URL: VALIDATOR_PRIVATE_URL,
+      MODEL_VALIDATOR_INTERNAL_TOKEN: ctx.shared.MODEL_VALIDATOR_INTERNAL_TOKEN,
       ...sharedStore,
     },
   });
@@ -57,8 +60,24 @@ export default defineRailway((ctx) => {
       ...sharedStore,
     },
   });
+  const modelValidator = service("model-validator", {
+    build: {
+      builder: "DOCKERFILE",
+      dockerfilePath: "Dockerfile.validator",
+    },
+    start: "python -m src.model_validator.service",
+    healthcheck: "/health",
+    healthcheckTimeout: 300,
+    replicas: 1,
+    deploy: {
+      sleepApplication: true,
+    },
+    env: {
+      MODEL_VALIDATOR_INTERNAL_TOKEN: ctx.shared.MODEL_VALIDATOR_INTERNAL_TOKEN,
+    },
+  });
 
   return project("log-analyzer-staging", {
-    resources: [database, web, inference, objects],
+    resources: [database, web, inference, modelValidator, objects],
   });
 });

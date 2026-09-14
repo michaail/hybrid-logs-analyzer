@@ -2,7 +2,7 @@
   "model_identifier": "attribute-gae",
   "version": "fixture",
   "source_compatibility": "hdfs",
-  "format": "attribute-aware-gae-v1",
+  "format": "attribute-aware-gae-v2",
   "metrics": {
     "best_threshold": 0.147
   },
@@ -32,5 +32,10 @@
       "model.pt": "2a5bf2f51c2ecbdeed858646a5e2e8c887b295da6b389bfc33ddd5b93c238c50",
       "evidence.json": "abb8458bcfd7e5fd7d0fa9f5f3436a1f36f2f8fea0c46b283871e804812a9acd"
     }
+  },
+  "preprocessing_bundle": {
+    "identifier": "attribute-gae-preprocessing",
+    "version": "v2",
+    "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   }
 }

@@ -11,7 +11,7 @@ test("eligible HDFS package registration is listed under its unique identifier",
   const pkg = eligiblePackage();
   await openPublisherWorkspace(page);
 
-  const response = await registerPackage(page, pkg.zipPath);
+  const response = await registerPackage(page, pkg.zipPath, pkg.bundleZipPath);
   expect(response.status()).toBe(201);
 
   await expect(

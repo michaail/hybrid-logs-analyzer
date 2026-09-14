@@ -38,11 +38,13 @@ export async function openPublisherWorkspace(page: Page, projectName = "e2e-proj
 export async function registerPackage(
   page: Page,
   zipPath: string,
+  bundleZipPath: string,
 ): Promise<Response> {
   await page.getByRole("button", { name: "Register trained model" }).click();
   const dialog = page.getByRole("dialog", { name: "Register trained model" });
   await expect(dialog).toBeVisible();
   await dialog.getByLabel("HDFS model package ZIP").setInputFiles(zipPath);
+  await dialog.getByLabel("Preprocessing-bundle ZIP").setInputFiles(bundleZipPath);
   const pending = page.waitForResponse((response) => {
     if (response.request().method() !== "POST") {
       return false;
@@ -56,6 +58,7 @@ export async function registerPackage(
 export async function registerEligibleViaPublisherApi(
   request: APIRequestContext,
   zipPath: string,
+  bundleZipPath: string,
 ): Promise<void> {
   const accounts = readAccounts();
   const headers = { Authorization: `Bearer ${readAuthToken("publisher")}` };
@@ -73,6 +76,11 @@ export async function registerEligibleViaPublisherApi(
         name: path.basename(zipPath),
         mimeType: "application/zip",
         buffer: fs.readFileSync(zipPath),
+      },
+      preprocessing_bundle: {
+        name: path.basename(bundleZipPath),
+        mimeType: "application/zip",
+        buffer: fs.readFileSync(bundleZipPath),
       },
     },
   });

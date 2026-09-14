@@ -55,14 +55,19 @@ describe("Register and Publish role-deny copy", () => {
     );
 
     const packageFile = new File(["package"], "hdfs-model.zip", { type: "application/zip" });
+    const bundleFile = new File(["bundle"], "hdfs-bundle.zip", { type: "application/zip" });
     fireEvent.change(screen.getByLabelText(/HDFS model package ZIP/i), {
       target: { files: [packageFile] },
+    });
+    fireEvent.change(screen.getByLabelText(/Preprocessing-bundle ZIP/i), {
+      target: { files: [bundleFile] },
     });
     const registerButton = screen.getByRole("button", { name: "Register model" });
     expect((registerButton as HTMLButtonElement).disabled).toBe(false);
     fireEvent.submit(registerButton.closest("form") as HTMLFormElement);
 
     expect(registerModel).toHaveBeenCalledTimes(1);
+    expect(registerModel).toHaveBeenCalledWith(packageFile, bundleFile);
     expect((await screen.findByRole("alert")).textContent).toContain(ROLE_DENIED);
     expect(screen.queryByRole("status")).toBeNull();
     expect(

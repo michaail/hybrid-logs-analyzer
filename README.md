@@ -318,11 +318,47 @@ The HDFS-only API provides administrator-provisioned accounts, project isolation
 model registration/publication, and analysis-run validation. It stores metadata in the database
 configured by `DATABASE_URL`. Publishers upload a complete HDFS model package ZIP; only
 declared package files are persisted in object storage (a local filesystem root by default, or
-a Railway Bucket when credentials are configured). The public API process never deserializes a
-model artifact.
+an S3-compatible Bucket when those credentials are configured). The public API process never
+deserializes a model artifact.
+
+### Local Compose (verified MVP proof)
+
+The verified HDFS MVP deployment proof is **local Compose**, not Railway. Copy
+`compose.env.example` to `compose.env`, set the F-03 catalog host path and SHA-256,
+generate high-entropy JWT and tokens, then:
+
+```bash
+cp compose.env.example compose.env
+# Fill API_JWT_SECRET, POSTGRES_PASSWORD, INFERENCE_INTERNAL_TOKEN,
+# MODEL_VALIDATOR_INTERNAL_TOKEN, HDFS_COMPLETENESS_CATALOG_DIR, and
+# INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256.
+
+docker compose --env-file compose.env up --build
+docker compose --env-file compose.env exec web python -m src.api.bootstrap --username admin
+```
+
+Wait for the one-shot `migrate` service to finish before bootstrap. The API is at
+`http://127.0.0.1:8000` (container 8080). Postgres is published on host `5433` so
+`pytest -m postgres` can use the same database; do not start
+`tests/postgres/compose.yaml` at the same time.
+
+A missing or mismatched catalog makes inference `/health` return 503 (not
+all-provisional). `compose.yaml` always sets the validator URL+token pair on `web`;
+omitting that pair would be a mis-template, and register would 503 with no model row.
+The validator has no JWT, database URL, or object-store volume.
+
+`scripts/e2e_serve.py` remains UI smoke (files-only validator, disposable SQLite). It is
+not Compose proof and not Torch-validator proof. Playwright is not Compose proof.
+
+Railway staging, Bucket, private DNS, and cold start are **unexecuted** future hosting
+design. Recorded Compose acceptance (after the evidence run) is
+`context/changes/local-compose-mvp-acceptance/acceptance-record.md`.
+
+### Host-process development
 
 Copy `.env.example` to `.env` and set a unique `API_JWT_SECRET`. Configure
-`DATABASE_URL` (for example, `sqlite:///.api/analyzer.db` locally).
+`DATABASE_URL` (for example, `sqlite:///.api/analyzer.db` locally). Do not feed that
+SQLite URL into Compose; Compose uses `compose.env` / `compose.yaml`.
 `API_TRUSTED_WORKSPACE_ROOT` is no longer the Operator log intake path; Operators
 upload object-kind HDFS datasets instead. Optional `API_OBJECT_STORE_ROOT` defaults to a
 sibling `.api/objects` directory for local object-kind model packages and admitted datasets:
@@ -336,6 +372,13 @@ python -m src.api.migrations
 python -m src.api.bootstrap --username admin
 uvicorn src.api.main:create_app --factory --reload
 ```
+
+Registering a model requires the private validator. Set
+`MODEL_VALIDATOR_SERVICE_URL` and `MODEL_VALIDATOR_INTERNAL_TOKEN` together on the API
+process, and the same token on the validator process. Local UI smoke without that HTTP
+service uses `scripts/e2e_serve.py`, which injects a files-only command. A factory
+`uvicorn` start with neither the URL/token pair nor an injected command fails closed
+on register (`503`) and inserts no model row.
 
 The API is then available at `http://127.0.0.1:8000`, with OpenAPI documentation at `/docs`.
 There is no public sign-up route. The first Administrator is created only by the
@@ -364,6 +407,13 @@ bounded interval. If both settings are unset, or activation cannot succeed, the 
 becomes `failed` with `INFERENCE_DISPATCH_FAILED` and a generic Operator-safe report.
 That public result does not include the inference URL, token, or exception text.
 
+For live model registration against this factory `uvicorn` path, also run the private
+validator (`python -m src.model_validator.service` from
+`requirements-model-validator.txt`) and set `MODEL_VALIDATOR_SERVICE_URL` (for example
+`http://127.0.0.1:8081`) with `MODEL_VALIDATOR_INTERNAL_TOKEN` on both the API and
+validator processes. Local UI smoke that only needs admission can skip that service
+and use `scripts/e2e_serve.py` instead.
+
 The private inference process also requires a pinned F-03 catalog pair:
 
 ```bash
@@ -377,11 +427,10 @@ process only. Leave them out of the public API, the React build, and model-valid
 packages.
 
 Locally, the manifest value is the absolute path to that ignored `manifest.json`.
-On Railway staging, the same variable is the Bucket object key
-`hdfs/reference-catalog/manifest.json`; upload that file and its sibling
-`selected-block-ids.txt` to the private `models` Bucket and pin the digest as the
-shared `INFERENCE_HDFS_COMPLETENESS_MANIFEST_SHA256` variable. Inference `/health`
-verifies the catalog before reporting ready.
+Local Compose bind-mounts that directory read-only into `inference`. An unexecuted
+future Railway design would use the Bucket object key
+`hdfs/reference-catalog/manifest.json` plus sibling `selected-block-ids.txt`.
+Inference `/health` verifies the catalog before reporting ready.
 
 A missing or checksum-mismatched catalog fails the analysis run; it does not
 treat every block as provisional. Generated evaluation artifacts stay under ignored
@@ -421,41 +470,48 @@ into object storage. Extra undeclared ZIP members are ignored for eligibility an
 persisted. `manifest.json` must sit at the ZIP root; a single wrapping folder is not
 unwrapped.
 
-A hand-built package ZIP looks like this:
+A hand-built registration looks like two ZIPs:
 
 ```text
-hdfs-attribute-gae-v1.zip
+hdfs-attribute-gae-v2.zip
   manifest.json
   model.pt
   evidence.json
+
+hdfs-preprocessing-bundle.zip
+  manifest.json
+  drain.ini
+  drain_parser.bin
+  embeddings.npz
 ```
 
 `manifest.json` is a closed schema. Required fields include `model_identifier`, `version`,
-`source_compatibility` (`hdfs` only), `format` (`attribute-aware-gae-v1`), `metrics` with a
+`source_compatibility` (`hdfs` only), `format` (`attribute-aware-gae-v2`), `metrics` with a
 finite `best_threshold`, `architecture` (`node_dim`, `edge_dim`, `hidden_dim`, `latent_dim`,
 `gine_aggregation`, `node_transformation`, paired `edge_mean`/`edge_std`), `scoring`
-(`alpha`, `beta`, `gamma`), and `files` with relative POSIX `artifact` / `evidence` paths plus
+(`alpha`, `beta`, `gamma`), `preprocessing_bundle` (`identifier`, `version`, `digest`), and
+`files` with relative POSIX `artifact` / `evidence` paths plus
 lowercase hex SHA-256 checksums of those files. Extra undeclared files are ignored for
 eligibility. `evidence.json` must be a non-empty JSON object; its contents are not scored.
 
-`model.pt` must be a tensor-only `attribute-aware-gae-v1` state dict. A dedicated
-package-validation process loads it with `torch.load(..., map_location="cpu", weights_only=True)`
+`model.pt` must be a tensor-only AttributeAwareGAE state dict. A dedicated private
+validator service loads it with `torch.load(..., map_location="cpu", weights_only=True)`
 and checks keys, shapes, and dtypes against the declared architecture. The public API never
 imports PyTorch, never calls `torch.load`, and never uses `weights_only=False` on an admitted
 artifact. Install `requirements-model-validator.txt` only for that isolated process; keep
 `requirements-api.txt` Torch-free. Do not regenerate `requirements-macos-intel.lock.txt`
 from the validator file.
 
-Publishers register with `POST /projects/{project_id}/models` as multipart ZIP and explicitly
-publish an eligible version. V1 uses the `package` field only; v2 also requires its companion
-`preprocessing_bundle` ZIP in the same request. Operators admit a UTF-8 HDFS log with
+Publishers register with `POST /projects/{project_id}/models` as multipart ZIP (`package` and
+`preprocessing_bundle`) and explicitly
+publish an eligible version. Operators admit a UTF-8 HDFS log with
 `POST /projects/{project_id}/datasets` (multipart field `log`, 32 MiB cap). A valid file
 becomes a new `storage_kind=object` dataset with a SHA-256 checksum. Invalid, empty,
 oversize, or non-UTF-8 payloads return 422 with a validation report, persist no object, and
 insert no row. Analysis starts with `POST /projects/{project_id}/analysis-runs` using
 `{ model_version_id, dataset_id }` only. Missing or foreign datasets return 404. The API
 copies the dataset object key into `log_reference`; it does not re-scan the log at analyze
-time. A published v1 model without a bound preprocessing bundle returns 409 before any run
+time. An unpublished model returns 409 before any run
 is created. An inference-ready published v2 model returns `202` with status `queued` and
 null completion/error fields; the API then activates the private inference service with
 bounded retry. If activation succeeds, the inference service owns
@@ -611,8 +667,9 @@ Roll out S-06 in this order:
 1. Build and retain the F-03 artifact outside Git, then record the `manifest.json` SHA-256.
 2. Apply migration `008_provisional_hdfs_results` to the shared database.
 3. Configure and deploy the private inference service with the manifest location and exact
-   SHA-256 (filesystem path locally; Bucket object key `hdfs/reference-catalog/manifest.json`
-   on Railway); verify `/health` can load the catalog before admitting queued work.
+   SHA-256 (filesystem path or Compose bind-mount locally; Bucket object key
+   `hdfs/reference-catalog/manifest.json` only in the unexecuted Railway design); verify
+   `/health` can load the catalog before admitting queued work.
 4. Deploy the public API.
 5. Deploy the frontend.
 
@@ -646,9 +703,12 @@ Automated coverage uses `tests/test_hdfs_evaluation_data.py` plus the golden fix
 `tests/fixtures/hdfs_inference_release/`. The golden `release_gate` tests remain opt-in
 (`pytest tests/test_hdfs_inference_parity.py -m release_gate` in an ML venv).
 
-Optional PostgreSQL dialect tests use a local Compose database and stay out of default CI:
+Optional PostgreSQL dialect tests stay out of default CI. If the MVP stack is already
+up, point `TEST_DATABASE_URL` at host `5433` and do not start the harness below
+(both bind that port):
 
 ```bash
+# Thin dialect harness only — mutually exclusive with root compose.yaml on 5433.
 docker compose -f tests/postgres/compose.yaml up -d
 TEST_DATABASE_URL=postgresql://analyzer:analyzer@127.0.0.1:5433/analyzer python -m pytest tests/test_migrations.py tests/test_shared_state_repository.py -m postgres
 ```
@@ -668,10 +728,11 @@ cd frontend && npm install && npm run dev
 Vite proxies API paths to `http://127.0.0.1:8000` during local development (`E2E_API_ORIGIN`
 overrides the proxy target for Playwright). A deployed static
 build leaves `VITE_API_BASE_URL` unset when the API serves the client from the same origin.
-The Railway image builds `frontend/dist` and serves it through FastAPI. See the
-[Railway staging deployment guide](context/deployment/deploy-plan.md) for the two-service
-topology: public `web` plus a private on-demand `inference` service that shares PostgreSQL
-and the Bucket. There is no polling worker and no public inference route.
+The web image builds `frontend/dist` and serves it through FastAPI. See the
+[deployment guide](context/deployment/deploy-plan.md): verified MVP proof is **local Compose**
+(`web`, private `inference`, private `model-validator`, PostgreSQL, named object volume).
+Railway Bucket / private DNS / cold start remain unexecuted future hosting. There is no
+polling worker and no public inference route.
 
 The current API accepts a Publisher ZIP for model registration and an Operator HDFS log
 upload. The datasets panel admits a file; the analyze dialog selects an accepted
@@ -688,6 +749,7 @@ Use Node 22 (`nvm use 22`) so Playwright and the frontend toolchain match CI.
 
 ```bash
 source .venv/bin/activate
+# CI installs requirements-e2e.txt (API deps + numpy). A full ML venv already has numpy.
 nvm use 22
 npm --prefix frontend install
 npx --prefix frontend playwright install chromium
@@ -720,10 +782,11 @@ session token under `playwright/.auth/`. Specs restore that token into `sessionS
 (`logscope.access-token`) instead of logging in again. Refresh auth by re-running the suite
 (the API process wipes `.e2e/` on each start).
 
-Safe fixtures: committed files in `tests/fixtures/model_packages/valid_files/`. Each test
-rewrites unique `model_identifier` / `version` via `scripts/e2e_package.py`. Ineligible
-packages use empty `evidence.json`. The E2E API validator is the existing Torch-free
-`tests/support/files_only_validator.py` subprocess — it never `torch.load`s artifacts.
+Safe fixtures: `scripts/e2e_package.py` writes a unique `attribute-aware-gae-v2` package ZIP
+and matching preprocessing-bundle ZIP (never `torch.load`s artifacts). Ineligible packages
+use empty `evidence.json`. The E2E API validator is the existing Torch-free
+`tests/support/files_only_validator.py` subprocess. A committed v1 directory
+`tests/fixtures/model_packages/rejected_v1/` is a 422 oracle, not an upload fixture.
 
 Cleanup: there is no public model-delete API. Each suite start deletes `.e2e/` and creates
 a new SQLite file and object store. Tests also use unique identities so parallel workers

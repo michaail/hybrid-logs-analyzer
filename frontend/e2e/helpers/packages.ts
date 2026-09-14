@@ -13,6 +13,7 @@ export interface UniquePackageIdentity {
   identifier: string;
   version: string;
   zipPath: string;
+  bundleZipPath: string;
 }
 
 export function uniquePackageIdentity(prefix: string): { identifier: string; version: string } {
@@ -28,6 +29,12 @@ export function writePackageZip(
   identity: { identifier: string; version: string },
 ): UniquePackageIdentity {
   const zipPath = path.join(repoRoot, ".e2e", "packages", `${identity.identifier}.zip`);
+  const bundleZipPath = path.join(
+    repoRoot,
+    ".e2e",
+    "packages",
+    `${identity.identifier}.bundle.zip`,
+  );
   execFileSync(
     python,
     [
@@ -40,8 +47,10 @@ export function writePackageZip(
       identity.version,
       "--output",
       zipPath,
+      "--bundle-output",
+      bundleZipPath,
     ],
     { cwd: repoRoot, stdio: "pipe" },
   );
-  return { ...identity, zipPath };
+  return { ...identity, zipPath, bundleZipPath };
 }

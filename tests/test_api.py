@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import sqlite3
 import sys
+import threading
 import zipfile
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
 from uuid import UUID
@@ -42,16 +46,22 @@ def _api_settings(
     tmp_path: Path,
     workspace: Path,
     command: tuple[str, ...] | None = None,
+    *,
+    inject_files_only: bool = True,
 ) -> ApiSettings:
+    if command is not None:
+        resolved_command = command
+    elif inject_files_only:
+        resolved_command = (sys.executable, str(FILES_ONLY_VALIDATOR))
+    else:
+        resolved_command = None
     return ApiSettings(
         database_url=f"sqlite:///{tmp_path / 'api.db'}",
         jwt_secret="test-secret-not-for-production",
         trusted_workspace_root=workspace,
         code_root=REPO_ROOT,
         object_store_root=(tmp_path / "objects").resolve(),
-        model_validator_command=command
-        if command is not None
-        else (sys.executable, str(FILES_ONLY_VALIDATOR)),
+        model_validator_command=resolved_command,
     )
 
 
@@ -154,14 +164,60 @@ def _register(
     )
 
 
-def _v2_zips(workspace: Path) -> tuple[bytes, bytes]:
+def _v2_zips(workspace: Path, **package_kwargs: Any) -> tuple[bytes, bytes]:
     from tests.test_inference_bundle import _v2_package, _write_bundle
 
-    staging = workspace / "v2-release"
+    staging = workspace / str(package_kwargs.pop("name", "v2-release"))
     bundle_dir = _write_bundle(staging)
     digest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))["digest"]
-    package_dir = _v2_package(staging, digest)
+    package_dir = _v2_package(staging, digest, **package_kwargs)
     return _zip_package(package_dir), _zip_package(bundle_dir)
+
+
+def _v1_oracle_zip() -> bytes:
+    return _zip_package(REPO_ROOT / "tests" / "fixtures" / "model_packages" / "rejected_v1")
+
+
+@contextmanager
+def _stub_validator_http(
+    *,
+    token: str,
+    status_code: int = 200,
+    payload: dict[str, Any] | None = None,
+    raw: bytes | None = None,
+):
+    encoded = (
+        raw
+        if raw is not None
+        else json.dumps(payload if payload is not None else {"valid": True, "issues": []}).encode()
+    )
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            if self.headers.get("Authorization", "") != f"Bearer {token}":
+                self.send_response(401)
+                self.end_headers()
+                return
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
 
 
 VALID_HDFS_LOG = (
@@ -663,14 +719,14 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
     project = _create_project(client, administrator, "incident-a")
     _provision_project_account(client, administrator, "publisher", str(project["id"]), "publisher")
     _provision_project_account(client, administrator, "operator", str(project["id"]), "operator")
-    archive = _zip_staged(api.workspace)
     publisher_headers = _login(client, "publisher")
-    registration = _register(client, publisher_headers, project["id"], archive)
+    package_zip, bundle_zip = _v2_zips(api.workspace)
+    registration = _register(client, publisher_headers, project["id"], package_zip, bundle_zip)
     assert registration.status_code == 201, registration.text
     model = registration.json()
     assert model["status"] == "eligible"
-    assert model["inference_ready"] is False
-    assert model["preprocessing_bundle"] is None
+    assert model["inference_ready"] is True
+    assert model["preprocessing_bundle"]["identifier"] == "attribute-gae-preprocessing"
     assert model["storage_kind"] == "object"
     assert model["checksum"] == model["artifact_sha256"]
     assert model["package_reference"] == (
@@ -680,18 +736,19 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
     assert len(model["artifact_sha256"]) == 64
     assert "#" not in model["artifact_reference"]
 
-    duplicate = _register(client, publisher_headers, project["id"], archive)
+    duplicate = _register(client, publisher_headers, project["id"], package_zip, bundle_zip)
     assert duplicate.status_code == 409
     stored_object_files = {
         path.relative_to(api.settings.object_store_root).as_posix()
         for path in api.settings.object_store_root.rglob("*")
         if path.is_file()
     }
-    assert stored_object_files == {
+    assert {
         f"{model['package_reference']}/manifest.json",
         f"{model['package_reference']}/model.pt",
         f"{model['package_reference']}/evidence.json",
-    }
+    } <= stored_object_files
+    assert any("/preprocessing-bundles/" in path for path in stored_object_files)
 
     operator_headers = _login(client, "operator")
     assert (
@@ -726,15 +783,7 @@ def test_model_publication_and_safe_analysis_run_lifecycle(api: ApiFixture) -> N
     duplicate_bytes = _upload_log(client, operator_headers, project["id"], filename="HDFS_2k.log")
     assert duplicate_bytes.status_code == 201, duplicate_bytes.text
     assert duplicate_bytes.json()["id"] != dataset["id"]
-    assert duplicate_bytes.json()["checksum"] == dataset["checksum"]
-
-    analysis = client.post(
-        f"/projects/{project['id']}/analysis-runs",
-        headers=operator_headers,
-        json={"model_version_id": model["id"], "dataset_id": dataset["id"]},
-    )
-    assert analysis.status_code == 409, analysis.text
-    assert analysis.json()["detail"] == "Published model is not inference-ready."
+    assert     duplicate_bytes.json()["checksum"] == dataset["checksum"]
 
     objects_before_invalid = _object_files(api)
     rejected = _upload_log(client, operator_headers, project["id"], b"not an HDFS record\n")
@@ -826,7 +875,10 @@ def test_registration_rejects_non_hdfs_or_outside_workspace_artifacts(api: ApiFi
     payload["source_compatibility"] = "bgl"
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    rejected = _register(client, publisher_headers, project["id"], _zip_package(package_dir))
+    _bundle_zip = _v2_zips(api.workspace / "compat")[1]
+    rejected = _register(
+        client, publisher_headers, project["id"], _zip_package(package_dir), _bundle_zip
+    )
     assert rejected.status_code == 422
     detail = rejected.json()["detail"]
     assert detail["valid"] is False
@@ -1217,8 +1269,8 @@ def _publisher_client(api: ApiFixture) -> tuple[TestClient, dict[str, str], str]
 
 def test_registration_accepts_zip_and_persists_declared_files_only(api: ApiFixture) -> None:
     client, headers, project_id = _publisher_client(api)
-    archive = _zip_staged(api.workspace, extra_files={"leftover.bin": b"ignore-me"})
-    created = _register(client, headers, project_id, archive)
+    archive, bundle_zip = _v2_zips(api.workspace, extra_files={"leftover.bin": b"ignore-me"})
+    created = _register(client, headers, project_id, archive, bundle_zip)
     assert created.status_code == 201, created.text
     model = created.json()
     assert model["status"] == "eligible"
@@ -1234,8 +1286,8 @@ def test_registration_accepts_zip_and_persists_declared_files_only(api: ApiFixtu
 
 def test_registration_rejects_ineligible_zip_without_inserting(api: ApiFixture) -> None:
     client, headers, project_id = _publisher_client(api)
-    archive = _zip_staged(api.workspace, name="broken", evidence={})
-    rejected = _register(client, headers, project_id, archive)
+    archive, bundle_zip = _v2_zips(api.workspace, name="broken", evidence={})
+    rejected = _register(client, headers, project_id, archive, bundle_zip)
     assert rejected.status_code == 422
     detail = rejected.json()["detail"]
     assert detail["valid"] is False
@@ -1249,22 +1301,30 @@ def test_registration_deletes_prefix_when_insert_fails(
     api: ApiFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     client, headers, project_id = _publisher_client(api)
+    package_zip, bundle_zip = _v2_zips(api.workspace)
     monkeypatch.setattr(ApiDatabase, "_insert_audit_event", _fail_audit_event)
     with TestClient(client.app, raise_server_exceptions=False) as failing:
-        failed = _register(failing, headers, project_id, _zip_staged(api.workspace))
-    assert failed.status_code == 500
+        failed = _register(failing, headers, project_id, package_zip, bundle_zip)
+    assert failed.status_code == 500, failed.text
     assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
     assert _object_files(api) == set()
 
 
 def test_registration_collects_checksum_and_evidence_issues(api: ApiFixture) -> None:
+    from tests.test_inference_bundle import _v2_package, _write_bundle
+
     client, headers, project_id = _publisher_client(api)
-    reference = _stage_package(api.workspace, name="broken", evidence={})
-    manifest_path = api.workspace / reference / "manifest.json"
+    staging = api.workspace / "broken"
+    bundle_dir = _write_bundle(staging)
+    digest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))["digest"]
+    package_dir = _v2_package(staging, digest, evidence={})
+    manifest_path = package_dir / "manifest.json"
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload["files"]["checksums"]["model.pt"] = "0" * 64
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
-    rejected = _register(client, headers, project_id, _zip_package(api.workspace / reference))
+    rejected = _register(
+        client, headers, project_id, _zip_package(package_dir), _zip_package(bundle_dir)
+    )
     assert rejected.status_code == 422
     issues = rejected.json()["detail"]["issues"]
     paths = {issue["path"] for issue in issues}
@@ -1287,7 +1347,8 @@ def test_registration_rejects_dummy_artifact_with_probe_failure(tmp_path: Path) 
     with TestClient(create_app(settings)) as client:
         api = ApiFixture(client=client, workspace=workspace, settings=settings)
         _, headers, project_id = _publisher_client(api)
-        rejected = _register(client, headers, project_id, _zip_staged(workspace))
+        package_zip, bundle_zip = _v2_zips(workspace)
+        rejected = _register(client, headers, project_id, package_zip, bundle_zip)
         assert rejected.status_code == 422, rejected.text
         assert any(
             "model.pt" in issue["path"] or "artifact" in issue["path"]
@@ -1304,7 +1365,7 @@ def test_http_admission_uses_real_validator_probe(tmp_path: Path) -> None:
     import torch
 
     from src.modules.model_package import PackageArchitecture, expected_state_dict_spec
-    from tests.test_model_package import TINY_ARCHITECTURE
+    from tests.test_inference_bundle import V2_ARCHITECTURE
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -1319,7 +1380,8 @@ def test_http_admission_uses_real_validator_probe(tmp_path: Path) -> None:
         api = ApiFixture(client=client, workspace=workspace, settings=settings)
         _, headers, project_id = _publisher_client(api)
 
-        dummy = _register(client, headers, project_id, _zip_staged(workspace, name="dummy"))
+        dummy_zip, dummy_bundle = _v2_zips(workspace, name="dummy")
+        dummy = _register(client, headers, project_id, dummy_zip, dummy_bundle)
         assert dummy.status_code == 422, dummy.text
         assert any("model.pt" in issue["path"] for issue in dummy.json()["detail"]["issues"])
 
@@ -1328,24 +1390,23 @@ def test_http_admission_uses_real_validator_probe(tmp_path: Path) -> None:
                 return exec, ("raise RuntimeError('pickle-executed')",)
 
         pickle_bytes = pickle.dumps(Boom())
-        pickled = _register(
-            client, headers, project_id, _zip_staged(workspace, name="pickle", artifact=pickle_bytes)
+        pickled_zip, pickled_bundle = _v2_zips(
+            workspace, name="pickle", artifact=pickle_bytes
         )
+        pickled = _register(client, headers, project_id, pickled_zip, pickled_bundle)
         assert pickled.status_code == 422, pickled.text
 
-        architecture = PackageArchitecture.model_validate(TINY_ARCHITECTURE)
+        architecture = PackageArchitecture.model_validate(V2_ARCHITECTURE)
         payload = {
             key: torch.zeros(spec.shape, dtype=torch.int64 if "int64" in spec.dtypes else torch.float32)
             for key, spec in expected_state_dict_spec(architecture).items()
         }
         artifact = tmp_path / "valid.pt"
         torch.save(payload, artifact)
-        created = _register(
-            client,
-            headers,
-            project_id,
-            _zip_staged(workspace, name="valid", artifact=artifact.read_bytes()),
+        valid_zip, valid_bundle = _v2_zips(
+            workspace, name="valid", artifact=artifact.read_bytes()
         )
+        created = _register(client, headers, project_id, valid_zip, valid_bundle)
         assert created.status_code == 201, created.text
         assert created.json()["status"] == "eligible"
         assert created.json()["storage_kind"] == "object"
@@ -1365,7 +1426,8 @@ def test_unavailable_validator_does_not_insert_a_model(tmp_path: Path) -> None:
     with TestClient(create_app(settings)) as client:
         api = ApiFixture(client=client, workspace=workspace, settings=settings)
         _, headers, project_id = _publisher_client(api)
-        rejected = _register(client, headers, project_id, _zip_staged(workspace))
+        package_zip, bundle_zip = _v2_zips(workspace)
+        rejected = _register(client, headers, project_id, package_zip, bundle_zip)
         assert rejected.status_code == 503
         assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
 
@@ -1383,9 +1445,101 @@ def test_malformed_validator_report_does_not_insert_a_model(tmp_path: Path) -> N
     with TestClient(create_app(settings)) as client:
         api = ApiFixture(client=client, workspace=workspace, settings=settings)
         _, headers, project_id = _publisher_client(api)
-        rejected = _register(client, headers, project_id, _zip_staged(workspace))
+        package_zip, bundle_zip = _v2_zips(workspace)
+        rejected = _register(client, headers, project_id, package_zip, bundle_zip)
         assert rejected.status_code == 503
         assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+
+
+def test_unconfigured_validator_does_not_insert_a_model(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    settings = _api_settings(tmp_path, workspace, inject_files_only=False)
+    ApiDatabase(settings.database_url).apply_migrations()
+    bootstrap_administrator(settings, "admin", PASSWORD)
+    with TestClient(create_app(settings)) as client:
+        api = ApiFixture(client=client, workspace=workspace, settings=settings)
+        _, headers, project_id = _publisher_client(api)
+        package_zip, bundle_zip = _v2_zips(workspace)
+        rejected = _register(client, headers, project_id, package_zip, bundle_zip)
+        assert rejected.status_code == 503
+        assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+
+
+def test_http_validator_admits_package_without_command(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    token = "validator-http-token"
+    with _stub_validator_http(token=token) as url:
+        settings = replace(
+            _api_settings(tmp_path, workspace, inject_files_only=False),
+            model_validator_service_url=url,
+            model_validator_internal_token=token,
+        )
+        ApiDatabase(settings.database_url).apply_migrations()
+        bootstrap_administrator(settings, "admin", PASSWORD)
+        with TestClient(create_app(settings)) as client:
+            api = ApiFixture(client=client, workspace=workspace, settings=settings)
+            _, headers, project_id = _publisher_client(api)
+            package_zip, bundle_zip = _v2_zips(workspace)
+            created = _register(client, headers, project_id, package_zip, bundle_zip)
+            assert created.status_code == 201, created.text
+            assert created.json()["status"] == "eligible"
+            listed = client.get(f"/projects/{project_id}/models", headers=headers)
+            assert listed.status_code == 200
+            assert listed.json()[0]["id"] == created.json()["id"]
+
+
+def test_http_validator_invalid_report_does_not_insert_a_model(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    token = "validator-http-token"
+    with _stub_validator_http(
+        token=token,
+        payload={
+            "valid": False,
+            "issues": [{"path": "manifest.json", "reason": "attribute-aware-gae-v1 is not accepted."}],
+        },
+    ) as url:
+        settings = replace(
+            _api_settings(tmp_path, workspace, inject_files_only=False),
+            model_validator_service_url=url,
+            model_validator_internal_token=token,
+        )
+        ApiDatabase(settings.database_url).apply_migrations()
+        bootstrap_administrator(settings, "admin", PASSWORD)
+        with TestClient(create_app(settings)) as client:
+            api = ApiFixture(client=client, workspace=workspace, settings=settings)
+            _, headers, project_id = _publisher_client(api)
+            package_zip, bundle_zip = _v2_zips(workspace)
+            rejected = _register(client, headers, project_id, package_zip, bundle_zip)
+            assert rejected.status_code == 422, rejected.text
+            assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+
+
+def test_http_validator_unavailable_status_does_not_insert_a_model(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    token = "super-secret-validator-token"
+    caplog.set_level(logging.DEBUG)
+    with _stub_validator_http(token=token, status_code=500, raw=b"nope") as url:
+        settings = replace(
+            _api_settings(tmp_path, workspace, inject_files_only=False),
+            model_validator_service_url=url,
+            model_validator_internal_token=token,
+        )
+        ApiDatabase(settings.database_url).apply_migrations()
+        bootstrap_administrator(settings, "admin", PASSWORD)
+        with TestClient(create_app(settings)) as client:
+            api = ApiFixture(client=client, workspace=workspace, settings=settings)
+            _, headers, project_id = _publisher_client(api)
+            package_zip, bundle_zip = _v2_zips(workspace)
+            rejected = _register(client, headers, project_id, package_zip, bundle_zip)
+            assert rejected.status_code == 503
+            assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+    assert token not in caplog.text
 
 
 def test_unpublished_eligible_model_cannot_start_analysis(api: ApiFixture) -> None:
@@ -1395,7 +1549,8 @@ def test_unpublished_eligible_model_cannot_start_analysis(api: ApiFixture) -> No
     _provision_project_account(client, administrator, "publisher", str(project["id"]), "publisher")
     _provision_project_account(client, administrator, "operator", str(project["id"]), "operator")
     publisher_headers = _login(client, "publisher")
-    registration = _register(client, publisher_headers, project["id"], _zip_staged(api.workspace))
+    package_zip, bundle_zip = _v2_zips(api.workspace)
+    registration = _register(client, publisher_headers, project["id"], package_zip, bundle_zip)
     assert registration.status_code == 201, registration.text
     assert registration.json()["status"] == "eligible"
     operator_headers = _login(client, "operator")
@@ -1457,9 +1612,19 @@ def test_v2_registration_rejects_missing_or_v1_bundle(api: ApiFixture) -> None:
     missing = _register(client, headers, project_id, package_zip)
     assert missing.status_code == 422
     assert any("preprocessing_bundle" in issue["path"] for issue in missing.json()["detail"]["issues"])
-    v1_with_bundle = _register(client, headers, project_id, _zip_staged(api.workspace), bundle_zip)
+    v1_with_bundle = _register(client, headers, project_id, _v1_oracle_zip(), bundle_zip)
     assert v1_with_bundle.status_code == 422
-    assert any("preprocessing_bundle" in issue["path"] for issue in v1_with_bundle.json()["detail"]["issues"])
+    assert any("format" in issue["path"] or "attribute-aware-gae-v1" in issue["reason"] for issue in v1_with_bundle.json()["detail"]["issues"])
+    assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
+    assert [path for path in api.settings.object_store_root.rglob("*") if path.is_file()] == []
+
+
+def test_v1_zip_is_rejected_with_empty_model_list(api: ApiFixture) -> None:
+    client, headers, project_id = _publisher_client(api)
+    rejected = _register(client, headers, project_id, _v1_oracle_zip())
+    assert rejected.status_code == 422
+    issues = rejected.json()["detail"]["issues"]
+    assert any("attribute-aware-gae-v1" in issue["reason"] for issue in issues)
     assert client.get(f"/projects/{project_id}/models", headers=headers).json() == []
     assert [path for path in api.settings.object_store_root.rglob("*") if path.is_file()] == []
 

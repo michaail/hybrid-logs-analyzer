@@ -263,7 +263,7 @@ export default function App() {
 
   async function registerModel(
     packageFile: File,
-    preprocessingBundleFile: File | null,
+    preprocessingBundleFile: File,
   ): Promise<void> {
     if (!selectedProject) {
       return;
@@ -608,7 +608,7 @@ function ModelsView({
           <h2>Choose a model for analysis</h2>
           <p className="muted">
             Only published HDFS model versions can be selected. Inference-ready releases are bound
-            to an immutable preprocessing bundle; legacy packages stay visible but cannot run.
+            to an immutable preprocessing bundle.
           </p>
         </div>
         <button className="primary-button" type="button" onClick={onRegister}>
@@ -1275,7 +1275,7 @@ export function ModelRegistrationDialog({
 }: {
   projectName: string;
   onClose: () => void;
-  onRegister: (packageFile: File, preprocessingBundleFile: File | null) => Promise<void>;
+  onRegister: (packageFile: File, preprocessingBundleFile: File) => Promise<void>;
 }): JSX.Element {
   const [packageFile, setPackageFile] = useState<File | null>(null);
   const [preprocessingBundleFile, setPreprocessingBundleFile] = useState<File | null>(null);
@@ -1286,6 +1286,10 @@ export function ModelRegistrationDialog({
     event.preventDefault();
     if (!packageFile) {
       setError("Choose a complete HDFS model package ZIP.");
+      return;
+    }
+    if (!preprocessingBundleFile) {
+      setError("Choose the companion preprocessing-bundle ZIP.");
       return;
     }
     setError(null);
@@ -1304,8 +1308,9 @@ export function ModelRegistrationDialog({
     <Dialog title="Register trained model" onClose={onClose}>
       <form className="dialog-form" onSubmit={(event) => void submit(event)}>
         <p className="muted">
-          Upload a complete HDFS model package ZIP for <strong>{projectName}</strong>. Identity,
-          metrics, and evidence come from the package manifest at the ZIP root.
+          Upload an <strong>attribute-aware-gae-v2</strong> package ZIP and its bound
+          preprocessing-bundle ZIP for <strong>{projectName}</strong>. Identity, metrics, and
+          evidence come from the package manifest at the ZIP root.
         </p>
         <div className="warning-strip">
           The API never deserializes uploaded artifacts in this process. Invalid packages are
@@ -1325,10 +1330,11 @@ export function ModelRegistrationDialog({
           </span>
         </label>
         <label className="file-field">
-          Preprocessing-bundle ZIP (required for v2)
+          Preprocessing-bundle ZIP
           <input
             accept=".zip,application/zip,application/x-zip-compressed"
             onChange={(event) => setPreprocessingBundleFile(event.target.files?.[0] ?? null)}
+            required
             type="file"
           />
           <span className="file-field-name">
@@ -1339,7 +1345,11 @@ export function ModelRegistrationDialog({
           <button className="secondary-button" type="button" onClick={onClose}>
             Cancel
           </button>
-          <button className="primary-button" disabled={isSubmitting || !packageFile} type="submit">
+          <button
+            className="primary-button"
+            disabled={isSubmitting || !packageFile || !preprocessingBundleFile}
+            type="submit"
+          >
             {isSubmitting ? "Registering…" : "Register model"}
           </button>
         </div>

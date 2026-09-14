@@ -9,7 +9,8 @@ sources:
   - src/api/
   - src/modules/
 deployment:
-  platform: Railway
+  platform: local Compose (verified MVP proof)
+  future_hosting: Railway (unexecuted)
   region_strategy: single-region
   promotion: manual-test-deployment
 ---
@@ -21,9 +22,10 @@ deployment:
 Extend the existing Python application rather than replace it with a greenfield
 starter. Keep FastAPI as the authoritative API, authentication, authorization,
 and audit boundary. Add a thin React and TypeScript interface that consumes
-that API. Deploy the MVP to Railway with PostgreSQL and private S3-compatible
-Railway Buckets. This is a short-lived, HDFS-only thesis MVP; it is not a
-production-scale architecture commitment.
+that API. The verified MVP deployment proof is **local Compose** (PostgreSQL plus a
+named filesystem object volume). Railway with PostgreSQL and private S3-compatible
+Buckets remains unexecuted future hosting design. This is a short-lived, HDFS-only
+thesis MVP; it is not a production-scale architecture commitment.
 
 ## Existing Baseline
 
@@ -48,11 +50,11 @@ incomplete API error handling.
 | --- | --- | --- |
 | Browser UI | React with TypeScript | A thin, stateful user interface for model publication and HDFS analysis that does not duplicate the FastAPI control plane. A React build may initially be served from the API service to limit the deployed surface. |
 | API and control plane | Existing FastAPI and Pydantic | Fits the existing code, typed request contracts, JWT authentication, project roles, and generated OpenAPI documentation. |
-| Durable relational state | Railway PostgreSQL | Required for shared durable state between the API and inference service; two services must not coordinate through the current SQLite file. |
-| Model and parser-config storage | Railway Bucket | Private, S3-compatible storage for immutable, project-scoped model packages and parser/config artifacts. PostgreSQL stores object references, version metadata, and checksums. |
+| Durable relational state | PostgreSQL (local Compose) | Required for shared durable state between the API and inference service; two services must not coordinate through the current SQLite file. Railway PostgreSQL is unexecuted future hosting. |
+| Model and parser-config storage | Named filesystem volume locally; Railway Bucket unexecuted | Private storage for immutable, project-scoped model packages. PostgreSQL stores object references, version metadata, and checksums. |
 | Analysis execution | Private, on-demand inference service | A separate FastAPI-compatible service is invoked once per HDFS run, loads one approved artifact, persists results, and becomes idle. It is not a polling worker. |
-| Hosting | Railway, single region | Supports the selected Python services, PostgreSQL, Buckets, and manual test deployments with acceptable MVP cost and operational overhead. |
-| Verification and delivery | GitHub Actions checks; manual Railway test deployment | Tests and static checks run automatically; a live environment is deployed and removed only when explicitly needed for thesis testing. |
+| Hosting | local Compose (verified MVP proof) | Reproducible local stack: postgres, migrate, web, inference, model-validator. Railway remains unexecuted future hosting (IaC in `.railway/railway.ts`). |
+| Verification and delivery | GitHub Actions checks; local Compose acceptance | Tests and static checks run automatically; Compose acceptance is the MVP deploy proof. A live Railway environment is unexecuted and must not be claimed as validated. |
 
 ## On-Demand Runtime Shape
 
@@ -64,10 +66,10 @@ incomplete API error handling.
 3. The inference service reads only the authorized model, parser, and
    configuration objects; it writes results and a terminal run status to
    PostgreSQL, then returns.
-4. API and inference services use Railway Serverless only when quiet: no
-   polling loop, long-lived database pool, heartbeat, or telemetry may keep a
-   service awake. PostgreSQL remains durable state and is not expected to
-   sleep.
+4. API and inference services on the unexecuted Railway design use Serverless only when
+   quiet: no polling loop, long-lived database pool, heartbeat, or telemetry may keep a
+   service awake. PostgreSQL remains durable state and is not expected to sleep. Local
+   Compose keeps inference and the validator up for the acceptance window.
 
 This makes rare inference requests cost primarily for active execution, while
 accepting cold-start latency for a thesis demonstration.

@@ -20,7 +20,7 @@ DEFAULT_ARTIFACT_NAME = "model.pt"
 DEFAULT_EVIDENCE_NAME = "evidence.json"
 PACKAGE_FORMAT_V1 = "attribute-aware-gae-v1"
 PACKAGE_FORMAT_V2 = "attribute-aware-gae-v2"
-PACKAGE_FORMAT = PACKAGE_FORMAT_V1
+PACKAGE_FORMAT = PACKAGE_FORMAT_V2
 MAX_ZIP_MEMBERS = 64
 MAX_ZIP_COMPRESSED_BYTES = 32 * 1024 * 1024
 MAX_ZIP_UNCOMPRESSED_BYTES = 96 * 1024 * 1024
@@ -164,22 +164,23 @@ class ModelPackageManifest(PackageModel):
     model_identifier: str = Field(min_length=1, max_length=128, pattern=_IDENTIFIER_PATTERN)
     version: str = Field(min_length=1, max_length=64, pattern=_IDENTIFIER_PATTERN)
     source_compatibility: Literal["hdfs"]
-    format: Literal["attribute-aware-gae-v1", "attribute-aware-gae-v2"]
+    format: str
     pipeline_run_id: str | None = Field(default=None, min_length=1)
     metrics: PackageMetrics
     architecture: PackageArchitecture
     scoring: PackageScoring
     files: PackageFiles
-    preprocessing_bundle: PreprocessingBundleRef | None = None
+    preprocessing_bundle: PreprocessingBundleRef
 
-    @model_validator(mode="after")
-    def _bundle_matches_format(self) -> ModelPackageManifest:
-        if self.format == PACKAGE_FORMAT_V2:
-            if self.preprocessing_bundle is None:
-                raise ValueError("v2 packages require preprocessing_bundle")
-        elif self.preprocessing_bundle is not None:
-            raise ValueError("v1 packages must not declare preprocessing_bundle")
-        return self
+    @field_validator("format")
+    @classmethod
+    def _v2_format_only(cls, value: str) -> str:
+        if value != PACKAGE_FORMAT_V2:
+            raise ValueError(
+                "format must be attribute-aware-gae-v2; "
+                "attribute-aware-gae-v1 is not an accepted package format."
+            )
+        return value
 
 
 class TensorSpec:
@@ -191,7 +192,7 @@ class TensorSpec:
 
 
 def expected_state_dict_spec(architecture: PackageArchitecture) -> dict[str, TensorSpec]:
-    """Return the attribute-aware-gae-v1 tensor key set for an architecture."""
+    """Return the AttributeAwareGAE tensor key set for an architecture."""
 
     node_dim = architecture.node_dim
     edge_dim = architecture.edge_dim
@@ -272,7 +273,7 @@ def validate_state_dict(
         issues.append(
             PackageValidationIssue(
                 path=f"files.artifact:{unexpected}",
-                reason="Unexpected state-dict entry is not part of attribute-aware-gae-v1.",
+                reason="Unexpected state-dict entry is not part of AttributeAwareGAE.",
             )
         )
     for key in sorted(actual_keys & expected_keys):
@@ -403,6 +404,46 @@ def validate_model_package_source(
             if extract_issues:
                 return PackageValidationResult.from_issues(extract_issues)
             return validate_model_package(extract_root, load_state_dict=load_state_dict)
+
+
+def package_zip_admission_preview_issues(archive_bytes: bytes) -> list[PackageValidationIssue]:
+    """Read manifest.json from a ZIP member and reject v1 or a missing bundle.
+
+    Transport failures are left to ``unpack_zip_bytes``. This preview never
+    imports PyTorch and never extracts members.
+    """
+
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(archive_bytes))
+    except zipfile.BadZipFile:
+        return []
+    with archive:
+        names = archive.namelist()
+        if MANIFEST_NAME not in names:
+            return []
+        try:
+            payload = json.loads(archive.read(MANIFEST_NAME).decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return []
+    if not isinstance(payload, dict):
+        return []
+    if payload.get("format") == PACKAGE_FORMAT_V1:
+        return [
+            PackageValidationIssue(
+                path="manifest.json:format",
+                reason=(
+                    "attribute-aware-gae-v1 is not an accepted package format."
+                ),
+            )
+        ]
+    if not payload.get("preprocessing_bundle"):
+        return [
+            PackageValidationIssue(
+                path="preprocessing_bundle",
+                reason="attribute-aware-gae-v2 packages require a preprocessing bundle.",
+            )
+        ]
+    return []
 
 
 def unpack_zip_bytes(archive_bytes: bytes, destination: Path) -> PackageValidationResult:
