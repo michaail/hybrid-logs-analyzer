@@ -16,7 +16,9 @@ artifacts_colab/
 models/hdfs/
 models/bgl/
 outputs/
-runs/
+# Repo-root experiment records only. A bare `runs/` also matches
+# frontend/src/features/runs/ and would drop those UI screens from git.
+/runs/
 releases/
 
 # Python and notebook execution state
