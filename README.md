@@ -4,6 +4,61 @@ Hybrid Logs Analyzer is an HDFS-only anomaly-detection control plane. It include
 a FastAPI API, a private inference worker, an isolated model-package validator,
 and a React UI. The public API never deserializes uploaded model artifacts.
 
+## What this system does
+
+The system turns the research HDFS anomaly-detection workflow into a project-scoped,
+auditable application. An Administrator provisions users; Publishers register and
+publish trusted pretrained model packages; Operators upload HDFS logs, start
+asynchronous analysis, and inspect traceable anomalies and provisional results.
+
+The API stores projects, users, memberships, model versions, datasets, analysis runs,
+and results in the configured database. Uploaded datasets and declared model-package
+files are stored in the configured object store. Every protected action is scoped to
+an authorized project, and significant actions are recorded in the audit log.
+
+## Public API at a glance
+
+The interactive OpenAPI contract is available at `/docs` while the API is running.
+The principal authenticated methods are:
+
+- `POST /auth/token` and `GET /users/me` — sign in with a provisioned account and
+  retrieve the current identity.
+- `GET`/`POST /projects` and `POST`/`PATCH`/`DELETE`
+  `/projects/{project_id}/members/{user_id}` — list or create projects and manage
+  project membership. Administrator endpoints provision accounts, activate or
+  deactivate users, and expose audit events.
+- `GET`/`POST`/`DELETE /projects/{project_id}/models` — list, register, and remove
+  unused model versions. `POST /projects/{project_id}/models/{model_version_id}/publish`
+  moves an eligible model version to the published state.
+- `GET`/`POST`/`DELETE /projects/{project_id}/datasets` — list, upload, retrieve,
+  and remove unused HDFS datasets. An invalid dataset is rejected as a whole.
+- `GET`/`POST /projects/{project_id}/analysis-runs` — list runs or queue analysis
+  with a published, same-project model and dataset. Run, anomaly-result, and
+  provisional-result endpoints expose status and paginated output.
+
+Publishers have Operator capabilities plus model registration and publication rights.
+Operators can upload datasets, start analysis, and inspect results. Administrators
+authenticate like other users but can manage accounts and projects.
+
+## HDFS ML analysis pipeline
+
+1. A Publisher uploads an `attribute-aware-gae-v2` model package and its bound,
+   immutable preprocessing bundle. The isolated validator checks the declared files,
+   checksums, metadata, HDFS compatibility, metrics, and tensor contract before the
+   API persists an eligible model version. The public API never loads the model.
+2. The Publisher explicitly publishes that eligible version. An Operator uploads a
+   complete HDFS dataset; malformed input is rejected rather than partially analyzed.
+3. The Operator creates an analysis run. The API verifies the same-project,
+   published, inference-ready model and dataset, persists a `queued` run, and
+   dispatches work to the private inference service.
+4. The worker verifies package, preprocessing-bundle, and dataset checksums; parses
+   the log; groups events by HDFS block; builds graph features; and uses the frozen
+   Attribute-Aware Graph Autoencoder to calculate anomaly scores.
+5. Scores above the package's decision threshold are recorded as anomalies. Only
+   blocks in the checksum-pinned F-03 reference catalog receive a heuristically final
+   anomaly or normal classification. Other block histories remain separate,
+   scoreless provisional results and do not alter final anomaly or normal counts.
+
 ## Reproduce a clean checkout
 
 This is the canonical setup path after a fresh clone or `git pull`. It
